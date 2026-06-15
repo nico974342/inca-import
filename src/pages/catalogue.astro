@@ -58,6 +58,8 @@ const productsMetaJSON = JSON.stringify(
     name: p.name,
     unit: p.unit ?? null,
     units_per_carton: p.units_per_carton ?? null,
+    image_url: p.image_url ?? null,
+    category: p.category ?? null,
   }))
 ).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
 ---
@@ -370,7 +372,7 @@ const productsMetaJSON = JSON.stringify(
     // Guest — no cart logic needed
   } else {
     // Parse product metadata
-    type ProductMeta = { id: string; name: string; unit: string | null; units_per_carton: number | null };
+    type ProductMeta = { id: string; name: string; unit: string | null; units_per_carton: number | null; image_url: string | null; category: string | null };
     const metaEl  = document.getElementById('productsMetaData');
     const allMeta: ProductMeta[] = metaEl ? JSON.parse(metaEl.textContent ?? '[]') : [];
     const productMap = Object.fromEntries(allMeta.map(p => [p.id, p]));
@@ -469,27 +471,37 @@ const productsMetaJSON = JSON.stringify(
           ? `${meta.units_per_carton} unités/${meta.unit ?? 'carton'}`
           : (meta.unit ?? '');
 
+        // Fallback colour per category for the avatar
+        const CAT_COLOR: Record<string, string> = {
+          boissons: 'oklch(0.72 0.10 210)', snacks: 'oklch(0.78 0.10 60)',
+          confiseries: 'oklch(0.76 0.10 330)',
+        };
+        const avatarBg = CAT_COLOR[meta.category ?? ''] ?? 'oklch(0.78 0.06 45.9)';
+        const avatarHTML = meta.image_url
+          ? `<img src="${meta.image_url}" alt="" loading="lazy" decoding="async">`
+          : `<span style="background:${avatarBg};width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-size:1.125rem;font-weight:700;color:white;line-height:1;">${meta.name[0].toUpperCase()}</span>`;
+
         const li = document.createElement('li');
         li.className = 'drawer-item';
         li.dataset.productId = id;
         li.innerHTML = `
-          <div class="drawer-item-top">
-            <p class="drawer-item-name">${meta.name}</p>
-            <p class="drawer-item-price">${linePrice}&nbsp;€</p>
-          </div>
-          ${unitLine ? `<p class="drawer-item-meta">${unitLine}</p>` : ''}
-          <div class="drawer-item-controls">
-            <div class="drawer-stepper">
-              <button type="button" class="d-qty-btn d-qty-dec" aria-label="Retirer un ${meta.name}">−</button>
-              <span class="d-qty-val" aria-live="polite">${qty}</span>
-              <button type="button" class="d-qty-btn d-qty-inc" aria-label="Ajouter un ${meta.name}">+</button>
+          <div class="di-avatar">${avatarHTML}</div>
+          <div class="di-body">
+            <div class="di-row1">
+              <p class="di-name">${meta.name}</p>
+              <p class="di-price">${linePrice}&nbsp;€</p>
             </div>
-            <button type="button" class="drawer-item-del" aria-label="Supprimer ${meta.name} du panier">
-              <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
-                <path d="M2 4h11M5 4V2.75a.75.75 0 0 1 .75-.75h3.5a.75.75 0 0 1 .75.75V4M6 7v4.5M9 7v4.5M3 4l.65 8.35a.75.75 0 0 0 .75.65h6.2a.75.75 0 0 0 .75-.65L12 4"
-                  stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </button>
+            <div class="di-row2">
+              ${unitLine ? `<p class="di-meta">${unitLine}</p>` : '<span></span>'}
+              <div class="di-actions">
+                <div class="di-stepper">
+                  <button type="button" class="d-qty-btn d-qty-dec" aria-label="Retirer un ${meta.name}">−</button>
+                  <span class="d-qty-val" aria-live="polite">${qty}</span>
+                  <button type="button" class="d-qty-btn d-qty-inc" aria-label="Ajouter un ${meta.name}">+</button>
+                </div>
+                <button type="button" class="drawer-item-del" aria-label="Supprimer ${meta.name} du panier">Supprimer</button>
+              </div>
+            </div>
           </div>
         `;
 
@@ -1161,128 +1173,157 @@ const productsMetaJSON = JSON.stringify(
   font-size: var(--text-base);
 }
 
-/* Drawer items */
+/* ── Drawer items — horizontal card layout ──────────── */
 .drawer-item {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-5) 0;
-  border-bottom: 1px solid oklch(0.91 0.005 45.9);
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+  border-bottom: 1px solid oklch(0.92 0.003 45.9);
+  background: var(--color-bg);
 }
 .drawer-item:last-child { border-bottom: none; }
 
-/* Row 1: name left, price right */
-.drawer-item-top {
+/* 40px square avatar */
+.di-avatar {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--color-surface-2);
+}
+.di-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Right-side body */
+.di-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Row 1: name + price */
+.di-row1 {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
-.drawer-item-name {
+.di-name {
   font-family: var(--font-body);
   font-size: var(--text-sm);
   font-weight: 700;
   color: var(--color-ink);
-  line-height: 1.3;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   flex: 1;
+  min-width: 0;
   letter-spacing: -0.005em;
 }
 
-.drawer-item-price {
+.di-price {
   font-family: var(--font-display);
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   font-weight: 700;
-  color: var(--color-ink);
-  letter-spacing: -0.03em;
-  white-space: nowrap;
-}
-
-/* Row 2: unit info in coral */
-.drawer-item-meta {
-  font-family: var(--font-body);
-  font-size: var(--text-xs);
-  font-weight: 500;
   color: var(--color-primary);
-  line-height: 1.4;
-  letter-spacing: 0.01em;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
-/* Row 3: stepper left, trash right */
-.drawer-item-controls {
+/* Row 2: unit info + stepper + delete */
+.di-row2 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: var(--space-2);
+  gap: var(--space-2);
 }
 
-/* Modern pill stepper */
-.drawer-stepper {
+.di-meta {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.di-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+/* Coral pill stepper */
+.di-stepper {
   display: inline-flex;
   align-items: center;
-  background: var(--color-surface);
-  border: 1.5px solid var(--color-border);
   border-radius: var(--radius-full);
   overflow: hidden;
-  gap: 0;
+  background: var(--color-primary);
 }
 
 .d-qty-btn {
-  width: 32px;
-  height: 32px;
+  width: 26px;
+  height: 26px;
   border: none;
   background: transparent;
-  font-size: 1.1rem;
-  font-weight: 400;
+  font-size: 1rem;
+  font-weight: 500;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--color-ink);
-  transition: background var(--dur-fast), color var(--dur-fast);
+  color: white;
+  transition: background var(--dur-fast);
   user-select: none;
   flex-shrink: 0;
   line-height: 1;
 }
-.d-qty-btn:hover {
-  background: var(--color-primary);
-  color: white;
-}
-.d-qty-btn:active { background: oklch(0.50 0.149 45.9); color: white; }
-.d-qty-btn:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+.d-qty-btn:hover  { background: oklch(0.50 0.149 45.9); }
+.d-qty-btn:active { background: oklch(0.46 0.149 45.9); }
+.d-qty-btn:focus-visible { outline: 2px solid white; outline-offset: -3px; }
 
 .d-qty-val {
-  min-width: 32px;
+  min-width: 24px;
   text-align: center;
   font-family: var(--font-body);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   font-weight: 700;
-  color: var(--color-ink);
-  border-left: 1.5px solid var(--color-border);
-  border-right: 1.5px solid var(--color-border);
-  line-height: 30px;
-  padding: 0 var(--space-1);
+  color: white;
+  line-height: 26px;
+  padding: 0 2px;
 }
 
+/* "Supprimer" text link */
 .drawer-item-del {
-  flex-shrink: 0;
-  width: 32px;
-  height: 32px;
   border: none;
   background: transparent;
-  color: oklch(0.72 0.005 45.9);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: oklch(0.62 0.14 25);
   cursor: pointer;
-  border-radius: var(--radius-full);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: color var(--dur-fast), background var(--dur-fast);
+  padding: 0;
+  line-height: 1;
+  transition: color var(--dur-fast);
+  white-space: nowrap;
 }
-.drawer-item-del:hover {
-  color: oklch(0.46 0.20 25);
-  background: oklch(0.96 0.015 25);
-}
-.drawer-item-del:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.drawer-item-del:hover { color: oklch(0.46 0.20 25); text-decoration: underline; }
+.drawer-item-del:focus-visible { outline: 2px solid oklch(0.62 0.14 25); outline-offset: 2px; }
 
 /* ── Fly-to-cart thumbnail ────────────────────────── */
 .fly-dot {
