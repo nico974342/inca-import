@@ -1,0 +1,318 @@
+---
+import Base from '../layouts/Base.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import { createAuthClient } from '../lib/supabase';
+
+const supabase = createAuthClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+---
+<Base
+  title="Politique de confidentialité — Inca Import"
+  description="Politique de confidentialité et de protection des données personnelles d'Inca Import, conforme au RGPD."
+>
+  <Nav user={user} />
+  <main class="legal-main">
+    <div class="container">
+      <article class="legal-article">
+
+        <header class="legal-header">
+          <h1 class="legal-title">Politique de confidentialité</h1>
+          <p class="legal-updated">En vigueur au 1er janvier 2025 — conforme au RGPD (Règlement UE 2016/679)</p>
+        </header>
+
+        <section class="legal-section">
+          <h2>1. Responsable du traitement</h2>
+          <p>
+            Le responsable du traitement de vos données personnelles est la société
+            <strong>INCA IMPORT</strong>, SARL au capital de 1 000 €, immatriculée sous le numéro
+            SIRET 945 112 753, dont le siège social est situé au 29 Route des Premiers Français,
+            97460 Saint-Paul, La Réunion.
+          </p>
+          <p>
+            Contact : <a href="mailto:inca-import@hotmail.com">inca-import@hotmail.com</a>
+            &nbsp;·&nbsp; <a href="tel:+262692478941">0692 47 89 41</a>
+          </p>
+        </section>
+
+        <section class="legal-section">
+          <h2>2. Données collectées</h2>
+          <p>Dans le cadre de l'utilisation de notre plateforme B2B, nous collectons les données suivantes :</p>
+          <ul class="legal-list">
+            <li>
+              <strong>Données d'identification :</strong> nom et prénom, nom de la société, numéro de téléphone, adresse e-mail
+            </li>
+            <li>
+              <strong>Données de commande :</strong> produits commandés, quantités, montants HT, historique des commandes
+            </li>
+            <li>
+              <strong>Données de connexion :</strong> adresse IP, horodatage des connexions, identifiants de session
+            </li>
+            <li>
+              <strong>Données de navigation :</strong> pages consultées, filtres utilisés dans le catalogue (données anonymisées)
+            </li>
+          </ul>
+          <p>
+            Les données signalées comme obligatoires lors de l'inscription sont nécessaires à
+            l'ouverture et à la gestion de votre compte professionnel. Les autres données sont
+            facultatives.
+          </p>
+        </section>
+
+        <section class="legal-section">
+          <h2>3. Finalités du traitement</h2>
+          <p>Vos données personnelles sont traitées pour les finalités suivantes :</p>
+          <ul class="legal-list">
+            <li>Gestion de votre compte professionnel et authentification</li>
+            <li>Traitement et suivi de vos commandes</li>
+            <li>Communication relative à vos commandes (confirmation, livraison, facturation)</li>
+            <li>Relation client et traitement de vos demandes de contact</li>
+            <li>Amélioration de nos services et sécurité de la plateforme</li>
+            <li>Respect de nos obligations légales et réglementaires (comptabilité, archivage)</li>
+          </ul>
+        </section>
+
+        <section class="legal-section">
+          <h2>4. Base légale du traitement</h2>
+          <ul class="legal-list">
+            <li>
+              <strong>Exécution du contrat</strong> (art. 6.1.b RGPD) : gestion du compte, traitement des commandes
+            </li>
+            <li>
+              <strong>Intérêt légitime</strong> (art. 6.1.f RGPD) : sécurité de la plateforme, amélioration des services, statistiques anonymisées
+            </li>
+            <li>
+              <strong>Obligation légale</strong> (art. 6.1.c RGPD) : conservation des pièces comptables et fiscales
+            </li>
+            <li>
+              <strong>Consentement</strong> (art. 6.1.a RGPD) : le cas échéant, pour toute communication commerciale optionnelle
+            </li>
+          </ul>
+        </section>
+
+        <section class="legal-section">
+          <h2>5. Durée de conservation</h2>
+          <ul class="legal-list">
+            <li>
+              <strong>Données de compte :</strong> conservées pendant toute la durée de la relation commerciale,
+              puis 3 ans à compter de la fin de la relation à des fins de prospection
+            </li>
+            <li>
+              <strong>Données de commande :</strong> 10 ans conformément aux obligations comptables (Code de commerce, art. L.123-22)
+            </li>
+            <li>
+              <strong>Données de connexion :</strong> 12 mois conformément à la réglementation en vigueur
+            </li>
+            <li>
+              <strong>Données de contact :</strong> 3 ans à compter du dernier contact
+            </li>
+          </ul>
+        </section>
+
+        <section class="legal-section">
+          <h2>6. Destinataires des données</h2>
+          <p>
+            Vos données personnelles sont traitées par les équipes habilitées d'INCA IMPORT et,
+            le cas échéant, par les sous-traitants techniques suivants, dans le strict respect du RGPD :
+          </p>
+          <ul class="legal-list">
+            <li><strong>Vercel Inc.</strong> — hébergement de la plateforme (États-Unis, clauses contractuelles types UE)</li>
+            <li><strong>Supabase Inc.</strong> — base de données et authentification (États-Unis, clauses contractuelles types UE)</li>
+            <li><strong>Resend Inc.</strong> — envoi des e-mails transactionnels (États-Unis, clauses contractuelles types UE)</li>
+          </ul>
+          <p>
+            Vos données ne sont ni vendues, ni louées, ni cédées à des tiers à des fins commerciales.
+          </p>
+        </section>
+
+        <section class="legal-section">
+          <h2>7. Vos droits</h2>
+          <p>
+            Conformément au RGPD et à la loi Informatique et Libertés, vous disposez des droits suivants
+            sur vos données personnelles :
+          </p>
+          <ul class="legal-list">
+            <li><strong>Droit d'accès</strong> (art. 15 RGPD) : obtenir une copie de vos données</li>
+            <li><strong>Droit de rectification</strong> (art. 16 RGPD) : corriger des données inexactes ou incomplètes</li>
+            <li><strong>Droit à l'effacement</strong> (art. 17 RGPD) : demander la suppression de vos données, sous réserve de nos obligations légales</li>
+            <li><strong>Droit à la limitation</strong> (art. 18 RGPD) : restreindre le traitement de vos données</li>
+            <li><strong>Droit à la portabilité</strong> (art. 20 RGPD) : recevoir vos données dans un format structuré et lisible par machine</li>
+            <li><strong>Droit d'opposition</strong> (art. 21 RGPD) : vous opposer au traitement fondé sur l'intérêt légitime</li>
+            <li><strong>Droit de retrait du consentement</strong> : retirer votre consentement à tout moment, sans affecter la licéité des traitements antérieurs</li>
+          </ul>
+          <p>
+            Pour exercer ces droits, contactez-nous à l'adresse&nbsp;
+            <a href="mailto:inca-import@hotmail.com">inca-import@hotmail.com</a> en précisant votre
+            identité. Nous répondrons dans un délai d'un mois (délai pouvant être prolongé de deux
+            mois en cas de demande complexe).
+          </p>
+        </section>
+
+        <section class="legal-section">
+          <h2>8. Droit de réclamation</h2>
+          <p>
+            Si vous estimez que le traitement de vos données n'est pas conforme au RGPD, vous avez
+            le droit d'introduire une réclamation auprès de l'autorité de contrôle compétente :
+          </p>
+          <p>
+            <strong>Commission Nationale de l'Informatique et des Libertés (CNIL)</strong><br>
+            3 place de Fontenoy — TSA 80715 — 75334 Paris Cedex 07<br>
+            <a href="https://www.cnil.fr" target="_blank" rel="noopener noreferrer">www.cnil.fr</a>
+          </p>
+        </section>
+
+        <section class="legal-section">
+          <h2>9. Cookies</h2>
+          <p>
+            Le site utilise uniquement des cookies strictement nécessaires au fonctionnement de la
+            plateforme (gestion de session, authentification). Aucun cookie publicitaire ou de
+            traçage tiers n'est utilisé.
+          </p>
+          <p>
+            Les cookies de session sont supprimés à la fermeture de votre navigateur ou lors de
+            votre déconnexion.
+          </p>
+        </section>
+
+        <section class="legal-section">
+          <h2>10. Sécurité</h2>
+          <p>
+            INCA IMPORT met en œuvre des mesures techniques et organisationnelles appropriées pour
+            protéger vos données contre tout accès non autorisé, perte, destruction ou altération :
+            chiffrement des communications (HTTPS/TLS), authentification sécurisée, accès restreint
+            aux données par rôle, et sous-traitants soumis à des obligations contractuelles de
+            sécurité conformes au RGPD.
+          </p>
+        </section>
+
+        <section class="legal-section">
+          <h2>11. Modifications</h2>
+          <p>
+            La présente politique peut être mise à jour pour refléter les évolutions légales ou
+            les changements de nos pratiques. La date de dernière mise à jour est indiquée en en-tête.
+            Nous vous informerons de toute modification substantielle par e-mail ou via la plateforme.
+          </p>
+          <p>
+            Pour toute question relative à cette politique, contactez-nous :
+            <a href="mailto:inca-import@hotmail.com">inca-import@hotmail.com</a>
+          </p>
+        </section>
+
+      </article>
+    </div>
+  </main>
+  <Footer />
+</Base>
+
+<style>
+.legal-main {
+  padding: clamp(var(--space-10), 6vw, var(--space-20)) 0;
+}
+
+.legal-article {
+  max-width: 720px;
+}
+
+.legal-header {
+  margin-bottom: clamp(var(--space-10), 5vw, var(--space-16));
+  padding-bottom: var(--space-8);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.legal-title {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--color-ink);
+  line-height: 1.08;
+  margin-bottom: var(--space-3);
+  text-wrap: balance;
+}
+
+.legal-updated {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+
+.legal-section {
+  margin-bottom: clamp(var(--space-8), 4vw, var(--space-12));
+  padding-bottom: clamp(var(--space-8), 4vw, var(--space-12));
+  border-bottom: 1px solid var(--color-border);
+}
+
+.legal-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+.legal-section h2 {
+  font-family: var(--font-display);
+  font-size: clamp(1.125rem, 2.5vw, 1.375rem);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--color-ink);
+  margin-bottom: var(--space-5);
+  line-height: 1.2;
+}
+
+.legal-section p {
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.75;
+  color: oklch(0.30 0.015 45.9);
+  max-width: 68ch;
+  margin-bottom: var(--space-4);
+  text-wrap: pretty;
+}
+
+.legal-section p:last-child { margin-bottom: 0; }
+
+.legal-section a {
+  color: var(--color-primary-deep);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  transition: color var(--dur-fast);
+}
+.legal-section a:hover { color: var(--color-primary); }
+
+/* List */
+.legal-list {
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.legal-list li {
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.65;
+  color: oklch(0.30 0.015 45.9);
+  padding-left: var(--space-5);
+  position: relative;
+  max-width: 68ch;
+}
+
+.legal-list li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.6em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  flex-shrink: 0;
+}
+
+.legal-list li strong {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+</style>

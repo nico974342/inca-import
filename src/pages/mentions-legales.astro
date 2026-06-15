@@ -1,0 +1,265 @@
+---
+import Base from '../layouts/Base.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import { createAuthClient } from '../lib/supabase';
+
+const supabase = createAuthClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+---
+<Base
+  title="Mentions légales — Inca Import"
+  description="Mentions légales du site Inca Import, fournisseur B2B de boissons, snacks et confiseries à La Réunion."
+>
+  <Nav user={user} />
+  <main class="legal-main">
+    <div class="container">
+      <article class="legal-article">
+
+        <header class="legal-header">
+          <h1 class="legal-title">Mentions légales</h1>
+          <p class="legal-updated">En vigueur au 1er janvier 2025</p>
+        </header>
+
+        <section class="legal-section">
+          <h2>1. Éditeur du site</h2>
+          <p>Le site <strong>inca-import.fr</strong> est édité par :</p>
+          <dl class="legal-dl">
+            <div class="dl-row">
+              <dt>Raison sociale</dt>
+              <dd>INCA IMPORT</dd>
+            </div>
+            <div class="dl-row">
+              <dt>Forme juridique</dt>
+              <dd>Société à responsabilité limitée (SARL)</dd>
+            </div>
+            <div class="dl-row">
+              <dt>Capital social</dt>
+              <dd>1 000 €</dd>
+            </div>
+            <div class="dl-row">
+              <dt>SIRET</dt>
+              <dd>945 112 753 00000</dd>
+            </div>
+            <div class="dl-row">
+              <dt>Siège social</dt>
+              <dd>29 Route des Premiers Français<br>97460 Saint-Paul, La Réunion</dd>
+            </div>
+            <div class="dl-row">
+              <dt>Gérants</dt>
+              <dd>Nicolas INCANA et Arnaud INCANA</dd>
+            </div>
+            <div class="dl-row">
+              <dt>Téléphone</dt>
+              <dd><a href="tel:+262692478941">0692 47 89 41</a></dd>
+            </div>
+            <div class="dl-row">
+              <dt>E-mail</dt>
+              <dd><a href="mailto:inca-import@hotmail.com">inca-import@hotmail.com</a></dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="legal-section">
+          <h2>2. Directeur de la publication</h2>
+          <p>Nicolas INCANA et Arnaud INCANA, co-gérants de la société INCA IMPORT.</p>
+        </section>
+
+        <section class="legal-section">
+          <h2>3. Hébergement</h2>
+          <dl class="legal-dl">
+            <div class="dl-row">
+              <dt>Hébergeur</dt>
+              <dd>Vercel Inc.</dd>
+            </div>
+            <div class="dl-row">
+              <dt>Adresse</dt>
+              <dd>340 Pine Street, Suite 701<br>San Francisco, CA 94104 — États-Unis</dd>
+            </div>
+            <div class="dl-row">
+              <dt>Site</dt>
+              <dd><a href="https://vercel.com" target="_blank" rel="noopener noreferrer">vercel.com</a></dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="legal-section">
+          <h2>4. Propriété intellectuelle</h2>
+          <p>
+            L'ensemble des éléments constituant le site (textes, images, graphismes, logo, icônes,
+            structure) est la propriété exclusive de la société INCA IMPORT ou de ses partenaires,
+            et est protégé par les lois françaises et internationales relatives au droit d'auteur
+            et à la propriété intellectuelle.
+          </p>
+          <p>
+            Toute reproduction, représentation, modification, publication ou adaptation de tout ou
+            partie des éléments du site, quel que soit le moyen ou le procédé utilisé, est interdite
+            sauf autorisation écrite préalable d'INCA IMPORT.
+          </p>
+        </section>
+
+        <section class="legal-section">
+          <h2>5. Données personnelles et cookies</h2>
+          <p>
+            Les informations relatives au traitement de vos données personnelles et à l'utilisation
+            des cookies sont détaillées dans notre&nbsp;
+            <a href="/politique-confidentialite">Politique de confidentialité</a>.
+          </p>
+          <p>
+            Conformément à la loi n°78-17 du 6 janvier 1978 relative à l'informatique, aux fichiers
+            et aux libertés (dite « Loi Informatique et Libertés »), et au Règlement Général sur la
+            Protection des Données (RGPD) n°2016/679, vous disposez d'un droit d'accès, de
+            rectification, d'effacement et de portabilité de vos données.
+          </p>
+        </section>
+
+        <section class="legal-section">
+          <h2>6. Responsabilité</h2>
+          <p>
+            INCA IMPORT s'efforce d'assurer l'exactitude et la mise à jour des informations diffusées
+            sur ce site. Cependant, INCA IMPORT ne peut garantir l'exactitude, la précision ou
+            l'exhaustivité des informations mises à disposition. En conséquence, INCA IMPORT décline
+            toute responsabilité pour toute imprécision, inexactitude ou omission portant sur des
+            informations disponibles sur ce site.
+          </p>
+        </section>
+
+        <section class="legal-section">
+          <h2>7. Droit applicable</h2>
+          <p>
+            Les présentes mentions légales sont soumises au droit français. En cas de litige,
+            les tribunaux français seront seuls compétents.
+          </p>
+        </section>
+
+      </article>
+    </div>
+  </main>
+  <Footer />
+</Base>
+
+<style>
+.legal-main {
+  padding: clamp(var(--space-10), 6vw, var(--space-20)) 0;
+}
+
+.legal-article {
+  max-width: 720px;
+}
+
+.legal-header {
+  margin-bottom: clamp(var(--space-10), 5vw, var(--space-16));
+  padding-bottom: var(--space-8);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.legal-title {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--color-ink);
+  line-height: 1.08;
+  margin-bottom: var(--space-3);
+}
+
+.legal-updated {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+
+.legal-section {
+  margin-bottom: clamp(var(--space-8), 4vw, var(--space-12));
+  padding-bottom: clamp(var(--space-8), 4vw, var(--space-12));
+  border-bottom: 1px solid var(--color-border);
+}
+
+.legal-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+.legal-section h2 {
+  font-family: var(--font-display);
+  font-size: clamp(1.125rem, 2.5vw, 1.375rem);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--color-ink);
+  margin-bottom: var(--space-5);
+  line-height: 1.2;
+}
+
+.legal-section p {
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.75;
+  color: oklch(0.30 0.015 45.9);
+  max-width: 68ch;
+  margin-bottom: var(--space-4);
+}
+
+.legal-section p:last-child { margin-bottom: 0; }
+
+.legal-section a {
+  color: var(--color-primary-deep);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color var(--dur-fast);
+}
+.legal-section a:hover { color: var(--color-primary); }
+
+/* Definition list */
+.legal-dl {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.dl-row {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.dl-row:last-child { border-bottom: none; }
+.dl-row:nth-child(odd)  { background: var(--color-bg); }
+.dl-row:nth-child(even) { background: var(--color-surface); }
+
+dt {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-ink);
+  padding-top: 1px;
+}
+
+dd {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: oklch(0.30 0.015 45.9);
+  line-height: 1.6;
+}
+
+dd a {
+  color: var(--color-primary-deep);
+  font-weight: 500;
+  text-decoration: none;
+  transition: color var(--dur-fast);
+}
+dd a:hover { color: var(--color-primary); }
+
+@media (max-width: 560px) {
+  .dl-row {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
+  }
+  dt { color: var(--color-muted); font-weight: 500; }
+}
+</style>
