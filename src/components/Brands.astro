@@ -6,12 +6,24 @@ const brands = [
 ];
 ---
 
-<section class="brands" id="marques" aria-labelledby="brands-heading">
+<section class="brands" aria-labelledby="brands-heading">
   <div class="container">
     <p class="brands-label" id="brands-heading">Marques distribuées</p>
-    <div class="brands-strip" role="list">
-      {brands.map(brand => (
-        <span class="brand-name" role="listitem">{brand}</span>
+  </div>
+
+  <!-- Screen-reader list -->
+  <ul class="sr-only">
+    {brands.map(b => <li>{b}</li>)}
+  </ul>
+
+  <!-- Visual marquee -->
+  <div class="marquee-outer" aria-hidden="true">
+    <div class="marquee-track">
+      {[...brands, ...brands].map(b => (
+        <span class="brand-item">
+          {b}
+          <span class="brand-sep">·</span>
+        </span>
       ))}
     </div>
   </div>
@@ -21,6 +33,7 @@ const brands = [
 .brands {
   padding: clamp(var(--space-12), 5vw, var(--space-20)) 0;
   border-top: 1px solid var(--color-border);
+  overflow: hidden;
 }
 
 .brands-label {
@@ -32,35 +45,57 @@ const brands = [
   margin-bottom: var(--space-8);
 }
 
-.brands-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0;
-  align-items: center;
+/* Marquee */
+.marquee-outer {
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    black 10%,
+    black 90%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    black 10%,
+    black 90%,
+    transparent 100%
+  );
 }
 
-.brand-name {
+.marquee-track {
+  display: flex;
+  align-items: center;
+  width: max-content;
+  animation: brands-marquee 30s linear infinite;
+}
+
+.brand-item {
+  display: inline-flex;
+  align-items: center;
   font-family: var(--font-display);
-  font-size: clamp(var(--text-lg), 2.2vw, var(--text-2xl));
+  font-size: clamp(1.125rem, 2vw, 1.5rem);
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--color-muted);
+  white-space: nowrap;
+  padding: var(--space-2) clamp(var(--space-5), 3vw, var(--space-8));
   transition: color var(--dur-fast);
-  padding: var(--space-2) var(--space-4);
-  cursor: default;
-  line-height: 1.4;
 }
 
-.brand-name:hover { color: var(--color-ink); }
-
-.brand-name:not(:last-child)::after {
-  content: '·';
-  margin-left: var(--space-4);
-  color: var(--color-border);
+.brand-sep {
+  display: inline-block;
+  margin-left: clamp(var(--space-5), 3vw, var(--space-8));
+  color: var(--color-border-strong);
   font-weight: 400;
 }
 
-@media (max-width: 480px) {
-  .brand-name { font-size: var(--text-base); padding: var(--space-1) var(--space-3); }
+@keyframes brands-marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track { animation-play-state: paused; }
 }
 </style>

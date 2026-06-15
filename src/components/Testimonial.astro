@@ -2,7 +2,7 @@
 import { supabaseAdmin } from '../lib/supabase';
 
 const FALLBACK = {
-  texte: "Depuis qu'on travaille avec Inca Import, le réassort est simple. Stock fiable, livraison dans les temps — et quand on a un souci, y'a toujours quelqu'un qui répond.",
+  texte: "Depuis qu'on travaille avec Inca Import, le réassort est simple. Stock fiable, livraison dans les temps — et quand on a un souci, y'a toujours quelqu'un qui répond.",
   nom: 'Jean-Marc Payet',
   role: 'Gérant, Station Total — Saint-Denis',
 };
@@ -20,15 +20,26 @@ const { data, error } = await supabaseAdmin
 if (!error && data) {
   testimonial = { texte: data.texte, nom: data.nom, role: data.role ?? '' };
 }
+
+const initials = testimonial.nom
+  .split(' ')
+  .map(n => n[0])
+  .join('')
+  .slice(0, 2)
+  .toUpperCase();
 ---
+
 <section class="testimonial" aria-label="Témoignage client">
   <div class="container">
     <blockquote class="quote-block">
       <div class="quote-mark" aria-hidden="true">"</div>
       <p class="quote-text">{testimonial.texte}</p>
       <footer class="quote-footer">
-        <cite class="quote-name">{testimonial.nom}</cite>
-        {testimonial.role && <span class="quote-role">{testimonial.role}</span>}
+        <div class="quote-avatar" aria-hidden="true">{initials}</div>
+        <div class="quote-byline">
+          <cite class="quote-name">{testimonial.nom}</cite>
+          {testimonial.role && <p class="quote-role">{testimonial.role}</p>}
+        </div>
       </footer>
     </blockquote>
   </div>
@@ -36,62 +47,87 @@ if (!error && data) {
 
 <style>
 .testimonial {
-  padding: clamp(var(--space-16), 7vw, var(--space-24)) 0;
-  border-top: 1px solid var(--color-border);
-  border-bottom: 1px solid var(--color-border);
+  background: var(--color-primary);
+  padding: clamp(var(--space-20), 9vw, 9rem) 0;
+  overflow: hidden;
 }
 
 .quote-block {
-  max-width: 780px;
+  max-width: 860px;
   position: relative;
-  padding-left: clamp(var(--space-8), 5vw, var(--space-16));
+  padding-top: clamp(var(--space-8), 5vw, var(--space-14));
 }
 
+/* Structural quote mark — watermark, not decoration */
 .quote-mark {
   position: absolute;
-  left: 0;
-  top: -0.15em;
+  top: -0.12em;
+  left: -0.055em;
   font-family: var(--font-display);
-  font-size: clamp(4rem, 9vw, 7rem);
+  font-size: clamp(8rem, 22vw, 16rem);
   font-weight: 700;
   line-height: 1;
-  color: var(--color-primary);
+  color: rgba(255, 255, 255, 0.10);
   user-select: none;
-  aria-hidden: true;
+  pointer-events: none;
 }
 
 .quote-text {
   font-family: var(--font-display);
-  font-size: clamp(1.375rem, 3vw, 2rem);
+  font-size: clamp(1.5rem, 3.5vw, 2.5rem);
   font-weight: 400;
-  line-height: 1.45;
-  letter-spacing: -0.015em;
-  color: var(--color-ink);
-  margin-bottom: var(--space-8);
+  line-height: 1.42;
+  letter-spacing: -0.02em;
+  color: white;
+  margin-bottom: clamp(var(--space-8), 4vw, var(--space-12));
   text-wrap: pretty;
+  position: relative;
+  z-index: 1;
 }
 
+/* Footer */
 .quote-footer {
   display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  position: relative;
+  z-index: 1;
+}
+
+.quote-avatar {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.18);
+  color: white;
+  font-family: var(--font-display);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+
+.quote-byline {
+  display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 2px;
 }
 
 .quote-name {
   font-family: var(--font-body);
   font-size: var(--text-base);
   font-weight: 600;
-  color: var(--color-ink);
+  color: rgba(255, 255, 255, 0.95);
   font-style: normal;
 }
 
 .quote-role {
   font-family: var(--font-body);
   font-size: var(--text-sm);
-  color: var(--color-muted);
-}
-
-@media (max-width: 640px) {
-  .quote-block { padding-left: var(--space-6); }
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.4;
 }
 </style>
