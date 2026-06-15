@@ -1,86 +1,125 @@
 ---
-const reasons = [
+const rows = [
   {
-    title: 'Stock permanent',
-    body: "200+ références disponibles immédiatement. Pas de rupture, pas de délai d'approvisionnement inattendu.",
+    value: '200+',
+    title: 'Stock permanent, zéro rupture',
+    body: "Boissons, snacks, confiseries — toujours disponibles, toujours renouvelés. Votre rayon ne sera jamais vide parce que le nôtre ne l'est jamais.",
   },
   {
-    title: 'Livraison sous 48h',
-    body: "Partout à La Réunion, sans minimum de commande imposé. Commandez le lundi, livré le mercredi.",
+    value: '48h',
+    title: 'Livraison locale, partout à La Réunion',
+    body: "On connaît les routes, les horaires, les contraintes de l'île. Votre commande arrive en 48h, directement à votre point de vente, sans intermédiaire.",
   },
   {
-    title: 'Équipe locale',
-    body: "Une équipe réunionnaise disponible 6j/7. Vous parlez à une vraie personne, pas à un formulaire.",
+    value: '7j/7',
+    title: 'Une famille derrière chaque commande',
+    body: "Inca Import, c'est une affaire de famille réunionnaise. Quand vous nous appelez, vous parlez à quelqu'un qui vous connaît — pas à un centre d'appels. On est là 7 jours sur 7, parce que votre activité n'attend pas le lundi.",
   },
 ];
 ---
 
-<section class="why-inca" aria-label="Pourquoi choisir Inca Import">
+<section class="why-inca" aria-label="Nos engagements">
   <div class="container">
-    <div class="why-grid">
-      {reasons.map((r, i) => (
-        <div class="why-item">
+    {rows.map((r, i) => (
+      <div class="why-row">
+        <span class="why-value" aria-hidden="true">{r.value}</span>
+        <div class="why-content">
           <h3 class="why-title">{r.title}</h3>
           <p class="why-body">{r.body}</p>
         </div>
-      ))}
-    </div>
+      </div>
+    ))}
   </div>
 </section>
 
 <style>
 .why-inca {
+  background: oklch(0.105 0.015 45.9);
   padding: clamp(var(--space-16), 7vw, var(--space-24)) 0;
-  border-top: 1px solid var(--color-border);
-  border-bottom: 1px solid var(--color-border);
 }
 
-.why-grid {
+/* Row */
+.why-row {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: clamp(6rem, 14vw, 9.5rem) 1fr;
+  gap: clamp(var(--space-8), 5vw, var(--space-16));
+  align-items: start;
+  padding: clamp(var(--space-8), 4vw, var(--space-12)) 0;
+  border-bottom: 1px solid oklch(0.185 0.012 45.9);
 }
 
-.why-item {
-  padding: var(--space-4) var(--space-10);
-}
-.why-item:first-child { padding-left: 0; }
-.why-item:last-child  { padding-right: 0; }
-.why-item:not(:last-child) {
-  border-right: 1px solid var(--color-border);
+.why-row:first-child {
+  border-top: 1px solid oklch(0.185 0.012 45.9);
 }
 
+/* Value */
+.why-value {
+  display: block;
+  font-family: var(--font-display);
+  font-size: clamp(2.25rem, 6vw, 4rem);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  color: var(--color-primary);
+  line-height: 1;
+  padding-top: 0.1em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Content */
 .why-title {
   font-family: var(--font-display);
-  font-size: clamp(1.375rem, 2.5vw, 1.75rem);
+  font-size: clamp(1.25rem, 2.5vw, 1.75rem);
   font-weight: 700;
   letter-spacing: -0.02em;
-  color: var(--color-ink);
-  margin-bottom: var(--space-4);
-  line-height: 1.15;
+  color: white;
+  margin-bottom: var(--space-3);
+  line-height: 1.2;
 }
 
 .why-body {
   font-family: var(--font-body);
   font-size: var(--text-base);
   line-height: 1.7;
-  color: var(--color-muted);
-  max-width: 30ch;
+  color: oklch(0.660 0.008 45.9);
+  max-width: 54ch;
 }
 
-@media (max-width: 768px) {
-  .why-grid {
+/* Scroll reveals */
+@media (prefers-reduced-motion: no-preference) {
+  .why-row.will-animate {
+    opacity: 0;
+    transform: translateY(18px);
+    transition: opacity 0.65s var(--ease-out-expo), transform 0.65s var(--ease-out-expo);
+  }
+  .why-row.will-animate:nth-child(2) { transition-delay: 0.10s; }
+  .why-row.will-animate:nth-child(3) { transition-delay: 0.20s; }
+  .why-row.will-animate.is-revealed  { opacity: 1; transform: none; }
+}
+
+/* Mobile */
+@media (max-width: 560px) {
+  .why-row {
     grid-template-columns: 1fr;
-    gap: 0;
+    gap: var(--space-3);
   }
-  .why-item {
-    padding: var(--space-8) 0;
-  }
-  .why-item:first-child { padding-top: 0; }
-  .why-item:last-child  { padding-bottom: 0; }
-  .why-item:not(:last-child) {
-    border-right: none;
-    border-bottom: 1px solid var(--color-border);
-  }
-  .why-body { max-width: none; }
+  .why-value { font-size: clamp(2.25rem, 12vw, 3rem); }
+  .why-body  { max-width: none; }
 }
 </style>
+
+<script>
+  const rows = document.querySelectorAll<HTMLElement>('.why-row');
+  rows.forEach(el => el.classList.add('will-animate'));
+
+  const obs = new IntersectionObserver(
+    entries => entries.forEach(e => {
+      if (e.isIntersecting) {
+        e.target.classList.add('is-revealed');
+        obs.unobserve(e.target);
+      }
+    }),
+    { threshold: 0.2 }
+  );
+
+  rows.forEach(el => obs.observe(el));
+</script>
