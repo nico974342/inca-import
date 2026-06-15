@@ -473,17 +473,17 @@ const productsMetaJSON = JSON.stringify(
         li.className = 'drawer-item';
         li.dataset.productId = id;
         li.innerHTML = `
-          <div class="drawer-item-main">
+          <div class="drawer-item-top">
             <p class="drawer-item-name">${meta.name}</p>
-            ${unitLine ? `<p class="drawer-item-meta">${unitLine}</p>` : ''}
+            <p class="drawer-item-price">${linePrice}&nbsp;€</p>
           </div>
-          <div class="drawer-item-row">
+          ${unitLine ? `<p class="drawer-item-meta">${unitLine}</p>` : ''}
+          <div class="drawer-item-controls">
             <div class="drawer-stepper">
               <button type="button" class="d-qty-btn d-qty-dec" aria-label="Retirer un ${meta.name}">−</button>
               <span class="d-qty-val" aria-live="polite">${qty}</span>
               <button type="button" class="d-qty-btn d-qty-inc" aria-label="Ajouter un ${meta.name}">+</button>
             </div>
-            <p class="drawer-item-price">${linePrice}&nbsp;€</p>
             <button type="button" class="drawer-item-del" aria-label="Supprimer ${meta.name} du panier">
               <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
                 <path d="M2 4h11M5 4V2.75a.75.75 0 0 1 .75-.75h3.5a.75.75 0 0 1 .75.75V4M6 7v4.5M9 7v4.5M3 4l.65 8.35a.75.75 0 0 0 .75.65h6.2a.75.75 0 0 0 .75-.65L12 4"
@@ -550,6 +550,43 @@ const productsMetaJSON = JSON.stringify(
       }
     }
 
+    // ── Fly-to-cart animation ────────────────────────────────────
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    function flyToCart(fromEl: HTMLElement) {
+      if (reducedMotion) return;
+      const fromRect   = fromEl.getBoundingClientRect();
+      const toggleRect = cartToggle.getBoundingClientRect();
+
+      const startX = fromRect.left + fromRect.width  / 2;
+      const startY = fromRect.top  + fromRect.height / 2;
+      const endX   = toggleRect.left + toggleRect.width  / 2;
+      const endY   = toggleRect.top  + toggleRect.height / 2;
+
+      // Arc control point: pull upward and toward the end
+      const cpX = startX + (endX - startX) * 0.25;
+      const cpY = Math.min(startY, endY) - Math.abs(endY - startY) * 0.6 - 60;
+
+      const dot = document.createElement('div');
+      dot.className = 'fly-dot';
+      dot.style.cssText = `left:${startX}px;top:${startY}px;offset-path:path('M ${startX} ${startY} Q ${cpX} ${cpY} ${endX} ${endY}');offset-rotate:0deg;`;
+      document.body.appendChild(dot);
+
+      const anim = dot.animate(
+        [{ offsetDistance: '0%', opacity: 1, transform: 'translate(-50%,-50%) scale(1)' },
+         { offsetDistance: '85%', opacity: 1, transform: 'translate(-50%,-50%) scale(0.8)' },
+         { offsetDistance: '100%', opacity: 0, transform: 'translate(-50%,-50%) scale(0.3)' }],
+        { duration: 580, easing: 'ease-in-out', fill: 'forwards' }
+      );
+
+      anim.onfinish = () => {
+        dot.remove();
+        cartToggle.classList.add('cart-bounce');
+        cartToggle.addEventListener('animationend',
+          () => cartToggle.classList.remove('cart-bounce'), { once: true });
+      };
+    }
+
     // ── Card controls ────────────────────────────────────────────
     function pulse(btn: HTMLButtonElement) {
       btn.classList.add('btn-pressed');
@@ -584,6 +621,7 @@ const productsMetaJSON = JSON.stringify(
       incBtn.addEventListener('click', async () => {
         const newQty = (cartState[productId] ?? 0) + 1;
         pulse(incBtn);
+        flyToCart(incBtn);
         cartState[productId] = newQty;
         refreshCard(newQty);
         renderCart();
@@ -1104,32 +1142,53 @@ const productsMetaJSON = JSON.stringify(
 .drawer-item {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-4) 0;
+  gap: var(--space-2);
+  padding: var(--space-5) 0;
   border-bottom: 1px solid var(--color-border);
 }
 .drawer-item:last-child { border-bottom: none; }
 
-.drawer-item-name {
-  font-family: var(--font-display);
-  font-size: var(--text-base);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--color-ink);
-  line-height: 1.25;
+/* Row 1: name left, price right */
+.drawer-item-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
 }
 
+.drawer-item-name {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-ink);
+  line-height: 1.35;
+  flex: 1;
+}
+
+.drawer-item-price {
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--color-ink);
+  letter-spacing: -0.025em;
+  white-space: nowrap;
+  padding-top: 1px;
+}
+
+/* Row 2: unit info */
 .drawer-item-meta {
   font-family: var(--font-body);
   font-size: var(--text-xs);
   color: var(--color-muted);
-  margin-top: -2px;
+  line-height: 1.4;
 }
 
-.drawer-item-row {
+/* Row 3: stepper left, trash right */
+.drawer-item-controls {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  justify-content: space-between;
+  margin-top: var(--space-1);
 }
 
 .drawer-stepper {
@@ -1171,17 +1230,6 @@ const productsMetaJSON = JSON.stringify(
   padding: 0 4px;
 }
 
-.drawer-item-price {
-  flex: 1;
-  text-align: right;
-  font-family: var(--font-display);
-  font-size: var(--text-base);
-  font-weight: 700;
-  color: var(--color-ink);
-  letter-spacing: -0.02em;
-  white-space: nowrap;
-}
-
 .drawer-item-del {
   flex-shrink: 0;
   width: 30px;
@@ -1198,6 +1246,28 @@ const productsMetaJSON = JSON.stringify(
 }
 .drawer-item-del:hover { color: oklch(0.50 0.18 25); background: oklch(0.96 0.02 25); }
 .drawer-item-del:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+
+/* ── Fly-to-cart dot ──────────────────────────────── */
+.fly-dot {
+  position: fixed;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  pointer-events: none;
+  z-index: 9999;
+  box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.25);
+}
+
+/* ── Cart toggle bounce ───────────────────────────── */
+@keyframes cart-bounce {
+  0%   { transform: scale(1); }
+  35%  { transform: scale(1.22); }
+  65%  { transform: scale(0.91); }
+  82%  { transform: scale(1.07); }
+  100% { transform: scale(1); }
+}
+.cart-toggle.cart-bounce { animation: cart-bounce 0.42s var(--ease-out-expo); }
 
 /* Drawer footer */
 .drawer-footer {
@@ -1307,11 +1377,13 @@ const productsMetaJSON = JSON.stringify(
 
 @media (prefers-reduced-motion: reduce) {
   .product-card:not(.product-card--oos):hover .product-img img { transform: none; }
-  .tab-indicator  { transition: none; }
+  .tab-indicator       { transition: none; }
   .qty-btn.btn-pressed { animation: none; }
-  .cart-drawer    { transition: none; }
-  .cart-backdrop  { transition: none; }
-  .cart-toggle    { transition: none; }
-  .cart-toggle:hover { transform: none; }
+  .cart-drawer         { transition: none; }
+  .cart-backdrop       { transition: none; }
+  .cart-toggle         { transition: none; }
+  .cart-toggle:hover   { transform: none; }
+  .cart-toggle.cart-bounce { animation: none; }
+  .fly-dot             { display: none; }
 }
 </style>
