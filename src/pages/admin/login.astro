@@ -1,0 +1,166 @@
+---
+import '../../styles/global.css';
+
+const errorMap: Record<string, string> = {
+  identifiants_invalides: 'Email ou mot de passe incorrect.',
+  champs_requis: 'Veuillez renseigner tous les champs.',
+};
+const errorCode = Astro.url.searchParams.get('error') ?? '';
+const errorMsg = errorMap[errorCode] ?? '';
+---
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Connexion — Inca Import Admin</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@700&family=Figtree:wght@400;500;600&display=swap"
+    rel="stylesheet"
+  />
+  <meta name="robots" content="noindex" />
+</head>
+<body class="login-body">
+  <main class="login-shell">
+    <div class="login-card">
+      <a href="/" class="login-brand" aria-label="Aller au site">
+        <span class="wm-inca">Inca</span><span class="wm-import">Import</span>
+      </a>
+      <h1 class="login-title">Espace administration</h1>
+
+      {errorMsg && (
+        <p class="login-error" role="alert">{errorMsg}</p>
+      )}
+
+      <form action="/api/auth/login" method="post" class="login-form" novalidate>
+        <div class="field">
+          <label for="email">Adresse email</label>
+          <input
+            type="email"
+            id="email"
+            name="email"
+            placeholder="admin@inca-import.re"
+            required
+            autocomplete="email"
+            autofocus
+          />
+        </div>
+        <div class="field">
+          <label for="password">Mot de passe</label>
+          <input
+            type="password"
+            id="password"
+            name="password"
+            placeholder="••••••••"
+            required
+            autocomplete="current-password"
+          />
+        </div>
+        <button type="submit" class="btn btn-primary login-submit">
+          Se connecter
+        </button>
+      </form>
+    </div>
+  </main>
+</body>
+</html>
+
+<style>
+.login-body {
+  font-family: var(--font-body);
+  background: var(--color-surface);
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+}
+
+.login-shell {
+  width: 100%;
+  max-width: 400px;
+}
+
+.login-card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-10) var(--space-10);
+}
+
+.login-brand {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  text-decoration: none;
+  margin-bottom: var(--space-8);
+}
+.wm-inca   { color: var(--color-primary); }
+.wm-import { color: var(--color-ink); font-weight: 400; }
+
+.login-title {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-muted);
+  margin-bottom: var(--space-8);
+}
+
+.login-error {
+  font-size: var(--text-sm);
+  color: oklch(0.50 0.19 25);
+  background: oklch(0.97 0.04 25);
+  border: 1px solid oklch(0.88 0.07 25);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+label {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+input[type="email"],
+input[type="password"] {
+  width: 100%;
+  padding: 0.6875rem 0.875rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  min-height: 44px;
+  outline: none;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+input::placeholder { color: var(--color-muted); }
+input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.15);
+}
+
+.login-submit { width: 100%; margin-top: var(--space-2); }
+
+@media (max-width: 480px) {
+  .login-card { padding: var(--space-8) var(--space-6); }
+}
+</style>

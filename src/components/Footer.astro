@@ -1,0 +1,172 @@
+---
+const year = new Date().getFullYear();
+---
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <div class="footer-brand">
+      <a href="/" class="footer-wordmark" aria-label="Inca Import — accueil">
+        <span class="wm-inca">Inca</span><span class="wm-import">Import</span>
+      </a>
+      <p class="footer-tagline">
+        Le grossiste de confiance des<br>
+        gérants de La Réunion.
+      </p>
+    </div>
+
+    <nav class="footer-nav" aria-label="Liens du site">
+      <p class="footer-nav-label">Navigation</p>
+      <ul>
+        <li><a href="/catalogue">Catalogue</a></li>
+        <li><a href="#marques">Nos marques</a></li>
+        <li><a href="/inscription">Devenir client</a></li>
+        <li><a href="/connexion">Connexion</a></li>
+      </ul>
+    </nav>
+
+    <div class="footer-contact">
+      <p class="footer-nav-label">Contact</p>
+      <ul>
+        <li>
+          <a href="mailto:inca-import@hotmail.com">inca-import@hotmail.com</a>
+        </li>
+        <li>
+          <a href="tel:+262692478941">0692 47 89 41</a>
+        </li>
+        <li class="footer-address">
+          La Réunion, 974
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="footer-bottom">
+    <div class="container footer-bottom-inner">
+      <p>&copy; {year} Inca Import. Tous droits réservés.</p>
+      <nav aria-label="Liens légaux">
+        <a href="#">Mentions légales</a>
+        <a href="#">Politique de confidentialité</a>
+        <a href="#">CGV</a>
+      </nav>
+    </div>
+  </div>
+</footer>
+
+<style>
+.site-footer {
+  background: var(--color-ink);
+  color: rgba(255, 255, 255, 0.60);
+}
+
+.footer-inner {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr 1fr;
+  gap: clamp(var(--space-10), 5vw, var(--space-16));
+  padding-top: clamp(var(--space-12), 6vw, var(--space-20));
+  padding-bottom: clamp(var(--space-12), 6vw, var(--space-20));
+}
+
+/* Brand col */
+.footer-wordmark {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.28em;
+  text-decoration: none;
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  letter-spacing: -0.01em;
+  margin-bottom: var(--space-4);
+}
+.footer-wordmark .wm-inca   { font-weight: 700; color: var(--color-primary); }
+.footer-wordmark .wm-import { font-weight: 400; color: rgba(255, 255, 255, 0.80); }
+
+.footer-tagline {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  line-height: 1.65;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* Nav cols */
+.footer-nav-label {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.35);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: var(--space-4);
+}
+
+.footer-nav ul,
+.footer-contact ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.footer-nav a,
+.footer-contact a {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: rgba(255, 255, 255, 0.60);
+  text-decoration: none;
+  transition: color var(--dur-fast);
+}
+.footer-nav a:hover,
+.footer-contact a:hover { color: white; }
+
+.footer-address {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: rgba(255, 255, 255, 0.40);
+}
+
+/* Bottom bar */
+.footer-bottom {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.footer-bottom-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-6);
+  padding-top: var(--space-6);
+  padding-bottom: var(--space-6);
+  flex-wrap: wrap;
+}
+
+.footer-bottom p {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: rgba(255, 255, 255, 0.30);
+}
+
+.footer-bottom nav {
+  display: flex;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+}
+
+.footer-bottom nav a {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: rgba(255, 255, 255, 0.30);
+  text-decoration: none;
+  transition: color var(--dur-fast);
+}
+.footer-bottom nav a:hover { color: rgba(255, 255, 255, 0.70); }
+
+@media (max-width: 768px) {
+  .footer-inner {
+    grid-template-columns: 1fr 1fr;
+  }
+  .footer-brand { grid-column: 1 / -1; }
+}
+
+@media (max-width: 480px) {
+  .footer-inner { grid-template-columns: 1fr; }
+  .footer-bottom-inner { flex-direction: column; align-items: flex-start; }
+}
+</style>

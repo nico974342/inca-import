@@ -1,0 +1,210 @@
+---
+---
+<section class="cta-section" id="compte" aria-labelledby="cta-heading">
+  <div class="container">
+    <div class="cta-inner">
+      <div class="cta-header">
+        <h2 class="cta-heading" id="cta-heading">
+          Ouvrez votre compte professionnel
+        </h2>
+        <p class="cta-sub">
+          Rejoignez les gérants de La Réunion qui font confiance à Inca Import
+          pour un réassort sans surprise.
+        </p>
+      </div>
+
+      <form class="cta-form" novalidate aria-label="Demande d'ouverture de compte">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="f-nom">Prénom & Nom</label>
+            <input
+              type="text"
+              id="f-nom"
+              name="nom"
+              placeholder="Marie Dupont"
+              required
+              autocomplete="name"
+            />
+          </div>
+          <div class="form-group">
+            <label for="f-societe">Société</label>
+            <input
+              type="text"
+              id="f-societe"
+              name="societe"
+              placeholder="Station Total Saint-Denis"
+              required
+              autocomplete="organization"
+            />
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="f-telephone">Téléphone</label>
+          <input
+            type="tel"
+            id="f-telephone"
+            name="telephone"
+            placeholder="+262 6 92 XX XX XX"
+            required
+            autocomplete="tel"
+          />
+        </div>
+        <button type="submit" class="btn btn-primary cta-submit">
+          Envoyer ma demande
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <p class="form-note">Votre compte est activé sous 24h ouvrées. Aucun engagement.</p>
+      </form>
+    </div>
+  </div>
+</section>
+
+<script>
+  const form = document.querySelector('.cta-form') as HTMLFormElement | null;
+  const btn  = form?.querySelector('.cta-submit') as HTMLButtonElement | null;
+
+  form?.addEventListener('submit', async e => {
+    e.preventDefault();
+    if (!form.checkValidity()) {
+      form.querySelectorAll('input').forEach(input => {
+        if (!input.validity.valid) input.classList.add('input-error');
+      });
+      return;
+    }
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Envoi en cours…';
+    }
+    try {
+      const res = await fetch('/api/contact', { method: 'POST', body: new FormData(form) });
+      if (res.ok) {
+        form.innerHTML = `
+          <p class="form-success" role="alert">
+            Merci&nbsp;! Votre demande a bien été envoyée. Nous vous contactons sous 24h.
+          </p>
+        `;
+      } else {
+        if (btn) { btn.disabled = false; btn.textContent = 'Envoyer ma demande'; }
+        alert('Une erreur est survenue. Veuillez réessayer.');
+      }
+    } catch {
+      if (btn) { btn.disabled = false; btn.textContent = 'Envoyer ma demande'; }
+      alert('Une erreur réseau est survenue. Veuillez réessayer.');
+    }
+  });
+
+  form?.querySelectorAll('input').forEach(input => {
+    input.addEventListener('input', () => input.classList.remove('input-error'));
+  });
+</script>
+
+<style>
+.cta-section {
+  padding: clamp(var(--space-16), 7vw, var(--space-24)) 0;
+  background: var(--color-surface);
+}
+
+.cta-inner {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(var(--space-12), 6vw, var(--space-20));
+  align-items: start;
+}
+
+/* Header */
+.cta-heading {
+  font-family: var(--font-display);
+  font-size: var(--text-4xl);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--color-ink);
+  line-height: 1.08;
+  margin-bottom: var(--space-5);
+}
+
+.cta-sub {
+  font-family: var(--font-body);
+  font-size: var(--text-lg);
+  line-height: 1.65;
+  color: var(--color-muted);
+  max-width: 38ch;
+}
+
+/* Form */
+.cta-form { display: flex; flex-direction: column; gap: var(--space-5); }
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+label {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+input[type="text"],
+input[type="tel"] {
+  width: 100%;
+  padding: 0.8125rem 1rem;
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+  min-height: 44px;
+  outline: none;
+}
+
+input::placeholder { color: var(--color-muted); }
+
+input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.15);
+}
+
+input.input-error {
+  border-color: oklch(0.55 0.20 25);
+  box-shadow: 0 0 0 3px oklch(0.55 0.20 25 / 0.12);
+}
+
+.cta-submit { align-self: flex-start; }
+
+.form-note {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  margin-top: calc(-1 * var(--space-2));
+}
+
+.form-success {
+  font-family: var(--font-body);
+  font-size: var(--text-lg);
+  font-weight: 500;
+  color: var(--color-accent);
+  padding: var(--space-8) 0;
+  line-height: 1.5;
+}
+
+@media (max-width: 900px) {
+  .cta-inner { grid-template-columns: 1fr; }
+  .cta-sub   { max-width: none; }
+}
+
+@media (max-width: 480px) {
+  .form-row { grid-template-columns: 1fr; }
+}
+</style>

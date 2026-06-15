@@ -1,0 +1,162 @@
+---
+const categories = [
+  {
+    slug: 'boissons',
+    name: 'Boissons',
+    count: '120+ références',
+    desc: 'Eaux minérales, sodas, energy drinks, jus de fruits et boissons chaudes — toute la gamme pour satisfaire vos clients.',
+    img: 'https://images.unsplash.com/photo-1619719304580-c6f308e5315a?auto=format&fit=crop&w=960&q=80',
+    alt: 'Bouteilles de boissons variées alignées',
+  },
+  {
+    slug: 'snacks',
+    name: 'Snacks',
+    count: '85+ références',
+    desc: 'Chips, biscuits apéro, cacahuètes, barres énergétiques — les en-cas préférés de vos clients, toujours disponibles.',
+    img: 'https://images.unsplash.com/photo-1613919113640-25732ec5e61f?auto=format&fit=crop&w=960&q=80',
+    alt: 'Assortiment de snacks et chips',
+  },
+  {
+    slug: 'confiseries',
+    name: 'Confiseries',
+    count: '60+ références',
+    desc: "Bonbons, chocolats, chewing-gums et friandises — l'impulsion qui génère du chiffre d'affaires en caisse.",
+    img: 'https://images.unsplash.com/photo-1633158832466-be592c721217?auto=format&fit=crop&w=960&q=80',
+    alt: 'Confiseries colorées variées',
+  },
+];
+---
+
+<section class="categories" id="categories" aria-label="Nos catégories">
+  {categories.map((cat, i) => (
+    <div class={`cat-band ${i % 2 === 1 ? 'cat-band--flip' : ''}`}>
+      <div class="cat-content">
+        <span class="cat-count">{cat.count}</span>
+        <h2 class="cat-name">{cat.name}</h2>
+        <p class="cat-desc">{cat.desc}</p>
+        <a href="#compte" class="cat-link">
+          Voir les {cat.name.toLowerCase()}
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </a>
+      </div>
+      <div class="cat-image">
+        <img
+          src={cat.img}
+          alt={cat.alt}
+          loading="lazy"
+          decoding="async"
+          width="960"
+          height="640"
+        />
+      </div>
+    </div>
+  ))}
+</section>
+
+<style>
+.categories {
+  border-top: 1px solid var(--color-border);
+}
+
+/* Band layout */
+.cat-band {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 460px;
+}
+
+/* Alternate: flip on even bands */
+.cat-band--flip .cat-image { order: -1; }
+
+/* Content cell */
+.cat-content {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: clamp(var(--space-12), 7vw, var(--space-20))
+           clamp(var(--space-8),  6vw, var(--space-16));
+  background: var(--color-bg);
+}
+.cat-band:nth-child(2) .cat-content {
+  background: var(--color-surface);
+}
+
+.cat-count {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 400;
+  color: var(--color-primary-deep);
+  letter-spacing: 0.02em;
+  margin-bottom: var(--space-4);
+}
+
+.cat-name {
+  font-family: var(--font-display);
+  font-size: clamp(2.25rem, 5vw, 3.5rem);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--color-ink);
+  margin-bottom: var(--space-4);
+  line-height: 1.05;
+}
+
+.cat-desc {
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.7;
+  color: var(--color-muted);
+  max-width: 42ch;
+  margin-bottom: var(--space-8);
+}
+
+.cat-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-primary-deep);
+  text-decoration: none;
+  transition: gap var(--dur-fast) var(--ease-out-quart),
+              color var(--dur-fast);
+}
+.cat-link:hover { gap: var(--space-3); color: var(--color-ink); }
+.cat-link:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+  border-radius: var(--radius-xs);
+}
+
+/* Image cell */
+.cat-image {
+  overflow: hidden;
+  background: var(--color-surface-2);
+}
+.cat-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.7s var(--ease-out-expo);
+}
+.cat-band:hover .cat-image img {
+  transform: scale(1.04);
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .cat-band {
+    grid-template-columns: 1fr;
+    min-height: unset;
+  }
+  .cat-band--flip .cat-image { order: 0; }
+  .cat-image { aspect-ratio: 16 / 10; }
+  .cat-content {
+    padding: var(--space-10) var(--container-padding);
+  }
+  .cat-desc { max-width: none; }
+}
+</style>

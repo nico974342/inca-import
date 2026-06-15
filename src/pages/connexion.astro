@@ -1,0 +1,231 @@
+---
+import '../styles/global.css';
+import { createAuthClient } from '../lib/supabase';
+
+const supabase = createAuthClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (user?.user_metadata?.role === 'client') return Astro.redirect('/catalogue');
+---
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Connexion — Inca Import</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@700&family=Figtree:wght@400;500;600&display=swap"
+    rel="stylesheet"
+  />
+</head>
+<body class="hub-body">
+  <main class="hub-shell">
+
+    <a href="/" class="hub-brand" aria-label="Inca Import — accueil">
+      <span class="wm-inca">Inca</span><span class="wm-import">Import</span>
+    </a>
+
+    <h1 class="hub-title">Connexion</h1>
+    <p class="hub-subtitle">Choisissez votre espace</p>
+
+    <div class="hub-cards">
+
+      <a href="/connexion/client" class="hub-card">
+        <div class="hub-card-icon" aria-hidden="true">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+            <circle cx="14" cy="10" r="5" stroke="currentColor" stroke-width="1.75"/>
+            <path d="M4 24c0-4.418 4.477-8 10-8s10 3.582 10 8" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="hub-card-body">
+          <p class="hub-card-title">Espace Client</p>
+          <p class="hub-card-desc">Accédez à votre catalogue, passez et suivez vos commandes en ligne.</p>
+        </div>
+        <span class="hub-card-arrow" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <path d="M4 9h10M9.5 5l4.5 4-4.5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+      </a>
+
+      <a href="/admin/login" class="hub-card hub-card--admin">
+        <div class="hub-card-icon" aria-hidden="true">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+            <rect x="3" y="3" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.75"/>
+            <rect x="15" y="3" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.75"/>
+            <rect x="3" y="15" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.75"/>
+            <rect x="15" y="15" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.75"/>
+          </svg>
+        </div>
+        <div class="hub-card-body">
+          <p class="hub-card-title">Espace Admin</p>
+          <p class="hub-card-desc">Gestion du catalogue, des clients, des commandes et des livraisons.</p>
+        </div>
+        <span class="hub-card-arrow" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <path d="M4 9h10M9.5 5l4.5 4-4.5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+      </a>
+
+    </div>
+
+    <p class="hub-footer">
+      Pas encore client ? <a href="/inscription">Ouvrir un compte →</a>
+    </p>
+
+  </main>
+</body>
+</html>
+
+<style>
+.hub-body {
+  font-family: var(--font-body);
+  background: var(--color-surface);
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+}
+
+.hub-shell {
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.hub-brand {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.28em;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  text-decoration: none;
+  margin-bottom: var(--space-8);
+}
+.wm-inca   { color: var(--color-primary); }
+.wm-import { color: var(--color-ink); font-weight: 400; }
+
+.hub-title {
+  font-family: var(--font-display);
+  font-size: clamp(1.75rem, 5vw, 2.25rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--color-ink);
+  margin-bottom: var(--space-2);
+}
+
+.hub-subtitle {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  margin-bottom: var(--space-8);
+}
+
+.hub-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+}
+
+.hub-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5) var(--space-6);
+  text-decoration: none;
+  text-align: left;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-base), transform var(--dur-fast);
+}
+.hub-card:hover {
+  border-color: var(--color-primary);
+  box-shadow: 0 4px 20px oklch(0.568 0.149 45.9 / 0.10);
+  transform: translateY(-1px);
+}
+.hub-card:active { transform: translateY(0); }
+
+.hub-card--admin:hover {
+  border-color: var(--color-ink);
+  box-shadow: 0 4px 20px oklch(0 0 0 / 0.08);
+}
+
+.hub-card-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-md);
+  background: oklch(0.568 0.149 45.9 / 0.08);
+  color: var(--color-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background var(--dur-fast);
+}
+.hub-card--admin .hub-card-icon {
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+.hub-card:hover .hub-card-icon { background: oklch(0.568 0.149 45.9 / 0.13); }
+.hub-card--admin:hover .hub-card-icon { background: var(--color-surface-2); }
+
+.hub-card-body { flex: 1; min-width: 0; }
+
+.hub-card-title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-ink);
+  margin-bottom: var(--space-1);
+}
+
+.hub-card-desc {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  line-height: 1.5;
+}
+
+.hub-card-arrow {
+  color: var(--color-muted);
+  flex-shrink: 0;
+  transition: color var(--dur-fast), transform var(--dur-fast);
+}
+.hub-card:hover .hub-card-arrow {
+  color: var(--color-primary);
+  transform: translateX(3px);
+}
+.hub-card--admin:hover .hub-card-arrow { color: var(--color-ink); }
+
+.hub-footer {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  margin-top: var(--space-8);
+}
+.hub-footer a {
+  color: var(--color-primary-deep);
+  font-weight: 500;
+  text-decoration: none;
+}
+.hub-footer a:hover { color: var(--color-primary); }
+
+.hub-card:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hub-card { transition: border-color var(--dur-fast); }
+  .hub-card:hover { transform: none; }
+  .hub-card-arrow { transition: color var(--dur-fast); }
+  .hub-card:hover .hub-card-arrow { transform: none; }
+}
+</style>

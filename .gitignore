@@ -1,0 +1,9 @@
+dist/
+node_modules/
+.env
+.env.*
+!.env.example
+.DS_Store
+.astro/
+impeccable/
+.impeccable/hook.cache.json

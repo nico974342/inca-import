@@ -1,0 +1,307 @@
+---
+import type { User } from '@supabase/supabase-js';
+
+interface Props {
+  user?: User | null;
+}
+const { user } = Astro.props;
+const isClient = user?.user_metadata?.role === 'client';
+---
+<header class="site-header" id="site-header">
+  <div class="container nav-inner">
+
+    <a href="/" class="wordmark" aria-label="Inca Import — accueil">
+      <span class="wm-inca">Inca</span><span class="wm-import">Import</span>
+    </a>
+
+    <nav class="nav-links" aria-label="Navigation principale">
+      <a href="/catalogue">Catalogue</a>
+      <a href="#marques">Nos marques</a>
+      <a href="/inscription">Devenir client</a>
+    </nav>
+
+    <div class="nav-actions">
+      {isClient ? (
+        <>
+          <a href="/mon-compte" class="nav-user">{user?.user_metadata?.nom ?? user?.email}</a>
+          <form action="/api/auth/client-logout" method="POST" class="nav-logout-form">
+            <button type="submit" class="nav-ghost nav-logout-btn">Déconnexion</button>
+          </form>
+        </>
+      ) : (
+        <>
+          <a href="/connexion" class="nav-ghost">Connexion</a>
+          <a href="/inscription" class="btn btn-primary">Ouvrir un compte</a>
+        </>
+      )}
+    </div>
+
+    <button
+      class="nav-toggle"
+      aria-expanded="false"
+      aria-label="Ouvrir le menu"
+      aria-controls="mobile-menu"
+    >
+      <span></span>
+      <span></span>
+      <span></span>
+    </button>
+  </div>
+
+  <div class="nav-mobile" id="mobile-menu" aria-hidden="true">
+    <nav aria-label="Navigation mobile">
+      <a href="/catalogue">Catalogue</a>
+      <a href="#marques">Nos marques</a>
+      <a href="/inscription">Devenir client</a>
+      {isClient ? (
+        <>
+          <a href="/mon-compte" class="mobile-user">{user?.user_metadata?.nom ?? user?.email}</a>
+          <form action="/api/auth/client-logout" method="POST" class="mobile-logout-form">
+            <button type="submit" class="mobile-logout-btn">Déconnexion</button>
+          </form>
+        </>
+      ) : (
+        <>
+          <a href="/connexion">Connexion</a>
+          <a href="/inscription" class="btn btn-primary mobile-cta">Ouvrir un compte</a>
+        </>
+      )}
+    </nav>
+  </div>
+</header>
+
+<script>
+  const header  = document.getElementById('site-header') as HTMLElement;
+  const toggle  = header.querySelector('.nav-toggle') as HTMLButtonElement;
+  const mobile  = document.getElementById('mobile-menu') as HTMLElement;
+
+  // Scrolled shadow
+  const onScroll = () => header.classList.toggle('scrolled', window.scrollY > 8);
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+
+  // Toggle mobile menu
+  toggle.addEventListener('click', () => {
+    const open = toggle.getAttribute('aria-expanded') === 'true';
+    toggle.setAttribute('aria-expanded', String(!open));
+    mobile.setAttribute('aria-hidden', String(open));
+    mobile.classList.toggle('is-open', !open);
+    document.body.style.overflow = open ? '' : 'hidden';
+  });
+
+  // Close on link click
+  mobile.querySelectorAll('a').forEach(a => {
+    a.addEventListener('click', () => {
+      toggle.setAttribute('aria-expanded', 'false');
+      mobile.setAttribute('aria-hidden', 'true');
+      mobile.classList.remove('is-open');
+      document.body.style.overflow = '';
+    });
+  });
+
+  // Close on outside click
+  document.addEventListener('click', e => {
+    if (!header.contains(e.target as Node) && mobile.classList.contains('is-open')) {
+      toggle.setAttribute('aria-expanded', 'false');
+      mobile.setAttribute('aria-hidden', 'true');
+      mobile.classList.remove('is-open');
+      document.body.style.overflow = '';
+    }
+  });
+</script>
+
+<style>
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+  transition: box-shadow var(--dur-base);
+}
+.site-header.scrolled {
+  box-shadow: 0 1px 16px oklch(0.148 0.020 45.9 / 0.09);
+}
+
+.nav-inner {
+  display: flex;
+  align-items: center;
+  height: 64px;
+  gap: var(--space-6);
+}
+
+/* Wordmark */
+.wordmark {
+  display: flex;
+  align-items: baseline;
+  gap: 0.28em;
+  text-decoration: none;
+  font-family: var(--font-display);
+  font-size: 1.375rem;
+  letter-spacing: -0.01em;
+  flex-shrink: 0;
+}
+.wm-inca   { font-weight: 700; color: var(--color-primary); }
+.wm-import { font-weight: 400; color: var(--color-ink); }
+
+/* Desktop nav */
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  margin-left: auto;
+}
+.nav-links a {
+  text-decoration: none;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: var(--color-muted);
+  transition: color var(--dur-fast);
+}
+.nav-links a:hover { color: var(--color-ink); }
+
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* Logged-in client display */
+.nav-user {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-ink);
+  padding: 0 var(--space-2);
+  white-space: nowrap;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-decoration: none;
+  transition: color var(--dur-fast);
+}
+a.nav-user:hover { color: var(--color-primary); }
+.nav-logout-form { display: contents; }
+.nav-logout-btn {
+  background: none;
+  border: none;
+  font-family: var(--font-body);
+  cursor: pointer;
+  padding: 0;
+}
+
+.nav-ghost {
+  text-decoration: none;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: var(--color-muted);
+  transition: color var(--dur-fast);
+  padding: 0 var(--space-2);
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.nav-ghost:hover { color: var(--color-ink); }
+
+/* Hamburger */
+.nav-toggle {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  padding: var(--space-2);
+  cursor: pointer;
+  margin-left: auto;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+}
+.nav-toggle span {
+  display: block;
+  width: 22px;
+  height: 2px;
+  background: var(--color-ink);
+  border-radius: 2px;
+  transition: transform var(--dur-base) var(--ease-out-quart),
+              opacity var(--dur-fast);
+}
+.nav-toggle[aria-expanded="true"] span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+.nav-toggle[aria-expanded="true"] span:nth-child(2) { opacity: 0; transform: scaleX(0); }
+.nav-toggle[aria-expanded="true"] span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+/* Mobile menu */
+.nav-mobile {
+  display: none;
+  position: fixed;
+  inset: 64px 0 0 0;
+  background: var(--color-bg);
+  z-index: var(--z-dropdown);
+  overflow-y: auto;
+  transform: translateY(-8px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-base) var(--ease-out-quart),
+              transform var(--dur-base) var(--ease-out-quart);
+}
+.nav-mobile.is-open {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.nav-mobile nav {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4) var(--container-padding) var(--space-8);
+  gap: 0;
+}
+.nav-mobile nav a {
+  text-decoration: none;
+  font-size: 1.125rem;
+  font-weight: 500;
+  color: var(--color-ink);
+  padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--color-border);
+  transition: color var(--dur-fast);
+}
+.nav-mobile nav a:hover { color: var(--color-primary); }
+.nav-mobile .mobile-cta {
+  margin-top: var(--space-6);
+  border-bottom: none !important;
+  justify-content: center;
+}
+
+/* Mobile logged-in user */
+.mobile-user {
+  display: block;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--color-ink);
+  padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--color-border);
+  text-decoration: none;
+}
+a.mobile-user:hover { color: var(--color-primary); }
+.mobile-logout-form { border-bottom: 1px solid var(--color-border); }
+.mobile-logout-btn {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  font-family: var(--font-body);
+  font-size: 1.125rem;
+  font-weight: 500;
+  color: oklch(0.50 0.19 25);
+  padding: var(--space-4) 0;
+  cursor: pointer;
+  display: block;
+}
+
+@media (max-width: 768px) {
+  .nav-links,
+  .nav-actions { display: none; }
+  .nav-toggle  { display: flex; }
+  .nav-mobile  { display: block; }
+  .nav-inner   { gap: var(--space-4); }
+}
+</style>

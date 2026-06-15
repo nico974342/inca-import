@@ -1,0 +1,29 @@
+---
+import Base from '../layouts/Base.astro';
+import Nav from '../components/Nav.astro';
+import Hero from '../components/Hero.astro';
+import Categories from '../components/Categories.astro';
+import WhyInca from '../components/WhyInca.astro';
+import HowItWorks from '../components/HowItWorks.astro';
+import Brands from '../components/Brands.astro';
+import Testimonial from '../components/Testimonial.astro';
+import CTAForm from '../components/CTAForm.astro';
+import Footer from '../components/Footer.astro';
+import { createAuthClient } from '../lib/supabase';
+
+const supabase = createAuthClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+---
+<Base>
+  <Nav user={user} />
+  <main>
+    <Hero />
+    <Categories />
+    <WhyInca />
+    <HowItWorks />
+    <Brands />
+    <Testimonial />
+    <CTAForm />
+  </main>
+  <Footer />
+</Base>

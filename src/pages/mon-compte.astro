@@ -1,0 +1,512 @@
+---
+import '../styles/global.css';
+import { createAuthClient, supabaseAdmin } from '../lib/supabase';
+import Nav from '../components/Nav.astro';
+
+const supabase = createAuthClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+if (!user || user.user_metadata?.role !== 'client') {
+  return Astro.redirect('/connexion/client');
+}
+
+const { data: accountData } = await supabaseAdmin
+  .from('client_accounts')
+  .select('nom, societe, telephone, points_de_vente, adresse_pdv, livraison_rue, livraison_ville, livraison_code_postal, facturation_same, facturation_rue, facturation_ville, facturation_code_postal')
+  .eq('email', user.email!)
+  .maybeSingle();
+
+type Account = {
+  nom?: string; societe?: string; telephone?: string;
+  points_de_vente?: string; adresse_pdv?: string;
+  livraison_rue?: string; livraison_ville?: string; livraison_code_postal?: string;
+  facturation_same?: boolean;
+  facturation_rue?: string; facturation_ville?: string; facturation_code_postal?: string;
+};
+
+let account: Account = accountData ?? {};
+let errorMessage = '';
+const saved = Astro.url.searchParams.get('saved') === '1';
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const g = (k: string) => (form.get(k) as string)?.trim() ?? '';
+
+  const nom                    = g('nom');
+  const societe                = g('societe');
+  const telephone              = g('telephone');
+  const nom_pdv                = g('nom_pdv');
+  const adresse_pdv            = g('adresse_pdv');
+  const livraison_rue          = g('livraison_rue');
+  const livraison_ville        = g('livraison_ville');
+  const livraison_code_postal  = g('livraison_code_postal');
+  const facturation_same       = form.get('facturation_same') === 'on';
+  const facturation_rue        = facturation_same ? null : (g('facturation_rue') || null);
+  const facturation_ville      = facturation_same ? null : (g('facturation_ville') || null);
+  const facturation_code_postal = facturation_same ? null : (g('facturation_code_postal') || null);
+
+  if (!nom) {
+    errorMessage = 'Le nom est obligatoire.';
+    account = { ...account, nom, societe, telephone, points_de_vente: nom_pdv, adresse_pdv, livraison_rue, livraison_ville, livraison_code_postal, facturation_same, facturation_rue: facturation_rue ?? undefined, facturation_ville: facturation_ville ?? undefined, facturation_code_postal: facturation_code_postal ?? undefined };
+  } else {
+    const { error: dbError } = await supabaseAdmin
+      .from('client_accounts')
+      .update({
+        nom,
+        societe: societe || null,
+        telephone: telephone || null,
+        points_de_vente: nom_pdv || null,
+        adresse_pdv: adresse_pdv || null,
+        livraison_rue: livraison_rue || null,
+        livraison_ville: livraison_ville || null,
+        livraison_code_postal: livraison_code_postal || null,
+        facturation_same,
+        facturation_rue,
+        facturation_ville,
+        facturation_code_postal,
+      })
+      .eq('email', user.email!);
+
+    if (dbError) {
+      errorMessage = 'Erreur lors de la sauvegarde. Veuillez réessayer.';
+      account = { ...account, nom, societe, telephone, points_de_vente: nom_pdv, adresse_pdv, livraison_rue, livraison_ville, livraison_code_postal, facturation_same };
+    } else {
+      await supabase.auth.updateUser({
+        data: { nom, societe: societe || null, telephone: telephone || null },
+      });
+      return Astro.redirect('/mon-compte?saved=1');
+    }
+  }
+}
+
+const initials = (account.nom ?? user.email ?? '?').slice(0, 2).toUpperCase();
+const displayName = account.nom ?? user.user_metadata?.nom ?? user.email ?? '';
+const factSame = account.facturation_same !== false;
+---
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mon compte — Inca Import</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@700&family=Figtree:wght@400;500;600&display=swap"
+    rel="stylesheet"
+  />
+</head>
+<body class="profile-body">
+  <Nav user={user} />
+  <main class="profile-page">
+    <div class="profile-container profile-main">
+
+      <!-- Profile header -->
+      <div class="profile-header">
+        <div class="profile-avatar" aria-hidden="true">{initials}</div>
+        <div class="profile-header-info">
+          <h1 class="profile-name">{displayName}</h1>
+          <p class="profile-email">{user.email}</p>
+        </div>
+      </div>
+
+      {saved && (
+        <div class="alert alert-success" role="status">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="8" cy="8" r="7" stroke="oklch(0.52 0.17 145)" stroke-width="1.25"/>
+            <path d="M4.5 8l2.5 2.5 4-4" stroke="oklch(0.52 0.17 145)" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Profil mis à jour avec succès.
+        </div>
+      )}
+      {errorMessage && (
+        <div class="alert alert-error" role="alert">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="8" cy="8" r="7" stroke="oklch(0.50 0.19 25)" stroke-width="1.25"/>
+            <path d="M8 5v3.5M8 11h.01" stroke="oklch(0.50 0.19 25)" stroke-width="1.25" stroke-linecap="round"/>
+          </svg>
+          {errorMessage}
+        </div>
+      )}
+
+      <form method="POST" class="profile-form" novalidate>
+
+        <!-- ── Section 1: Informations personnelles ── -->
+        <section class="profile-card">
+          <h2 class="card-title">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <circle cx="8" cy="6" r="3" stroke="currentColor" stroke-width="1.25"/>
+              <path d="M2 14c0-3.314 2.686-6 6-6s6 2.686 6 6" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>
+            </svg>
+            Informations personnelles
+          </h2>
+          <div class="fields">
+            <div class="field-row">
+              <div class="field">
+                <label for="nom">Nom <span class="req" aria-hidden="true">*</span></label>
+                <input type="text" id="nom" name="nom" required autocomplete="name"
+                  value={account.nom ?? ''} placeholder="Jean Dupont" />
+              </div>
+              <div class="field">
+                <label for="societe">Société</label>
+                <input type="text" id="societe" name="societe" autocomplete="organization"
+                  value={account.societe ?? ''} placeholder="Ma Supérette" />
+              </div>
+            </div>
+            <div class="field field--half">
+              <label for="telephone">Téléphone</label>
+              <input type="tel" id="telephone" name="telephone" autocomplete="tel"
+                value={account.telephone ?? ''} placeholder="+262 692 00 00 00" />
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Section 2: Point de vente ── -->
+        <section class="profile-card">
+          <h2 class="card-title">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M2 6.5l6-5 6 5V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6.5Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>
+              <path d="M6 15v-5h4v5" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>
+            </svg>
+            Point de vente
+          </h2>
+          <p class="card-hint">Utilisé pour l'attribution des livraisons.</p>
+          <div class="fields">
+            <div class="field-row">
+              <div class="field">
+                <label for="nom_pdv">Nom du point de vente</label>
+                <input type="text" id="nom_pdv" name="nom_pdv"
+                  value={account.points_de_vente ?? ''} placeholder="Ex : Station Total Les Tamarins" />
+              </div>
+              <div class="field">
+                <label for="adresse_pdv">Adresse</label>
+                <input type="text" id="adresse_pdv" name="adresse_pdv"
+                  value={account.adresse_pdv ?? ''} placeholder="Ex : RN1, Les Tamarins, 97460" />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Section 3: Adresse de livraison ── -->
+        <section class="profile-card">
+          <h2 class="card-title">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M1 4h9v7H1zM10 6h3l2 2v3h-5V6z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>
+              <circle cx="3.5" cy="13" r="1.25" stroke="currentColor" stroke-width="1.25"/>
+              <circle cx="11.5" cy="13" r="1.25" stroke="currentColor" stroke-width="1.25"/>
+            </svg>
+            Adresse de livraison
+          </h2>
+          <div class="fields">
+            <div class="field">
+              <label for="livraison_rue">Rue</label>
+              <input type="text" id="livraison_rue" name="livraison_rue" autocomplete="address-line1"
+                value={account.livraison_rue ?? ''} placeholder="12 rue des Cannes à sucre" />
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label for="livraison_ville">Ville</label>
+                <input type="text" id="livraison_ville" name="livraison_ville" autocomplete="address-level2"
+                  value={account.livraison_ville ?? ''} placeholder="Saint-Paul" />
+              </div>
+              <div class="field">
+                <label for="livraison_code_postal">Code postal</label>
+                <input type="text" id="livraison_code_postal" name="livraison_code_postal" autocomplete="postal-code"
+                  value={account.livraison_code_postal ?? ''} placeholder="97460" maxlength="10" />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Section 4: Adresse de facturation ── -->
+        <section class="profile-card">
+          <h2 class="card-title">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect x="1.5" y="3" width="13" height="10" rx="1.5" stroke="currentColor" stroke-width="1.25"/>
+              <path d="M4 7h5M4 10h3" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>
+            </svg>
+            Adresse de facturation
+          </h2>
+
+          <label class="toggle-row">
+            <input type="checkbox" id="facturation_same" name="facturation_same"
+              class="toggle-check" checked={factSame} />
+            <span class="toggle-track" aria-hidden="true"></span>
+            <span class="toggle-label">Identique à l'adresse de livraison</span>
+          </label>
+
+          <div class="billing-fields" id="billingFields" hidden={factSame}>
+            <div class="field">
+              <label for="facturation_rue">Rue</label>
+              <input type="text" id="facturation_rue" name="facturation_rue" autocomplete="address-line1"
+                value={account.facturation_rue ?? ''} placeholder="12 rue des Cannes à sucre" />
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label for="facturation_ville">Ville</label>
+                <input type="text" id="facturation_ville" name="facturation_ville" autocomplete="address-level2"
+                  value={account.facturation_ville ?? ''} placeholder="Saint-Paul" />
+              </div>
+              <div class="field">
+                <label for="facturation_code_postal">Code postal</label>
+                <input type="text" id="facturation_code_postal" name="facturation_code_postal" autocomplete="postal-code"
+                  value={account.facturation_code_postal ?? ''} placeholder="97460" maxlength="10" />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <div class="profile-submit-row">
+          <button type="submit" class="btn btn-primary profile-save-btn">
+            Enregistrer les modifications
+          </button>
+        </div>
+
+      </form>
+    </div>
+  </main>
+</body>
+</html>
+
+<script>
+  const toggle = document.getElementById('facturation_same') as HTMLInputElement;
+  const billingFields = document.getElementById('billingFields') as HTMLElement;
+
+  toggle?.addEventListener('change', () => {
+    billingFields.hidden = toggle.checked;
+  });
+
+  // Remove ?saved=1 from URL after displaying the toast
+  if (location.search.includes('saved=1')) {
+    history.replaceState(null, '', location.pathname);
+  }
+</script>
+
+<style>
+/* ── Shell ───────────────────────────────────────── */
+.profile-body {
+  font-family: var(--font-body);
+  background: var(--color-surface);
+  min-height: 100dvh;
+  color: var(--color-ink);
+}
+
+.profile-page {
+  padding: var(--space-8) 0 var(--space-12);
+}
+
+.profile-container {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 0 var(--space-6);
+}
+
+/* ── Profile header ──────────────────────────────── */
+.profile-main { display: flex; flex-direction: column; gap: var(--space-5); }
+
+.profile-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-2);
+}
+
+.profile-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: oklch(0.568 0.149 45.9 / 0.12);
+  color: var(--color-primary-deep);
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  letter-spacing: -0.01em;
+}
+
+.profile-name {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-ink);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.profile-email {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  margin-top: var(--space-1);
+}
+
+/* ── Alerts ──────────────────────────────────────── */
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
+}
+.alert svg { flex-shrink: 0; margin-top: 1px; }
+.alert-success {
+  background: oklch(0.96 0.04 145);
+  border: 1px solid oklch(0.85 0.08 145);
+  color: oklch(0.35 0.12 145);
+}
+.alert-error {
+  background: oklch(0.97 0.04 25);
+  border: 1px solid oklch(0.88 0.07 25);
+  color: oklch(0.45 0.16 25);
+}
+
+/* ── Cards ───────────────────────────────────────── */
+.profile-form { display: flex; flex-direction: column; gap: var(--space-4); }
+
+.profile-card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+}
+
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--color-ink);
+  margin-bottom: var(--space-5);
+}
+.card-title svg { color: var(--color-primary); flex-shrink: 0; }
+
+.card-hint {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  margin-top: calc(-1 * var(--space-3));
+  margin-bottom: var(--space-4);
+}
+
+/* ── Field helpers ───────────────────────────────── */
+.fields { display: flex; flex-direction: column; gap: var(--space-4); }
+
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.field--half { max-width: calc(50% - var(--space-2)); }
+
+label {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+}
+.req { color: var(--color-primary); }
+
+input[type="text"],
+input[type="tel"] {
+  width: 100%;
+  padding: 0.6875rem 0.875rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  min-height: 44px;
+  outline: none;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+  box-sizing: border-box;
+}
+input::placeholder { color: var(--color-muted); }
+input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.15);
+}
+
+/* ── Billing toggle ──────────────────────────────── */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  cursor: pointer;
+  margin-bottom: var(--space-4);
+  user-select: none;
+}
+.toggle-check { position: absolute; opacity: 0; width: 0; height: 0; }
+
+.toggle-track {
+  width: 36px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: var(--color-border-strong);
+  flex-shrink: 0;
+  position: relative;
+  transition: background var(--dur-fast);
+}
+.toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--color-bg);
+  box-shadow: 0 1px 3px oklch(0 0 0 / 0.15);
+  transition: transform var(--dur-fast) var(--ease-out-quart);
+}
+.toggle-check:checked + .toggle-track {
+  background: var(--color-primary);
+}
+.toggle-check:checked + .toggle-track::after {
+  transform: translateX(16px);
+}
+.toggle-check:focus-visible + .toggle-track {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.toggle-label {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.billing-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-top: var(--space-2);
+}
+.billing-fields[hidden] { display: none; }
+
+/* ── Submit row ──────────────────────────────────── */
+.profile-submit-row {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: var(--space-2);
+}
+
+.profile-save-btn { min-width: 220px; justify-content: center; }
+
+/* ── Responsive ──────────────────────────────────── */
+@media (max-width: 600px) {
+  .profile-page      { padding: var(--space-6) 0 var(--space-10); }
+  .profile-container { padding: 0 var(--space-4); }
+  .profile-card      { padding: var(--space-5); }
+  .field-row         { grid-template-columns: 1fr; }
+  .field--half       { max-width: 100%; }
+  .profile-submit-row { justify-content: stretch; }
+  .profile-save-btn  { width: 100%; }
+}
+</style>

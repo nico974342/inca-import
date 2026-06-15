@@ -1,0 +1,126 @@
+---
+const steps = [
+  {
+    n: '1',
+    title: 'Créez votre compte',
+    body: 'Remplissez notre formulaire en ligne. Validation sous 24h ouvrées, sans engagement.',
+  },
+  {
+    n: '2',
+    title: 'Parcourez le catalogue',
+    body: '200+ références classées par catégorie, avec prix et disponibilité en temps réel.',
+  },
+  {
+    n: '3',
+    title: 'Recevez votre commande',
+    body: 'Livraison sous 48h à votre point de vente, partout à La Réunion.',
+  },
+];
+---
+
+<section class="how-it-works" aria-labelledby="hiw-heading">
+  <div class="container">
+    <h2 class="hiw-heading" id="hiw-heading">Comment ça marche&nbsp;?</h2>
+
+    <div class="steps-row">
+      {steps.map((step, i) => (
+        <>
+          <div class="step">
+            <span class="step-n" aria-hidden="true">{step.n}</span>
+            <h3 class="step-title">{step.title}</h3>
+            <p class="step-body">{step.body}</p>
+          </div>
+          {i < steps.length - 1 && (
+            <div class="step-arrow" aria-hidden="true">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                <path d="M5 12h14M14 7l5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+          )}
+        </>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+.how-it-works {
+  padding: clamp(var(--space-16), 7vw, var(--space-24)) 0;
+  background: var(--color-surface);
+}
+
+.hiw-heading {
+  font-family: var(--font-display);
+  font-size: var(--text-4xl);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--color-ink);
+  margin-bottom: clamp(var(--space-12), 5vw, var(--space-16));
+  line-height: 1.1;
+}
+
+.steps-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.step {
+  flex: 1;
+}
+
+.step-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  color: white;
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: var(--space-5);
+  flex-shrink: 0;
+}
+
+.step-title {
+  font-family: var(--font-display);
+  font-size: clamp(1.125rem, 2vw, 1.375rem);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--color-ink);
+  margin-bottom: var(--space-3);
+  line-height: 1.2;
+}
+
+.step-body {
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.65;
+  color: var(--color-muted);
+  max-width: 26ch;
+}
+
+.step-arrow {
+  color: var(--color-border-strong);
+  flex-shrink: 0;
+  margin-top: 0.75rem;
+  align-self: flex-start;
+}
+
+@media (max-width: 640px) {
+  .steps-row {
+    flex-direction: column;
+    gap: var(--space-8);
+  }
+  .step-arrow {
+    transform: rotate(90deg);
+    margin-top: 0;
+    align-self: flex-start;
+    margin-left: var(--space-4);
+  }
+  .step-body { max-width: none; }
+}
+</style>

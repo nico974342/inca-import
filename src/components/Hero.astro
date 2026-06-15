@@ -1,0 +1,105 @@
+---
+---
+<section class="hero">
+  <div class="container hero-inner">
+    <div class="hero-content">
+      <p class="hero-tag" data-h="1" aria-hidden="true">Grossiste B2B · La Réunion</p>
+      <h1 class="hero-heading" data-h="2">
+        Boissons, snacks&nbsp;&amp;&nbsp;confiseries —<br>
+        toujours en&nbsp;stock, livrés chez&nbsp;vous.
+      </h1>
+      <p class="hero-sub" data-h="3">
+        Inca Import approvisionne les gérants de stations-service et supérettes
+        de La&nbsp;Réunion. Stock permanent, livraison sous&nbsp;48h, équipe locale.
+      </p>
+      <div class="hero-actions" data-h="4">
+        <a href="/catalogue" class="btn btn-white">Voir le catalogue</a>
+        <a href="#compte" class="btn btn-outline-white">Ouvrir un compte</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="hero-deco" aria-hidden="true">974</div>
+</section>
+
+<style>
+.hero {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-primary);
+  min-height: clamp(520px, 74vh, 780px);
+  display: flex;
+  align-items: center;
+}
+
+.hero-inner {
+  position: relative;
+  z-index: 1;
+  padding-top: clamp(var(--space-16), 6vw, var(--space-24));
+  padding-bottom: clamp(var(--space-16), 6vw, var(--space-24));
+}
+
+.hero-content {
+  max-width: 680px;
+}
+
+/* Tag */
+.hero-tag {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.65);
+  letter-spacing: 0.01em;
+  margin-bottom: var(--space-5);
+}
+
+/* Heading */
+.hero-heading {
+  font-family: var(--font-display);
+  font-size: var(--text-hero);
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.025em;
+  color: white;
+  margin-bottom: var(--space-6);
+}
+
+/* Sub — white text at ≥18px + weight 500 gives 3.28:1 vs coral, passes SKILL large-text threshold */
+.hero-sub {
+  font-family: var(--font-body);
+  font-size: clamp(1.125rem, 2vw, 1.25rem);
+  font-weight: 500;
+  line-height: 1.65;
+  color: white;
+  max-width: 520px;
+  margin-bottom: var(--space-10);
+}
+
+/* CTAs */
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+/* Decorative 974 */
+.hero-deco {
+  position: absolute;
+  right: -0.05em;
+  bottom: -0.18em;
+  font-family: var(--font-display);
+  font-size: clamp(10rem, 28vw, 22rem);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  color: rgba(255, 255, 255, 0.07);
+  user-select: none;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .hero-heading { letter-spacing: -0.02em; }
+  .hero-deco    { display: none; }
+}
+</style>

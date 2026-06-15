@@ -1,0 +1,323 @@
+---
+import AdminLayout from '../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../lib/supabase';
+
+if (Astro.request.method === 'POST') {
+  const form   = await Astro.request.formData();
+  const action = (form.get('_action') as string) ?? '';
+
+  if (action === 'add') {
+    const texte = (form.get('texte') as string)?.trim();
+    const nom   = (form.get('nom')   as string)?.trim();
+    const role  = (form.get('role')  as string)?.trim() || null;
+    if (texte && nom) {
+      const { data: last } = await supabaseAdmin
+        .from('testimonials').select('position').order('position', { ascending: false }).limit(1);
+      const position = ((last?.[0]?.position ?? 0) + 1);
+      await supabaseAdmin.from('testimonials').insert({ texte, nom, role, position });
+    }
+    return Astro.redirect('/admin/temoignages');
+  }
+
+  if (action === 'edit') {
+    const id    = form.get('id')    as string;
+    const texte = (form.get('texte') as string)?.trim();
+    const nom   = (form.get('nom')   as string)?.trim();
+    const role  = (form.get('role')  as string)?.trim() || null;
+    if (id && texte && nom) {
+      await supabaseAdmin.from('testimonials').update({ texte, nom, role }).eq('id', id);
+    }
+    return Astro.redirect('/admin/temoignages');
+  }
+
+  if (action === 'toggle') {
+    const id    = form.get('id')    as string;
+    const actif = form.get('actif') === 'true';
+    await supabaseAdmin.from('testimonials').update({ actif: !actif }).eq('id', id);
+    return Astro.redirect('/admin/temoignages');
+  }
+
+  if (action === 'delete') {
+    const id = form.get('id') as string;
+    await supabaseAdmin.from('testimonials').delete().eq('id', id);
+    return Astro.redirect('/admin/temoignages');
+  }
+}
+
+const { data: testimonials } = await supabaseAdmin
+  .from('testimonials')
+  .select('id, texte, nom, role, actif, position')
+  .order('position', { ascending: true });
+
+const editId   = Astro.url.searchParams.get('edit');
+const editItem = editId ? (testimonials ?? []).find(t => t.id === editId) : null;
+---
+<AdminLayout title="Témoignages" activeNav="temoignages">
+
+  <!-- Add form -->
+  <div class="panel">
+    <h2 class="panel-title">Ajouter un témoignage</h2>
+    <form method="POST" class="temo-form">
+      <input type="hidden" name="_action" value="add" />
+      <div class="field-group">
+        <div class="field field--wide">
+          <label for="add-texte">Témoignage *</label>
+          <textarea id="add-texte" name="texte" rows="3" required placeholder="Texte du témoignage…"></textarea>
+        </div>
+        <div class="field">
+          <label for="add-nom">Nom *</label>
+          <input type="text" id="add-nom" name="nom" required placeholder="Jean-Marc Payet" />
+        </div>
+        <div class="field">
+          <label for="add-role">Rôle / Société</label>
+          <input type="text" id="add-role" name="role" placeholder="Gérant, Station Total — Saint-Denis" />
+        </div>
+      </div>
+      <button type="submit" class="btn-primary">Ajouter</button>
+    </form>
+  </div>
+
+  <!-- Edit form -->
+  {editItem && (
+    <div class="panel panel--edit">
+      <h2 class="panel-title">Modifier le témoignage</h2>
+      <form method="POST" class="temo-form">
+        <input type="hidden" name="_action" value="edit" />
+        <input type="hidden" name="id" value={editItem.id} />
+        <div class="field-group">
+          <div class="field field--wide">
+            <label for="edit-texte">Témoignage *</label>
+            <textarea id="edit-texte" name="texte" rows="3" required>{editItem.texte}</textarea>
+          </div>
+          <div class="field">
+            <label for="edit-nom">Nom *</label>
+            <input type="text" id="edit-nom" name="nom" required value={editItem.nom} />
+          </div>
+          <div class="field">
+            <label for="edit-role">Rôle / Société</label>
+            <input type="text" id="edit-role" name="role" value={editItem.role ?? ''} />
+          </div>
+        </div>
+        <div class="edit-actions">
+          <button type="submit" class="btn-primary">Enregistrer</button>
+          <a href="/admin/temoignages" class="btn-cancel">Annuler</a>
+        </div>
+      </form>
+    </div>
+  )}
+
+  <!-- List -->
+  {testimonials && testimonials.length > 0 ? (
+    <div class="temo-list">
+      {testimonials.map(t => (
+        <div class={`temo-card${t.actif ? '' : ' temo-card--inactive'}`}>
+          <div class="temo-body">
+            <p class="temo-text">"{t.texte.length > 120 ? t.texte.slice(0, 120) + '…' : t.texte}"</p>
+            <p class="temo-author">
+              <strong>{t.nom}</strong>
+              {t.role && <span> · {t.role}</span>}
+            </p>
+          </div>
+          <div class="temo-actions">
+            <span class={`status-badge ${t.actif ? 'status-badge--on' : 'status-badge--off'}`}>
+              {t.actif ? 'Visible' : 'Masqué'}
+            </span>
+            <a href={`/admin/temoignages?edit=${t.id}`} class="action-btn">Modifier</a>
+            <form method="POST" class="inline-form">
+              <input type="hidden" name="_action" value="toggle" />
+              <input type="hidden" name="id" value={t.id} />
+              <input type="hidden" name="actif" value={String(t.actif)} />
+              <button type="submit" class="action-btn">
+                {t.actif ? 'Masquer' : 'Afficher'}
+              </button>
+            </form>
+            <form method="POST" class="inline-form" onsubmit="return confirm('Supprimer ce témoignage ?')">
+              <input type="hidden" name="_action" value="delete" />
+              <input type="hidden" name="id" value={t.id} />
+              <button type="submit" class="action-btn action-btn--danger">Supprimer</button>
+            </form>
+          </div>
+        </div>
+      ))}
+    </div>
+  ) : (
+    <p class="empty-msg">Aucun témoignage pour l'instant. Ajoutez-en un ci-dessus.</p>
+  )}
+
+</AdminLayout>
+
+<style>
+.panel {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  margin-bottom: var(--space-5);
+}
+.panel--edit { border-color: var(--color-primary); }
+
+.panel-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: var(--space-4);
+}
+
+.temo-form { display: flex; flex-direction: column; gap: var(--space-4); }
+
+.field-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+.field--wide { grid-column: 1 / -1; }
+
+.field { display: flex; flex-direction: column; gap: var(--space-2); }
+
+.field label {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.field input,
+.field textarea {
+  padding: 0.5625rem 0.75rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+  resize: vertical;
+  width: 100%;
+  box-sizing: border-box;
+}
+.field input:focus,
+.field textarea:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.12);
+}
+.field input::placeholder,
+.field textarea::placeholder { color: var(--color-muted); }
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.5625rem var(--space-5);
+  background: var(--color-primary);
+  color: white;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background var(--dur-fast);
+  align-self: flex-start;
+}
+.btn-primary:hover { background: var(--color-primary-deep); }
+
+.edit-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.btn-cancel {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  text-decoration: none;
+  transition: color var(--dur-fast);
+}
+.btn-cancel:hover { color: var(--color-ink); }
+
+/* List */
+.temo-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.temo-card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5) var(--space-6);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-6);
+}
+.temo-card--inactive { opacity: 0.55; }
+
+.temo-body { flex: 1; min-width: 0; }
+
+.temo-text {
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  line-height: 1.55;
+  margin-bottom: var(--space-2);
+  font-style: italic;
+}
+
+.temo-author {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
+.temo-author strong { color: var(--color-ink); font-style: normal; }
+
+.temo-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.status-badge {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+}
+.status-badge--on  { background: oklch(0.92 0.07 145); color: oklch(0.32 0.12 145); }
+.status-badge--off { background: var(--color-surface); color: var(--color-muted); border: 1px solid var(--color-border); }
+
+.inline-form { display: contents; }
+
+.action-btn {
+  padding: 0.3125rem var(--space-3);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-muted);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-decoration: none;
+  transition: color var(--dur-fast), background var(--dur-fast);
+  white-space: nowrap;
+}
+.action-btn:hover { color: var(--color-ink); background: var(--color-surface-2); }
+.action-btn--danger:hover { color: oklch(0.50 0.19 25); border-color: oklch(0.80 0.09 25); }
+
+.empty-msg {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  padding: var(--space-10) 0;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .field-group { grid-template-columns: 1fr; }
+  .field--wide { grid-column: 1; }
+  .temo-card { flex-direction: column; gap: var(--space-4); }
+  .temo-actions { width: 100%; }
+}
+</style>

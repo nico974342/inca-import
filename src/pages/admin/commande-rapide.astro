@@ -1,0 +1,539 @@
+---
+import AdminLayout from '../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../lib/supabase';
+import { Resend } from 'resend';
+import { generateOrderPDF } from '../../lib/pdf';
+
+const adminUser = Astro.locals.user;
+
+// ── POST: create order ─────────────────────────────────────────
+if (Astro.request.method === 'POST') {
+  const form     = await Astro.request.formData();
+  const clientId = form.get('client_id') as string;
+  const notes    = (form.get('notes') as string)?.trim() ?? '';
+
+  const { data: client } = await supabaseAdmin
+    .from('client_accounts')
+    .select('nom, societe, email, telephone')
+    .eq('id', clientId)
+    .single();
+
+  if (!client) return Astro.redirect('/admin/commande-rapide?error=client');
+
+  // Build product map for price lookup
+  const { data: allProducts } = await supabaseAdmin
+    .from('products')
+    .select('id, name, unit, price_ht');
+  const productMap: Record<string, { name: string; unit: string | null; price_ht: number | null }> = {};
+  for (const p of allProducts ?? []) productMap[p.id] = p;
+
+  // Parse qty_<id> fields
+  const orderItems: Array<{
+    product_id: string; product_name: string;
+    quantity: number; unit: string | null; price_ht: number | null;
+  }> = [];
+
+  for (const [key, val] of form.entries()) {
+    if (!key.startsWith('qty_')) continue;
+    const productId = key.slice(4);
+    const qty       = parseInt(val as string, 10);
+    if (qty > 0 && productMap[productId]) {
+      const p = productMap[productId];
+      orderItems.push({ product_id: productId, product_name: p.name, quantity: qty, unit: p.unit, price_ht: p.price_ht });
+    }
+  }
+
+  if (orderItems.length === 0) return Astro.redirect('/admin/commande-rapide?error=empty');
+
+  // Create order
+  const { data: order, error: orderErr } = await supabaseAdmin
+    .from('orders')
+    .insert({
+      user_id:   adminUser.id,
+      nom:       client.nom,
+      societe:   client.societe ?? '',
+      telephone: client.telephone ?? '',
+      email:     client.email,
+      notes,
+    })
+    .select('id')
+    .single();
+
+  if (orderErr || !order) return Astro.redirect('/admin/commande-rapide?error=order');
+
+  await supabaseAdmin.from('order_items').insert(
+    orderItems.map(item => ({
+      order_id:     order.id,
+      product_id:   item.product_id,
+      product_name: item.product_name,
+      quantity:     item.quantity,
+      unit:         item.unit,
+    }))
+  );
+
+  const totalHT = orderItems.reduce((s, i) => s + i.quantity * Number(i.price_ht ?? 0), 0);
+  const today   = new Date().toLocaleDateString('fr-FR');
+
+  // Generate PDF
+  let pdfBuffer: Buffer | null = null;
+  try {
+    pdfBuffer = await generateOrderPDF({
+      id: order.id, nom: client.nom, societe: client.societe,
+      email: client.email, telephone: client.telephone,
+      notes, items: orderItems, totalHT, date: today,
+    });
+  } catch (err) { console.error('[PDF] Error:', err); }
+
+  const lignes = orderItems.map(item => {
+    const lineHT = (item.quantity * Number(item.price_ht ?? 0)).toFixed(2).replace('.', ',');
+    const unit   = item.unit ? ` (${item.unit})` : '';
+    return `• ${item.product_name} × ${item.quantity}${unit} — ${lineHT} € HT`;
+  }).join('\n');
+
+  const emailBody = [
+    '=== Commande Inca Import ===',
+    '',
+    `Client    : ${client.nom}`,
+    `Société   : ${client.societe || '—'}`,
+    `Email     : ${client.email}`,
+    `Téléphone : ${client.telephone || '—'}`,
+    '',
+    'Articles :',
+    lignes,
+    '',
+    `Total HT  : ${totalHT.toFixed(2).replace('.', ',')} €`,
+    ...(notes ? ['', `Notes : ${notes}`] : []),
+    '',
+    `Réf. : ${order.id}`,
+  ].join('\n');
+
+  const attachments = pdfBuffer
+    ? [{ filename: `commande_${order.id.slice(0, 8)}.pdf`, content: pdfBuffer }]
+    : [];
+
+  const resend = new Resend(import.meta.env.RESEND_API_KEY);
+
+  const { error: e1 } = await resend.emails.send({
+    from: 'onboarding@resend.dev',
+    to:   client.email,
+    subject: `Votre commande Inca Import`,
+    text: emailBody,
+    attachments,
+  });
+  if (e1) console.error('[Resend] client email error:', JSON.stringify(e1));
+
+  const { error: e2 } = await resend.emails.send({
+    from: 'onboarding@resend.dev',
+    to:   'inca-import@hotmail.com',
+    subject: `Commande — ${client.nom}${client.societe ? ` (${client.societe})` : ''}`,
+    text: emailBody,
+    attachments,
+  });
+  if (e2) console.error('[Resend] admin email error:', JSON.stringify(e2));
+
+  return Astro.redirect('/admin/commande-rapide?success=1');
+}
+
+// ── GET ────────────────────────────────────────────────────────
+const success   = Astro.url.searchParams.get('success') === '1';
+const errorType = Astro.url.searchParams.get('error');
+
+const { data: clients } = await supabaseAdmin
+  .from('client_accounts')
+  .select('id, nom, societe, email')
+  .order('nom', { ascending: true });
+
+const { data: products } = await supabaseAdmin
+  .from('products')
+  .select('id, name, category, unit, price_ht, in_stock')
+  .eq('in_stock', true)
+  .order('category', { ascending: true })
+  .order('name', { ascending: true });
+
+const CAT_LABEL: Record<string, string> = {
+  boissons: 'Boissons', snacks: 'Snacks', confiseries: 'Confiseries',
+};
+
+// Group by category
+const byCategory = (products ?? []).reduce<Record<string, typeof products>>((acc, p) => {
+  if (!acc[p!.category]) acc[p!.category] = [];
+  acc[p!.category]!.push(p);
+  return acc;
+}, {});
+
+const ERROR_MSG: Record<string, string> = {
+  client: 'Client introuvable.',
+  empty:  'Veuillez ajouter au moins un produit.',
+  order:  'Erreur lors de la création de la commande.',
+};
+---
+<AdminLayout title="Prise de commande" activeNav="commande-rapide">
+
+  {success && (
+    <div class="alert alert--success" role="status">
+      Commande envoyée avec succès. Les emails de confirmation ont été transmis.
+    </div>
+  )}
+  {errorType && (
+    <div class="alert alert--error" role="alert">
+      {ERROR_MSG[errorType] ?? 'Une erreur est survenue.'}
+    </div>
+  )}
+
+  {!clients?.length ? (
+    <div class="empty-state">
+      <p>Aucun client enregistré.</p>
+      <a href="/admin/clients">Voir les clients →</a>
+    </div>
+  ) : (
+    <form method="POST" id="orderForm">
+
+      <!-- Client selector -->
+      <div class="section-card">
+        <h2 class="section-label">Client</h2>
+        <div class="field">
+          <label for="client_id" class="sr-only">Sélectionner un client</label>
+          <select name="client_id" id="client_id" required class="client-select">
+            <option value="" disabled selected>Choisir un client…</option>
+            {clients.map(c => (
+              <option value={c.id}>
+                {c.nom}{c.societe ? ` — ${c.societe}` : ''} ({c.email})
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <!-- Products by category -->
+      {Object.entries(byCategory).map(([cat, prods]) => (
+        <div class="section-card">
+          <h2 class="section-label">{CAT_LABEL[cat] ?? cat}</h2>
+          <div class="product-rows">
+            {prods!.map(p => (
+              <div class="product-row" data-price={Number(p!.price_ht ?? 0)} data-id={p!.id}>
+                <div class="product-row-info">
+                  <span class="product-row-name">{p!.name}</span>
+                  {p!.unit && <span class="product-row-unit">{p!.unit}</span>}
+                  {p!.price_ht != null && (
+                    <span class="product-row-price">
+                      {Number(p!.price_ht).toFixed(2).replace('.', ',')} €
+                    </span>
+                  )}
+                </div>
+                <div class="stepper">
+                  <button type="button" class="step-btn step-dec" aria-label={`Retirer ${p!.name}`}>−</button>
+                  <input
+                    type="number"
+                    name={`qty_${p!.id}`}
+                    value="0"
+                    min="0"
+                    class="step-input"
+                    aria-label={`Quantité ${p!.name}`}
+                  />
+                  <button type="button" class="step-btn step-inc" aria-label={`Ajouter ${p!.name}`}>+</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      <!-- Notes -->
+      <div class="section-card">
+        <h2 class="section-label">Notes</h2>
+        <textarea name="notes" rows="3" placeholder="Précisions, contraintes de livraison…" class="notes-input"></textarea>
+      </div>
+
+      <!-- Sticky submit bar -->
+      <div class="submit-bar" id="submitBar">
+        <div class="submit-bar-inner">
+          <span class="submit-total" id="submitTotal">Total HT : 0,00 €</span>
+          <button type="submit" class="submit-btn">Envoyer la commande →</button>
+        </div>
+      </div>
+
+    </form>
+  )}
+
+</AdminLayout>
+
+<script>
+  const totalEl = document.getElementById('submitTotal');
+
+  function recalc() {
+    const rows = document.querySelectorAll<HTMLElement>('.product-row');
+    let total = 0;
+    rows.forEach(row => {
+      const input = row.querySelector<HTMLInputElement>('.step-input')!;
+      const qty   = parseInt(input.value, 10) || 0;
+      const price = parseFloat(row.dataset.price ?? '0');
+      total += qty * price;
+    });
+    if (totalEl) {
+      totalEl.textContent = `Total HT : ${total.toFixed(2).replace('.', ',')} €`;
+    }
+  }
+
+  document.querySelectorAll<HTMLElement>('.product-row').forEach(row => {
+    const input  = row.querySelector<HTMLInputElement>('.step-input')!;
+    const decBtn = row.querySelector<HTMLButtonElement>('.step-dec')!;
+    const incBtn = row.querySelector<HTMLButtonElement>('.step-inc')!;
+
+    decBtn.addEventListener('click', () => {
+      const v = parseInt(input.value, 10) || 0;
+      if (v > 0) { input.value = String(v - 1); recalc(); }
+    });
+    incBtn.addEventListener('click', () => {
+      input.value = String((parseInt(input.value, 10) || 0) + 1);
+      recalc();
+    });
+    input.addEventListener('input', recalc);
+  });
+</script>
+
+<style>
+.alert {
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  margin-bottom: var(--space-5);
+}
+.alert--success {
+  background: oklch(0.93 0.06 145);
+  color: oklch(0.28 0.12 145);
+  border: 1px solid oklch(0.82 0.10 145);
+}
+.alert--error {
+  background: oklch(0.96 0.04 25);
+  color: oklch(0.45 0.18 25);
+  border: 1px solid oklch(0.86 0.08 25);
+}
+
+.empty-state {
+  text-align: center;
+  padding: var(--space-16) 0;
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+.empty-state a {
+  color: var(--color-primary-deep);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+/* Section card */
+.section-card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5) var(--space-6);
+  margin-bottom: var(--space-4);
+}
+
+.section-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: var(--space-4);
+}
+
+/* Client select */
+.client-select {
+  width: 100%;
+  padding: 0.6875rem 0.875rem;
+  font-family: var(--font-body);
+  font-size: 1rem;
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+  appearance: auto;
+}
+.client-select:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.12);
+}
+
+/* Product rows */
+.product-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.product-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.product-row:last-child { border-bottom: none; }
+
+.product-row-info {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.product-row-name {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.product-row-unit {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+
+.product-row-price {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-primary-deep);
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+/* Stepper */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-shrink: 0;
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.step-btn {
+  width: 44px;
+  height: 44px;
+  background: transparent;
+  border: none;
+  font-size: 1.25rem;
+  cursor: pointer;
+  color: var(--color-ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--dur-fast), color var(--dur-fast);
+  user-select: none;
+}
+.step-btn:hover {
+  background: var(--color-surface);
+  color: var(--color-primary);
+}
+.step-btn:active { background: var(--color-surface-2); }
+
+.step-input {
+  width: 52px;
+  height: 44px;
+  text-align: center;
+  font-family: var(--font-body);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-ink);
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--color-border);
+  border-right: 1px solid var(--color-border);
+  outline: none;
+  -moz-appearance: textfield;
+}
+.step-input::-webkit-inner-spin-button,
+.step-input::-webkit-outer-spin-button { -webkit-appearance: none; }
+
+/* Notes */
+.notes-input {
+  width: 100%;
+  padding: 0.6875rem 0.875rem;
+  font-family: var(--font-body);
+  font-size: 1rem;
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+.notes-input::placeholder { color: var(--color-muted); }
+.notes-input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.12);
+}
+
+/* Sticky submit bar */
+.submit-bar {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--color-ink);
+  padding: var(--space-4) var(--space-6);
+  margin: 0 calc(-1 * var(--space-8)) calc(-1 * var(--space-6));
+  z-index: var(--z-sticky);
+}
+
+.submit-bar-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  max-width: 100%;
+}
+
+.submit-total {
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: white;
+  white-space: nowrap;
+}
+
+.submit-btn {
+  padding: 0.6875rem var(--space-6);
+  background: var(--color-primary);
+  color: white;
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  font-weight: 600;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast);
+  white-space: nowrap;
+  min-height: 48px;
+}
+.submit-btn:hover { background: var(--color-primary-deep); }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0,0,0,0);
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  .section-card { padding: var(--space-4); }
+  .product-row-price { display: none; }
+  .submit-bar {
+    margin: 0 calc(-1 * var(--space-5)) calc(-1 * var(--space-4));
+    padding: var(--space-3) var(--space-5);
+  }
+  .submit-btn { font-size: var(--text-sm); padding: 0.6875rem var(--space-4); }
+}
+</style>

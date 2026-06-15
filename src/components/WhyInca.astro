@@ -1,0 +1,86 @@
+---
+const reasons = [
+  {
+    title: 'Stock permanent',
+    body: "200+ références disponibles immédiatement. Pas de rupture, pas de délai d'approvisionnement inattendu.",
+  },
+  {
+    title: 'Livraison sous 48h',
+    body: "Partout à La Réunion, sans minimum de commande imposé. Commandez le lundi, livré le mercredi.",
+  },
+  {
+    title: 'Équipe locale',
+    body: "Une équipe réunionnaise disponible 6j/7. Vous parlez à une vraie personne, pas à un formulaire.",
+  },
+];
+---
+
+<section class="why-inca" aria-label="Pourquoi choisir Inca Import">
+  <div class="container">
+    <div class="why-grid">
+      {reasons.map((r, i) => (
+        <div class="why-item">
+          <h3 class="why-title">{r.title}</h3>
+          <p class="why-body">{r.body}</p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+.why-inca {
+  padding: clamp(var(--space-16), 7vw, var(--space-24)) 0;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.why-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.why-item {
+  padding: var(--space-4) var(--space-10);
+}
+.why-item:first-child { padding-left: 0; }
+.why-item:last-child  { padding-right: 0; }
+.why-item:not(:last-child) {
+  border-right: 1px solid var(--color-border);
+}
+
+.why-title {
+  font-family: var(--font-display);
+  font-size: clamp(1.375rem, 2.5vw, 1.75rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--color-ink);
+  margin-bottom: var(--space-4);
+  line-height: 1.15;
+}
+
+.why-body {
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.7;
+  color: var(--color-muted);
+  max-width: 30ch;
+}
+
+@media (max-width: 768px) {
+  .why-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .why-item {
+    padding: var(--space-8) 0;
+  }
+  .why-item:first-child { padding-top: 0; }
+  .why-item:last-child  { padding-bottom: 0; }
+  .why-item:not(:last-child) {
+    border-right: none;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .why-body { max-width: none; }
+}
+</style>

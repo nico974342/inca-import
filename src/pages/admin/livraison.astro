@@ -1,0 +1,558 @@
+---
+import AdminLayout from '../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../lib/supabase';
+import { generateDeliveryPDF } from '../../lib/pdf';
+import { Resend } from 'resend';
+
+const FIXED_PDVS = [
+  { key: 'fixed_ola-tamarins',    name: 'OLA Tamarins',    clientLabel: null as string | null },
+  { key: 'fixed_vito-saint-paul', name: 'VITO Saint-Paul', clientLabel: null as string | null },
+  { key: 'fixed_total-tamarins',  name: 'TOTAL Tamarins',  clientLabel: null as string | null },
+];
+
+const [{ data: clients }, { data: productsRaw }] = await Promise.all([
+  supabaseAdmin
+    .from('client_accounts')
+    .select('id, nom, societe, points_de_vente')
+    .not('points_de_vente', 'is', null)
+    .neq('points_de_vente', '')
+    .order('nom'),
+  supabaseAdmin
+    .from('products')
+    .select('id, name, unit, category')
+    .eq('in_stock', true)
+    .order('category', { ascending: true })
+    .order('name', { ascending: true }),
+]);
+
+const clientPDVs = (clients ?? []).map(c => ({
+  key: `client_${c.id}`,
+  name: c.points_de_vente as string,
+  clientLabel: c.nom + (c.societe ? ` · ${c.societe}` : ''),
+}));
+
+const allPDVs = [...FIXED_PDVS, ...clientPDVs];
+const products = productsRaw ?? [];
+
+type Product = (typeof products)[number];
+const productsByCategory = products.reduce<Record<string, Product[]>>((acc, p) => {
+  const cat = p.category ?? 'Autre';
+  if (!acc[cat]) acc[cat] = [];
+  acc[cat].push(p);
+  return acc;
+}, {});
+
+let successMessage = '';
+let errorMessage = '';
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const transporterEmail = (form.get('transporter_email') as string)?.trim();
+  const notes = (form.get('notes') as string)?.trim() || null;
+
+  if (!transporterEmail) {
+    errorMessage = "L'email du transporteur est requis.";
+  } else {
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const compact = now.toISOString().slice(0, 10).replace(/-/g, '');
+    const deliveryId = `LIV-${compact}-${String(Math.floor(Math.random() * 9000) + 1000)}`;
+
+    const deliveryPDVs: { name: string; items: { product_name: string; quantity: number; unit?: string | null }[] }[] = [];
+    for (const pdv of allPDVs) {
+      if (form.get(`included_${pdv.key}`) !== 'on') continue;
+      const items: { product_name: string; quantity: number; unit?: string | null }[] = [];
+      for (const p of products) {
+        const qty = parseInt((form.get(`qty_${pdv.key}_${p.id}`) as string) || '0', 10);
+        if (qty > 0) items.push({ product_name: p.name, quantity: qty, unit: p.unit });
+      }
+      if (items.length > 0) deliveryPDVs.push({ name: pdv.name, items });
+    }
+
+    if (deliveryPDVs.length === 0) {
+      errorMessage = 'Sélectionnez au moins un point de vente avec des produits.';
+    } else {
+      try {
+        const pdfBuffer = await generateDeliveryPDF({
+          id: deliveryId,
+          date: dateStr,
+          transporter_email: transporterEmail,
+          pdvs: deliveryPDVs,
+          notes,
+        });
+
+        const resend = new Resend(import.meta.env.RESEND_API_KEY);
+        const { error: sendError } = await resend.emails.send({
+          from: 'onboarding@resend.dev',
+          to: ['inca-import@hotmail.com'],
+          subject: `Bon de livraison ${deliveryId} — à transférer à Coursier OI`,
+          html: `<p>Bonjour,</p>
+<p>Le bon de livraison <strong>${deliveryId}</strong> du ${dateStr} est prêt.</p>
+<p><strong>À transférer au transporteur :</strong><br/>
+Coursier OI — <a href="mailto:${transporterEmail}">${transporterEmail}</a></p>
+<p>Le bon de livraison est joint en pièce attachée.</p>
+<p>Cordialement,<br/>Inca Import</p>`,
+          attachments: [{ filename: `bon-livraison-${deliveryId}.pdf`, content: pdfBuffer }],
+        });
+
+        if (sendError) {
+          console.error('[livraison] Resend error:', sendError);
+          errorMessage = `PDF généré mais l'envoi a échoué : ${sendError.message}`;
+        } else {
+          successMessage = `Bon de livraison ${deliveryId} envoyé à inca-import@hotmail.com — à transférer à ${transporterEmail}.`;
+        }
+      } catch (e) {
+        console.error(e);
+        errorMessage = "Une erreur est survenue lors de la génération ou de l'envoi.";
+      }
+    }
+  }
+}
+
+const categories = Object.keys(productsByCategory).sort();
+---
+
+<AdminLayout title="Bon de livraison" activeNav="livraison">
+
+  {successMessage && (
+    <div class="alert alert-success" role="status">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="7" stroke="oklch(0.52 0.17 145)" stroke-width="1.25"/>
+        <path d="M4.5 8l2.5 2.5 4-4" stroke="oklch(0.52 0.17 145)" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      {successMessage}
+    </div>
+  )}
+  {errorMessage && (
+    <div class="alert alert-error" role="alert">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="7" stroke="oklch(0.50 0.19 25)" stroke-width="1.25"/>
+        <path d="M8 5v3.5M8 11h.01" stroke="oklch(0.50 0.19 25)" stroke-width="1.25" stroke-linecap="round"/>
+      </svg>
+      {errorMessage}
+    </div>
+  )}
+
+  <form method="POST" class="liv-form" id="livForm">
+
+    <!-- Transporter -->
+    <section class="liv-section">
+      <h2 class="liv-section-title">Transporteur</h2>
+      <div class="field-group">
+        <div class="field">
+          <label for="transporter_name">Nom</label>
+          <input type="text" id="transporter_name" value="Coursier OI" disabled class="input-readonly" />
+        </div>
+        <div class="field">
+          <label for="transporter_email">Email du transporteur <span class="req" aria-hidden="true">*</span></label>
+          <input type="email" id="transporter_email" name="transporter_email" required placeholder="coursier@exemple.re" autocomplete="off" />
+        </div>
+      </div>
+    </section>
+
+    <!-- Points de vente -->
+    <section class="liv-section">
+      <h2 class="liv-section-title">Points de vente</h2>
+      <p class="liv-section-hint">Cochez les points de vente à livrer, puis renseignez les quantités.</p>
+
+      <div class="pdv-list">
+        {allPDVs.map(pdv => (
+          <div class="pdv-card" data-pdv={pdv.key}>
+            <label class="pdv-header">
+              <input
+                type="checkbox"
+                name={`included_${pdv.key}`}
+                class="pdv-checkbox"
+                data-target={`pdv-body-${pdv.key}`}
+              />
+              <span class="pdv-header-text">
+                <span class="pdv-name">{pdv.name}</span>
+                {pdv.clientLabel && <span class="pdv-client">{pdv.clientLabel}</span>}
+              </span>
+              <svg class="pdv-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </label>
+
+            <div class="pdv-body" id={`pdv-body-${pdv.key}`} hidden>
+              {categories.length === 0 ? (
+                <p class="pdv-empty">Aucun produit en stock.</p>
+              ) : (
+                categories.map(cat => (
+                  <div class="pdv-cat">
+                    <p class="pdv-cat-name">{cat}</p>
+                    <div class="pdv-products">
+                      {productsByCategory[cat].map(p => (
+                        <div class="pdv-product-row">
+                          <span class="pdv-product-name">{p.name}</span>
+                          {p.unit && <span class="pdv-product-unit">{p.unit}</span>}
+                          <div class="stepper">
+                            <button type="button" class="step-btn step-dec" aria-label={`Diminuer ${p.name}`}>−</button>
+                            <input
+                              type="number"
+                              name={`qty_${pdv.key}_${p.id}`}
+                              class="step-input"
+                              value="0"
+                              min="0"
+                              max="9999"
+                              aria-label={`Quantité ${p.name}`}
+                            />
+                            <button type="button" class="step-btn step-inc" aria-label={`Augmenter ${p.name}`}>+</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+
+    <!-- Notes -->
+    <section class="liv-section">
+      <h2 class="liv-section-title">Notes</h2>
+      <textarea name="notes" class="liv-notes" rows="3" placeholder="Instructions de livraison, horaires, remarques…"></textarea>
+    </section>
+
+    <!-- Sticky submit bar -->
+    <div class="liv-submit-bar">
+      <span class="liv-total-label">
+        Total articles : <strong id="totalQty">0</strong>
+      </span>
+      <button type="submit" class="btn btn-primary liv-submit-btn">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+          <path d="M2 7h10M7.5 3l4.5 4-4.5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Générer &amp; envoyer le bon
+      </button>
+    </div>
+
+  </form>
+</AdminLayout>
+
+<script>
+  // Toggle PDV body on checkbox change
+  document.querySelectorAll<HTMLInputElement>('.pdv-checkbox').forEach(cb => {
+    const targetId = cb.dataset.target!;
+    const body = document.getElementById(targetId);
+    const card = cb.closest('.pdv-card');
+
+    cb.addEventListener('change', () => {
+      if (body) body.hidden = !cb.checked;
+      card?.classList.toggle('pdv-card--open', cb.checked);
+      if (!cb.checked && body) {
+        // Reset quantities when unchecked
+        body.querySelectorAll<HTMLInputElement>('.step-input').forEach(i => { i.value = '0'; });
+      }
+      updateTotal();
+    });
+  });
+
+  // Stepper buttons
+  document.querySelectorAll<HTMLElement>('.pdv-body').forEach(body => {
+    body.addEventListener('click', e => {
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.step-btn');
+      if (!btn) return;
+      const row = btn.closest('.stepper')!;
+      const input = row.querySelector<HTMLInputElement>('.step-input')!;
+      let val = parseInt(input.value || '0', 10);
+      if (btn.classList.contains('step-dec')) val = Math.max(0, val - 1);
+      else val = Math.min(9999, val + 1);
+      input.value = String(val);
+      updateTotal();
+    });
+
+    body.addEventListener('input', e => {
+      if ((e.target as HTMLElement).classList.contains('step-input')) updateTotal();
+    });
+  });
+
+  function updateTotal() {
+    let total = 0;
+    document.querySelectorAll<HTMLInputElement>('.step-input').forEach(i => {
+      total += parseInt(i.value || '0', 10);
+    });
+    const el = document.getElementById('totalQty');
+    if (el) el.textContent = String(total);
+  }
+</script>
+
+<style>
+/* ── Alerts ──────────────────────────────────────── */
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-6);
+}
+.alert svg { flex-shrink: 0; margin-top: 1px; }
+.alert-success {
+  background: oklch(0.96 0.04 145);
+  border: 1px solid oklch(0.85 0.08 145);
+  color: oklch(0.35 0.12 145);
+}
+.alert-error {
+  background: oklch(0.97 0.04 25);
+  border: 1px solid oklch(0.88 0.07 25);
+  color: oklch(0.45 0.16 25);
+}
+
+/* ── Form sections ───────────────────────────────── */
+.liv-form { display: flex; flex-direction: column; gap: var(--space-6); padding-bottom: 72px; }
+
+.liv-section {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5) var(--space-6);
+}
+
+.liv-section-title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-ink);
+  margin-bottom: var(--space-4);
+}
+
+.liv-section-hint {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  margin-top: calc(-1 * var(--space-2));
+  margin-bottom: var(--space-4);
+}
+
+/* ── Field helpers ───────────────────────────────── */
+.field-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+.field { display: flex; flex-direction: column; gap: var(--space-2); }
+
+label {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+}
+.req { color: var(--color-primary); }
+
+input[type="email"],
+input[type="text"] {
+  width: 100%;
+  padding: 0.6875rem 0.875rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  min-height: 44px;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+input[type="email"]:focus,
+input[type="text"]:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.15);
+}
+input::placeholder { color: var(--color-muted); }
+.input-readonly {
+  color: var(--color-muted);
+  background: var(--color-surface);
+  cursor: default;
+}
+
+/* ── PDV list ────────────────────────────────────── */
+.pdv-list { display: flex; flex-direction: column; gap: var(--space-2); }
+
+.pdv-card {
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  transition: border-color var(--dur-fast);
+}
+.pdv-card--open { border-color: var(--color-primary); }
+
+.pdv-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  background: var(--color-bg);
+  transition: background var(--dur-fast);
+}
+.pdv-header:hover { background: var(--color-surface); }
+
+.pdv-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-primary);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.pdv-header-text { flex: 1; min-width: 0; }
+.pdv-name { display: block; font-size: var(--text-sm); font-weight: 600; color: var(--color-ink); }
+.pdv-client { display: block; font-size: var(--text-xs); color: var(--color-muted); margin-top: 1px; }
+
+.pdv-chevron {
+  color: var(--color-muted);
+  flex-shrink: 0;
+  transition: transform var(--dur-fast), color var(--dur-fast);
+}
+.pdv-card--open .pdv-chevron { transform: rotate(180deg); color: var(--color-primary); }
+
+.pdv-body {
+  border-top: 1px solid var(--color-border);
+  padding: var(--space-4) var(--space-4);
+  background: var(--color-surface);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.pdv-body[hidden] { display: none; }
+
+.pdv-empty { font-size: var(--text-sm); color: var(--color-muted); padding: var(--space-2) 0; }
+
+.pdv-cat-name {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  margin-bottom: var(--space-2);
+}
+
+.pdv-products { display: flex; flex-direction: column; gap: var(--space-2); }
+
+.pdv-product-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
+.pdv-product-name { flex: 1; font-size: var(--text-sm); color: var(--color-ink); min-width: 0; }
+.pdv-product-unit { font-size: var(--text-xs); color: var(--color-muted); white-space: nowrap; }
+
+/* ── Stepper ─────────────────────────────────────── */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.step-btn {
+  width: 32px;
+  height: 36px;
+  background: var(--color-surface);
+  border: none;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--color-ink);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--dur-fast), color var(--dur-fast);
+  flex-shrink: 0;
+}
+.step-btn:hover { background: var(--color-surface-2); color: var(--color-primary); }
+.step-btn:active { background: oklch(0.568 0.149 45.9 / 0.12); }
+.step-input {
+  width: 44px;
+  height: 36px;
+  border: none;
+  border-left: 1px solid var(--color-border);
+  border-right: 1px solid var(--color-border);
+  text-align: center;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-ink);
+  background: var(--color-bg);
+  outline: none;
+  min-height: unset;
+  padding: 0;
+  box-sizing: border-box;
+  -moz-appearance: textfield;
+}
+.step-input::-webkit-outer-spin-button,
+.step-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* ── Notes ───────────────────────────────────────── */
+.liv-notes {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.6875rem 0.875rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+  outline: none;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+  line-height: 1.6;
+}
+.liv-notes:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.15);
+}
+.liv-notes::placeholder { color: var(--color-muted); }
+
+/* ── Sticky submit bar ───────────────────────────── */
+.liv-submit-bar {
+  position: fixed;
+  bottom: 0;
+  left: 220px;
+  right: 0;
+  background: var(--color-bg);
+  border-top: 1px solid var(--color-border);
+  padding: var(--space-3) var(--space-8);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  z-index: var(--z-sticky);
+  box-shadow: 0 -2px 12px oklch(0 0 0 / 0.04);
+}
+
+.liv-total-label {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+.liv-total-label strong {
+  color: var(--color-ink);
+  font-weight: 700;
+  font-size: var(--text-base);
+}
+
+.liv-submit-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+
+/* ── Responsive ──────────────────────────────────── */
+@media (max-width: 768px) {
+  .field-group { grid-template-columns: 1fr; }
+  .liv-submit-bar { left: 0; padding: var(--space-3) var(--space-5); }
+  .liv-form { padding-bottom: 80px; }
+}
+</style>

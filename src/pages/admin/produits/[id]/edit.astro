@@ -1,0 +1,211 @@
+---
+import AdminLayout from '../../../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../../../lib/supabase';
+
+const { id } = Astro.params;
+let formError = '';
+
+const { data: product } = await supabaseAdmin
+  .from('products')
+  .select('*')
+  .eq('id', id)
+  .single();
+
+if (!product) return Astro.redirect('/admin/produits');
+
+if (Astro.request.method === 'POST') {
+  const data = await Astro.request.formData();
+  const name        = (data.get('name')        as string)?.trim();
+  const slug        = (data.get('slug')        as string)?.trim();
+  const category    = (data.get('category')    as string)?.trim();
+  const description = (data.get('description') as string)?.trim() || null;
+  const sku         = (data.get('sku')         as string)?.trim() || null;
+  const price_ht         = data.get('price_ht')         ? parseFloat(data.get('price_ht') as string) : null;
+  const unit             = (data.get('unit')             as string)?.trim() || 'carton';
+  const units_per_carton = data.get('units_per_carton')  ? parseInt(data.get('units_per_carton') as string, 10) || null : null;
+  const image_url        = (data.get('image_url')        as string)?.trim() || null;
+  const in_stock    = data.get('in_stock') === 'true';
+  const position    = data.get('position') ? parseInt(data.get('position') as string) : 0;
+
+  if (!name || !slug || !category) {
+    formError = 'Le nom, le slug et la catégorie sont requis.';
+  } else {
+    const { error } = await supabaseAdmin
+      .from('products')
+      .update({ name, slug, category, description, sku, price_ht, unit, units_per_carton, image_url, in_stock, position })
+      .eq('id', id);
+
+    if (error) {
+      formError = error.code === '23505'
+        ? 'Ce slug existe déjà. Choisissez-en un autre.'
+        : `Erreur : ${error.message}`;
+    } else {
+      return Astro.redirect('/admin/produits');
+    }
+  }
+}
+---
+<AdminLayout title={`Modifier — ${product.name}`} activeNav="produits">
+  <div class="form-shell">
+    <div class="form-card">
+      {formError && <p class="form-error" role="alert">{formError}</p>}
+
+      <form method="post" class="prod-form" novalidate>
+        <div class="field-group">
+          <div class="field">
+            <label for="name">Nom <span class="required">*</span></label>
+            <input type="text" id="name" name="name" required value={product.name} />
+          </div>
+          <div class="field">
+            <label for="slug">Slug <span class="required">*</span></label>
+            <input type="text" id="slug" name="slug" required value={product.slug} />
+          </div>
+        </div>
+
+        <div class="field-group">
+          <div class="field">
+            <label for="category">Catégorie <span class="required">*</span></label>
+            <select id="category" name="category" required>
+              <option value="boissons"    selected={product.category === 'boissons'}>Boissons</option>
+              <option value="snacks"      selected={product.category === 'snacks'}>Snacks</option>
+              <option value="confiseries" selected={product.category === 'confiseries'}>Confiseries</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="sku">SKU</label>
+            <input type="text" id="sku" name="sku" value={product.sku ?? ''} placeholder="REF-001" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="description">Description</label>
+          <textarea id="description" name="description" rows="3">{product.description ?? ''}</textarea>
+        </div>
+
+        <div class="field-group field-group--3">
+          <div class="field">
+            <label for="price_ht">Prix HT (€)</label>
+            <input type="number" id="price_ht" name="price_ht" step="0.01" min="0" value={product.price_ht ?? ''} />
+          </div>
+          <div class="field">
+            <label for="unit">Unité</label>
+            <input type="text" id="unit" name="unit" value={product.unit ?? 'carton'} />
+          </div>
+          <div class="field">
+            <label for="units_per_carton">Unités par carton</label>
+            <input type="number" id="units_per_carton" name="units_per_carton" min="1" value={product.units_per_carton ?? ''} placeholder="ex : 24" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="image_url">URL de l'image</label>
+          <input type="url" id="image_url" name="image_url" value={product.image_url ?? ''} placeholder="https://…" />
+        </div>
+
+        <div class="field-group">
+          <div class="field">
+            <label for="in_stock">Disponibilité</label>
+            <select id="in_stock" name="in_stock">
+              <option value="true"  selected={product.in_stock}>En stock</option>
+              <option value="false" selected={!product.in_stock}>Rupture</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="position">Position</label>
+            <input type="number" id="position" name="position" min="0" value={product.position ?? 0} />
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Enregistrer</button>
+          <a href="/admin/produits" class="btn btn-ghost">Annuler</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</AdminLayout>
+
+<style>
+.form-shell { max-width: 720px; }
+
+.form-card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-8);
+}
+
+.form-error {
+  font-size: var(--text-sm);
+  color: oklch(0.50 0.19 25);
+  background: oklch(0.97 0.04 25);
+  border: 1px solid oklch(0.88 0.07 25);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.prod-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.field-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+label {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.required { color: var(--color-primary); }
+
+input[type="text"],
+input[type="url"],
+input[type="number"],
+select,
+textarea {
+  width: 100%;
+  padding: 0.6875rem 0.875rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  min-height: 44px;
+  outline: none;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+textarea { min-height: 80px; resize: vertical; }
+input::placeholder, textarea::placeholder { color: var(--color-muted); }
+input:focus, select:focus, textarea:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.15);
+}
+
+.form-actions {
+  display: flex;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.field-group--3 { grid-template-columns: 1fr 1fr 1fr; }
+
+@media (max-width: 560px) {
+  .field-group,
+  .field-group--3 { grid-template-columns: 1fr; }
+}
+</style>

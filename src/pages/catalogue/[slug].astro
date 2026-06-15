@@ -1,0 +1,440 @@
+---
+import Base from '../../layouts/Base.astro';
+import Nav from '../../components/Nav.astro';
+import Footer from '../../components/Footer.astro';
+import { supabaseAdmin, createAuthClient } from '../../lib/supabase';
+
+const { slug } = Astro.params;
+
+const { data: product } = await supabaseAdmin
+  .from('products')
+  .select('id, name, slug, category, description, sku, price_ht, unit, image_url, in_stock')
+  .eq('slug', slug)
+  .single();
+
+if (!product) return Astro.redirect('/catalogue');
+
+const supabase = createAuthClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+const isClient = user?.user_metadata?.role === 'client';
+
+let cartQty = 0;
+if (isClient && user) {
+  const { data: cartRow } = await supabaseAdmin
+    .from('cart_items')
+    .select('quantity')
+    .eq('user_id', user.id)
+    .eq('product_id', product.id)
+    .maybeSingle();
+  cartQty = cartRow?.quantity ?? 0;
+}
+
+const CAT_LABEL: Record<string, string> = {
+  boissons:    'Boissons',
+  snacks:      'Snacks',
+  confiseries: 'Confiseries',
+};
+
+const CAT_BG: Record<string, string> = {
+  boissons:    'oklch(0.72 0.10 210)',
+  snacks:      'oklch(0.78 0.10 60)',
+  confiseries: 'oklch(0.76 0.10 330)',
+};
+
+const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
+---
+<Base
+  title={`${product.name} — Inca Import`}
+  description={product.description ?? `${product.name} disponible chez Inca Import, grossiste B2B à La Réunion.`}
+>
+  <Nav user={user} />
+  <main>
+
+    <!-- Breadcrumb -->
+    <nav class="breadcrumb container" aria-label="Fil d'Ariane">
+      <a href="/">Accueil</a>
+      <span aria-hidden="true">›</span>
+      <a href="/catalogue">Catalogue</a>
+      <span aria-hidden="true">›</span>
+      <span aria-current="page">{product.name}</span>
+    </nav>
+
+    <!-- Product layout -->
+    <div class="container product-outer">
+      <div class="product-layout">
+
+        <!-- Image -->
+        <div
+          class="product-image-wrap"
+          style={!product.image_url ? `background:${CAT_BG[product.category] ?? 'oklch(0.82 0 0)'}` : ''}
+        >
+          {product.image_url ? (
+            <img
+              src={product.image_url}
+              alt={product.name}
+              class="product-image"
+              loading="eager"
+              decoding="async"
+            />
+          ) : (
+            <span class="img-letter" aria-hidden="true">
+              {product.name[0].toUpperCase()}
+            </span>
+          )}
+          {!product.in_stock && (
+            <div class="oos-banner" role="status">Rupture de stock</div>
+          )}
+        </div>
+
+        <!-- Details -->
+        <div class="product-details">
+
+          <!-- Meta row -->
+          <div class="product-meta">
+            <span class={`cat-badge cat-badge--${product.category}`}>
+              {CAT_LABEL[product.category] ?? product.category}
+            </span>
+            {product.in_stock ? (
+              <span class="stock-dot stock-dot--in">En stock</span>
+            ) : (
+              <span class="stock-dot stock-dot--out">Rupture de stock</span>
+            )}
+          </div>
+
+          <h1 class="product-name">{product.name}</h1>
+
+          {product.description && (
+            <p class="product-description">{product.description}</p>
+          )}
+
+          <dl class="product-attrs">
+            {product.unit && (
+              <div class="attr-row">
+                <dt>Conditionnement</dt>
+                <dd>{product.unit}</dd>
+              </div>
+            )}
+            {product.sku && (
+              <div class="attr-row">
+                <dt>Référence</dt>
+                <dd>{product.sku}</dd>
+              </div>
+            )}
+            {product.price_ht != null && (
+              <div class="attr-row attr-row--price">
+                <dt>Prix HT</dt>
+                <dd class="price-value">{fmtHT(Number(product.price_ht))}</dd>
+              </div>
+            )}
+          </dl>
+
+          <!-- Cart controls -->
+          {isClient && product.in_stock ? (
+            <div
+              class="cart-area"
+              id="cartArea"
+              data-product-id={product.id}
+              data-initial-qty={cartQty}
+              data-price={Number(product.price_ht ?? 0)}
+            >
+              <div class="qty-row">
+                <button type="button" class="qty-btn qty-btn--dec" aria-label={`Retirer ${product.name} du panier`}>−</button>
+                <span class="qty-val" data-empty={cartQty === 0}>{cartQty}</span>
+                <button type="button" class="qty-btn qty-btn--inc" aria-label={`Ajouter ${product.name} au panier`}>+</button>
+              </div>
+              <a href="/commande" class="btn btn-primary cart-cta" id="goToOrder" style={cartQty === 0 ? 'display:none' : ''}>
+                Voir ma commande →
+              </a>
+            </div>
+          ) : !isClient ? (
+            <a href="/connexion" class="btn btn-primary">
+              Se connecter pour commander
+            </a>
+          ) : (
+            <p class="oos-msg">Ce produit est momentanément indisponible.</p>
+          )}
+
+          <a href="/catalogue" class="back-link">← Retour au catalogue</a>
+        </div>
+      </div>
+    </div>
+
+  </main>
+  <Footer />
+</Base>
+
+<script>
+  const area = document.getElementById('cartArea') as HTMLElement | null;
+  if (area) {
+    const productId  = area.dataset.productId!;
+    let   qty        = parseInt(area.dataset.initialQty ?? '0', 10);
+    const valSpan    = area.querySelector<HTMLElement>('.qty-val')!;
+    const decBtn     = area.querySelector<HTMLButtonElement>('.qty-btn--dec')!;
+    const incBtn     = area.querySelector<HTMLButtonElement>('.qty-btn--inc')!;
+    const goToOrder  = document.getElementById('goToOrder') as HTMLElement | null;
+
+    function render() {
+      valSpan.textContent   = String(qty);
+      valSpan.dataset.empty = qty === 0 ? 'true' : 'false';
+      if (goToOrder) goToOrder.style.display = qty > 0 ? '' : 'none';
+    }
+
+    async function sync(newQty: number) {
+      qty = newQty;
+      render();
+      try {
+        if (newQty === 0) {
+          await fetch('/api/cart/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ productId }) });
+        } else {
+          await fetch('/api/cart/add',    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ productId, qty: newQty }) });
+        }
+      } catch { /* silent */ }
+    }
+
+    decBtn.addEventListener('click', () => { if (qty > 0) sync(qty - 1); });
+    incBtn.addEventListener('click', () => sync(qty + 1));
+  }
+</script>
+
+<style>
+/* ── Breadcrumb ────────────────────────────────────── */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) 0 0;
+  font-size: var(--text-sm);
+  flex-wrap: wrap;
+}
+.breadcrumb a {
+  color: var(--color-muted);
+  text-decoration: none;
+  transition: color var(--dur-fast);
+}
+.breadcrumb a:hover { color: var(--color-ink); }
+.breadcrumb span[aria-hidden] { color: var(--color-muted); }
+.breadcrumb [aria-current] { color: var(--color-ink); font-weight: 500; }
+
+/* ── Product outer ─────────────────────────────────── */
+.product-outer {
+  padding: var(--space-8) 0 clamp(var(--space-16), 8vw, var(--space-24));
+}
+
+.product-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(var(--space-8), 5vw, var(--space-16));
+  align-items: start;
+}
+
+/* ── Image ─────────────────────────────────────────── */
+.product-image-wrap {
+  position: relative;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+  background: var(--color-surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.product-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.img-letter {
+  font-family: var(--font-display);
+  font-size: clamp(4rem, 10vw, 7rem);
+  font-weight: 700;
+  color: white;
+  opacity: 0.55;
+  line-height: 1;
+  user-select: none;
+}
+.oos-banner {
+  position: absolute;
+  bottom: var(--space-4);
+  left: var(--space-4);
+  background: oklch(0.14 0.02 45 / 0.70);
+  color: white;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-full);
+  backdrop-filter: blur(4px);
+}
+
+/* ── Details ───────────────────────────────────────── */
+.product-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.product-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.cat-badge {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  line-height: 1.6;
+}
+.cat-badge--boissons    { background: oklch(0.93 0.05 220); color: oklch(0.33 0.10 220); }
+.cat-badge--snacks      { background: oklch(0.94 0.05 60);  color: oklch(0.38 0.12 60);  }
+.cat-badge--confiseries { background: oklch(0.93 0.06 330); color: oklch(0.36 0.12 330); }
+
+.stock-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+.stock-dot::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.stock-dot--in  { color: oklch(0.40 0.13 145); }
+.stock-dot--in::before  { background: oklch(0.52 0.17 145); }
+.stock-dot--out { color: oklch(0.46 0.08 25); }
+.stock-dot--out::before { background: oklch(0.58 0.12 25); }
+
+.product-name {
+  font-family: var(--font-display);
+  font-size: clamp(1.75rem, 4vw, 2.5rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--color-ink);
+  line-height: 1.1;
+  text-wrap: balance;
+}
+
+.product-description {
+  font-size: var(--text-base);
+  color: var(--color-muted);
+  line-height: 1.65;
+  max-width: 60ch;
+}
+
+/* Attributes */
+.product-attrs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-4) 0;
+}
+
+.attr-row {
+  display: flex;
+  gap: var(--space-4);
+  font-size: var(--text-sm);
+}
+.attr-row dt {
+  width: 130px;
+  flex-shrink: 0;
+  color: var(--color-muted);
+  font-weight: 500;
+}
+.attr-row dd { color: var(--color-ink); }
+
+.attr-row--price dt { font-weight: 600; color: var(--color-ink); }
+.price-value {
+  font-family: var(--font-display);
+  font-size: 1.375rem;
+  font-weight: 700;
+  color: var(--color-ink);
+  letter-spacing: -0.02em;
+}
+
+/* Cart area */
+.cart-area {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.qty-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.qty-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full);
+  border: 1.5px solid var(--color-border-strong);
+  background: transparent;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-ink);
+  flex-shrink: 0;
+  transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast);
+  user-select: none;
+}
+.qty-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.qty-btn:active { transform: scale(0.92); }
+
+.qty-val {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-ink);
+  min-width: 2.5rem;
+  text-align: center;
+  transition: color var(--dur-fast);
+}
+.qty-val[data-empty="true"] {
+  color: var(--color-muted);
+  font-weight: 400;
+}
+
+.cart-cta { align-self: flex-start; }
+
+.oos-msg {
+  font-size: var(--text-sm);
+  color: oklch(0.46 0.08 25);
+  background: oklch(0.97 0.03 25);
+  border: 1px solid oklch(0.90 0.06 25);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+}
+
+.back-link {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  text-decoration: none;
+  transition: color var(--dur-fast);
+  margin-top: var(--space-2);
+  display: inline-block;
+}
+.back-link:hover { color: var(--color-ink); }
+
+/* ── Responsive ─────────────────────────────────────── */
+@media (max-width: 768px) {
+  .product-layout {
+    grid-template-columns: 1fr;
+    gap: var(--space-6);
+  }
+}
+</style>

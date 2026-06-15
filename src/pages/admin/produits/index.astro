@@ -1,0 +1,190 @@
+---
+import AdminLayout from '../../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../../lib/supabase';
+
+const { data: products, error } = await supabaseAdmin
+  .from('products')
+  .select('id, name, category, sku, price_ht, unit, in_stock, position')
+  .order('position', { ascending: true })
+  .order('name', { ascending: true });
+
+const CAT_LABEL: Record<string, string> = {
+  boissons: 'Boissons',
+  snacks: 'Snacks',
+  confiseries: 'Confiseries',
+};
+
+function formatPrice(p: number | null) {
+  if (p == null) return '—';
+  return p.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' });
+}
+---
+<AdminLayout title="Produits" activeNav="produits">
+  <div class="toolbar">
+    <a href="/admin/produits/new" class="btn btn-primary">+ Nouveau produit</a>
+  </div>
+
+  {products && products.length > 0 ? (
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Nom</th>
+            <th>Catégorie</th>
+            <th>SKU</th>
+            <th>Prix HT</th>
+            <th>Stock</th>
+            <th>Pos.</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {products.map(p => (
+            <tr>
+              <td class="td-strong">{p.name}</td>
+              <td>
+                <span class={`badge badge--${p.category}`}>
+                  {CAT_LABEL[p.category] ?? p.category}
+                </span>
+              </td>
+              <td class="td-mono">{p.sku ?? '—'}</td>
+              <td class="td-mono">{formatPrice(p.price_ht)}</td>
+              <td>
+                <span class={`stock-dot ${p.in_stock ? 'stock-dot--in' : 'stock-dot--out'}`} title={p.in_stock ? 'En stock' : 'Rupture'}>
+                  {p.in_stock ? 'En stock' : 'Rupture'}
+                </span>
+              </td>
+              <td class="td-muted">{p.position}</td>
+              <td class="td-actions">
+                <a href={`/admin/produits/${p.id}/edit`} class="action-link">Modifier</a>
+                <form
+                  action={`/api/produits/${p.id}/delete`}
+                  method="post"
+                  class="delete-form"
+                  onsubmit="return confirm('Supprimer ce produit ?')"
+                >
+                  <button type="submit" class="action-link action-link--danger">Supprimer</button>
+                </form>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  ) : (
+    <div class="empty-state">
+      <p class="empty-title">Aucun produit encore.</p>
+      <p class="empty-body">Ajoutez votre premier produit pour le voir apparaître dans le catalogue.</p>
+      <a href="/admin/produits/new" class="btn btn-primary" style="margin-top: var(--space-5)">+ Ajouter un produit</a>
+    </div>
+  )}
+</AdminLayout>
+
+<style>
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--space-5);
+}
+
+.table-wrap {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.data-table thead th {
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.data-table tbody td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table tbody tr:hover td { background: var(--color-surface); }
+
+.td-strong { font-weight: 500; color: var(--color-ink); }
+.td-muted  { color: var(--color-muted); }
+.td-mono   { font-family: var(--font-mono); color: var(--color-ink); }
+.td-actions {
+  display: flex;
+  gap: var(--space-4);
+  align-items: center;
+  white-space: nowrap;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.badge--boissons    { background: oklch(0.93 0.05 220); color: oklch(0.35 0.10 220); }
+.badge--snacks      { background: oklch(0.94 0.05 60);  color: oklch(0.40 0.12 60);  }
+.badge--confiseries { background: oklch(0.93 0.06 330); color: oklch(0.40 0.12 330); }
+
+.stock-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+.stock-dot::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+.stock-dot--in  { color: oklch(0.42 0.14 145); }
+.stock-dot--in::before  { background: oklch(0.55 0.18 145); }
+.stock-dot--out { color: oklch(0.50 0.14 25); }
+.stock-dot--out::before { background: oklch(0.60 0.18 25); }
+
+.action-link {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-primary-deep);
+  text-decoration: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+  line-height: inherit;
+}
+.action-link:hover { text-decoration: underline; }
+.action-link--danger { color: oklch(0.50 0.19 25); }
+
+.delete-form { display: contents; }
+
+.empty-state {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-16) var(--space-8);
+  text-align: center;
+}
+.empty-title { font-weight: 600; color: var(--color-ink); margin-bottom: var(--space-2); }
+.empty-body  { color: var(--color-muted); }
+</style>

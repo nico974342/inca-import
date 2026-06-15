@@ -1,0 +1,305 @@
+---
+import '../styles/global.css';
+import { createAuthClient, supabaseAdmin } from '../lib/supabase';
+
+// Already logged-in clients go straight to catalogue
+const supabaseCheck = createAuthClient(Astro.request, Astro.cookies);
+const { data: { user: existing } } = await supabaseCheck.auth.getUser();
+if (existing?.user_metadata?.role === 'client') {
+  return Astro.redirect('/catalogue');
+}
+
+// Handle registration
+if (Astro.request.method === 'POST') {
+  const form      = await Astro.request.formData();
+  const nom            = (form.get('nom') as string)?.trim() ?? '';
+  const societe        = (form.get('societe') as string)?.trim() ?? '';
+  const email          = (form.get('email') as string)?.trim() ?? '';
+  const telephone      = (form.get('telephone') as string)?.trim() ?? '';
+  const pointsDeVente  = (form.get('points_de_vente') as string)?.trim() ?? '';
+  const password       = form.get('password') as string;
+
+  if (!nom || !email || !password) {
+    return Astro.redirect('/inscription?error=champs_requis');
+  }
+  if (password.length < 8) {
+    return Astro.redirect('/inscription?error=mot_de_passe_court');
+  }
+
+  const supabase = createAuthClient(Astro.request, Astro.cookies);
+  const { data: authData, error: authError } = await supabase.auth.signUp({
+    email,
+    password,
+    options: { data: { role: 'client', nom, societe, telephone, points_de_vente: pointsDeVente || null } },
+  });
+
+  if (authError) {
+    const code = authError.message.toLowerCase().includes('already') ? 'email_existe' : 'erreur';
+    return Astro.redirect(`/inscription?error=${code}`);
+  }
+
+  // Always create a client_accounts row so admin sees pending registrations
+  await supabaseAdmin.from('client_accounts').upsert(
+    { nom, societe, telephone, email, points_de_vente: pointsDeVente || null, status: 'en_attente' },
+    { onConflict: 'email', ignoreDuplicates: true }
+  );
+
+  if (authData.session) {
+    return Astro.redirect('/catalogue');
+  }
+  // Supabase email confirmation is enabled — ask user to check inbox
+  return Astro.redirect('/inscription?confirmer=1');
+}
+
+const error    = Astro.url.searchParams.get('error');
+const confirmer = !!Astro.url.searchParams.get('confirmer');
+
+const ERRORS: Record<string, string> = {
+  champs_requis:       'Nom, email et mot de passe sont obligatoires.',
+  mot_de_passe_court:  'Le mot de passe doit contenir au moins 8 caractères.',
+  email_existe:        'Cette adresse email est déjà associée à un compte.',
+  erreur:              'Une erreur est survenue. Veuillez réessayer.',
+};
+---
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Créer un compte — Inca Import</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@700&family=Figtree:wght@400;500;600&display=swap"
+    rel="stylesheet"
+  />
+</head>
+<body class="auth-body">
+  <main class="auth-shell">
+    <div class="auth-card">
+
+      <a href="/" class="auth-brand" aria-label="Inca Import — accueil">
+        <span class="wm-inca">Inca</span><span class="wm-import">Import</span>
+      </a>
+      <p class="auth-subtitle">Créer un compte client</p>
+
+      {confirmer ? (
+        <div class="auth-success" role="status">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <circle cx="10" cy="10" r="9" stroke="oklch(0.52 0.17 145)" stroke-width="1.5"/>
+            <path d="M6 10l3 3 5-5" stroke="oklch(0.52 0.17 145)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <div>
+            <p class="success-title">Inscription enregistrée !</p>
+            <p class="success-body">Vérifiez votre boîte email pour confirmer votre adresse, puis <a href="/connexion/client">connectez-vous</a>.</p>
+          </div>
+        </div>
+      ) : (
+        <>
+          {error && (
+            <p class="auth-error" role="alert">{ERRORS[error] ?? 'Une erreur est survenue.'}</p>
+          )}
+
+          <form method="POST" class="auth-form" novalidate>
+            <div class="field-row">
+              <div class="field">
+                <label for="nom">Nom <span class="required" aria-hidden="true">*</span></label>
+                <input type="text" id="nom" name="nom" required autocomplete="name" placeholder="Jean Dupont" autofocus />
+              </div>
+              <div class="field">
+                <label for="societe">Société</label>
+                <input type="text" id="societe" name="societe" autocomplete="organization" placeholder="Ma Supérette" />
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="email">Adresse email <span class="required" aria-hidden="true">*</span></label>
+              <input type="email" id="email" name="email" required autocomplete="email" placeholder="jean@exemple.re" />
+            </div>
+
+            <div class="field-row">
+              <div class="field">
+                <label for="telephone">Téléphone</label>
+                <input type="tel" id="telephone" name="telephone" autocomplete="tel" placeholder="+262 692 00 00 00" />
+              </div>
+              <div class="field">
+                <label for="password">Mot de passe <span class="required" aria-hidden="true">*</span></label>
+                <input type="password" id="password" name="password" required autocomplete="new-password" minlength="8" placeholder="8 caractères min." />
+              </div>
+            </div>
+
+            <div class="field">
+                <label for="points_de_vente">Point(s) de vente</label>
+                <input type="text" id="points_de_vente" name="points_de_vente" autocomplete="off" placeholder="Ex : Station Total Les Tamarins" />
+                <p class="field-hint">Optionnel — indiquez votre point de vente principal si applicable.</p>
+              </div>
+
+            <button type="submit" class="btn btn-primary auth-submit">Créer mon compte</button>
+          </form>
+        </>
+      )}
+
+      <p class="auth-footer">
+        Déjà client ?
+        <a href="/connexion/client">Se connecter →</a>
+      </p>
+    </div>
+  </main>
+</body>
+</html>
+
+<style>
+.auth-body {
+  font-family: var(--font-body);
+  background: var(--color-surface);
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+}
+
+.auth-shell {
+  width: 100%;
+  max-width: 480px;
+}
+
+.auth-card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-10);
+}
+
+.auth-brand {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  text-decoration: none;
+  margin-bottom: var(--space-2);
+}
+.wm-inca   { color: var(--color-primary); }
+.wm-import { color: var(--color-ink); font-weight: 400; }
+
+.auth-subtitle {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-muted);
+  margin-bottom: var(--space-8);
+}
+
+.auth-error {
+  font-size: var(--text-sm);
+  color: oklch(0.50 0.19 25);
+  background: oklch(0.97 0.04 25);
+  border: 1px solid oklch(0.88 0.07 25);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
+.auth-success {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  background: oklch(0.96 0.04 145);
+  border: 1px solid oklch(0.85 0.08 145);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+.auth-success svg { flex-shrink: 0; margin-top: 2px; }
+.success-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: oklch(0.35 0.12 145);
+  margin-bottom: var(--space-1);
+}
+.success-body {
+  font-size: var(--text-sm);
+  color: oklch(0.40 0.10 145);
+  line-height: 1.5;
+}
+.success-body a {
+  color: oklch(0.40 0.13 145);
+  font-weight: 500;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+label {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.required { color: var(--color-primary); }
+
+input[type="text"],
+input[type="email"],
+input[type="tel"],
+input[type="password"] {
+  width: 100%;
+  padding: 0.6875rem 0.875rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  min-height: 44px;
+  outline: none;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+  box-sizing: border-box;
+}
+input::placeholder { color: var(--color-muted); }
+input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.15);
+}
+
+.auth-submit { width: 100%; margin-top: var(--space-2); }
+
+.auth-footer {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  margin-top: var(--space-6);
+  text-align: center;
+}
+.auth-footer a {
+  color: var(--color-primary-deep);
+  font-weight: 500;
+  text-decoration: none;
+}
+.auth-footer a:hover { color: var(--color-primary); }
+
+.field-hint {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  line-height: 1.4;
+}
+
+@media (max-width: 480px) {
+  .auth-card  { padding: var(--space-8) var(--space-6); }
+  .field-row  { grid-template-columns: 1fr; }
+}
+</style>

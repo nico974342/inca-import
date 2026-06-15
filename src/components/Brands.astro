@@ -1,0 +1,66 @@
+---
+const brands = [
+  'Coca-Cola', 'PepsiCo', 'Red Bull', 'Haribo',
+  'Monster', 'Orangina', 'Vittel', 'Lu',
+  "Lay's", 'Ferrero', 'Schweppes', 'Cristaline',
+];
+---
+
+<section class="brands" id="marques" aria-labelledby="brands-heading">
+  <div class="container">
+    <p class="brands-label" id="brands-heading">Marques distribuées</p>
+    <div class="brands-strip" role="list">
+      {brands.map(brand => (
+        <span class="brand-name" role="listitem">{brand}</span>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+.brands {
+  padding: clamp(var(--space-12), 5vw, var(--space-20)) 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.brands-label {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-muted);
+  letter-spacing: 0.01em;
+  margin-bottom: var(--space-8);
+}
+
+.brands-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  align-items: center;
+}
+
+.brand-name {
+  font-family: var(--font-display);
+  font-size: clamp(var(--text-lg), 2.2vw, var(--text-2xl));
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-muted);
+  transition: color var(--dur-fast);
+  padding: var(--space-2) var(--space-4);
+  cursor: default;
+  line-height: 1.4;
+}
+
+.brand-name:hover { color: var(--color-ink); }
+
+.brand-name:not(:last-child)::after {
+  content: '·';
+  margin-left: var(--space-4);
+  color: var(--color-border);
+  font-weight: 400;
+}
+
+@media (max-width: 480px) {
+  .brand-name { font-size: var(--text-base); padding: var(--space-1) var(--space-3); }
+}
+</style>
