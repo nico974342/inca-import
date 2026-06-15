@@ -23,6 +23,7 @@ const isClient = user?.user_metadata?.role === 'client';
     <div class="nav-actions">
       {isClient ? (
         <>
+          <a href="/mes-commandes" class="nav-ghost nav-orders">Mes commandes</a>
           <a href="/mon-compte" class="nav-user">{user?.user_metadata?.nom ?? user?.email}</a>
           <form action="/api/auth/client-logout" method="POST" class="nav-logout-form">
             <button type="submit" class="nav-ghost nav-logout-btn">Déconnexion</button>
@@ -55,6 +56,7 @@ const isClient = user?.user_metadata?.role === 'client';
       <a href="/inscription">Devenir client</a>
       {isClient ? (
         <>
+          <a href="/mes-commandes">Mes commandes</a>
           <a href="/mon-compte" class="mobile-user">{user?.user_metadata?.nom ?? user?.email}</a>
           <form action="/api/auth/client-logout" method="POST" class="mobile-logout-form">
             <button type="submit" class="mobile-logout-btn">Déconnexion</button>
