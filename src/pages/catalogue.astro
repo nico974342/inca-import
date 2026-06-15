@@ -458,76 +458,205 @@ const productsMetaJSON = JSON.stringify(
     function renderDrawerItems() {
       const active = Object.entries(cartState).filter(([, q]) => q > 0);
       drawerEmptyEl.hidden = active.length > 0;
-
-      // Sync existing items, add new ones, remove old ones
-      // Simpler: full rebuild (fast enough for catalogue sizes)
       drawerItemsList.innerHTML = '';
 
-      active.forEach(([id, qty]) => {
+      const CORAL      = 'oklch(0.568 0.149 45.9)';
+      const CORAL_DIM  = 'oklch(0.50 0.149 45.9)';
+      const RED        = 'oklch(0.58 0.16 25)';
+      const RED_DEEP   = 'oklch(0.44 0.20 25)';
+      const CAT_BG: Record<string, string> = {
+        boissons: 'oklch(0.72 0.10 210)', snacks: 'oklch(0.78 0.10 60)',
+        confiseries: 'oklch(0.76 0.10 330)',
+      };
+
+      active.forEach(([id, qty], idx) => {
         const meta = productMap[id];
         if (!meta) return;
         const linePrice = (qty * (priceMap[id] ?? 0)).toFixed(2).replace('.', ',');
         const unitLine  = meta.units_per_carton
           ? `${meta.units_per_carton} unités/${meta.unit ?? 'carton'}`
           : (meta.unit ?? '');
+        const isLast = idx === active.length - 1;
 
-        // Fallback colour per category for the avatar
-        const CAT_COLOR: Record<string, string> = {
-          boissons: 'oklch(0.72 0.10 210)', snacks: 'oklch(0.78 0.10 60)',
-          confiseries: 'oklch(0.76 0.10 330)',
-        };
-        const avatarBg = CAT_COLOR[meta.category ?? ''] ?? 'oklch(0.78 0.06 45.9)';
-        const avatarHTML = meta.image_url
-          ? `<img src="${meta.image_url}" alt="" loading="lazy" decoding="async">`
-          : `<span style="background:${avatarBg};width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-size:1.125rem;font-weight:700;color:white;line-height:1;">${meta.name[0].toUpperCase()}</span>`;
-
+        // ── <li> ─────────────────────────────────────────────────
         const li = document.createElement('li');
-        li.className = 'drawer-item';
         li.dataset.productId = id;
-        li.innerHTML = `
-          <div class="di-avatar">${avatarHTML}</div>
-          <div class="di-body">
-            <div class="di-row1">
-              <p class="di-name">${meta.name}</p>
-              <p class="di-price">${linePrice}&nbsp;€</p>
-            </div>
-            <div class="di-row2">
-              ${unitLine ? `<p class="di-meta">${unitLine}</p>` : '<span></span>'}
-              <div class="di-actions">
-                <div class="di-stepper">
-                  <button type="button" class="d-qty-btn d-qty-dec" aria-label="Retirer un ${meta.name}">−</button>
-                  <span class="d-qty-val" aria-live="polite">${qty}</span>
-                  <button type="button" class="d-qty-btn d-qty-inc" aria-label="Ajouter un ${meta.name}">+</button>
-                </div>
-                <button type="button" class="drawer-item-del" aria-label="Supprimer ${meta.name} du panier">Supprimer</button>
-              </div>
-            </div>
-          </div>
-        `;
+        Object.assign(li.style, {
+          display: 'flex', flexDirection: 'row', alignItems: 'center',
+          gap: '12px', padding: '12px 0', margin: '0', listStyle: 'none',
+          borderBottom: isLast ? 'none' : '1px solid #e8e4e0',
+          background: 'transparent',
+        });
 
-        li.querySelector('.d-qty-dec')?.addEventListener('click', () => {
+        // ── Avatar (48×48, locked) ─────────────────────────────
+        const avatar = document.createElement('div');
+        Object.assign(avatar.style, {
+          width: '48px', minWidth: '48px', maxWidth: '48px', height: '48px',
+          borderRadius: '8px', overflow: 'hidden',
+          flexShrink: '0', flexGrow: '0', flexBasis: '48px',
+          background: CAT_BG[meta.category ?? ''] ?? 'oklch(0.82 0.04 45)',
+        });
+
+        if (meta.image_url) {
+          const img = document.createElement('img');
+          img.src  = meta.image_url;
+          img.alt  = '';
+          img.loading = 'lazy';
+          Object.assign(img.style, {
+            display: 'block', width: '48px', height: '48px', objectFit: 'cover',
+          });
+          avatar.appendChild(img);
+        } else {
+          const letter = document.createElement('span');
+          letter.textContent = meta.name[0].toUpperCase();
+          Object.assign(letter.style, {
+            display: 'flex', width: '100%', height: '100%',
+            alignItems: 'center', justifyContent: 'center',
+            fontFamily: 'var(--font-display)', fontSize: '1.25rem',
+            fontWeight: '700', color: 'white', lineHeight: '1',
+          });
+          avatar.appendChild(letter);
+        }
+
+        // ── Body ───────────────────────────────────────────────
+        const body = document.createElement('div');
+        Object.assign(body.style, {
+          flex: '1', minWidth: '0', display: 'flex',
+          flexDirection: 'column', gap: '5px',
+        });
+
+        // Row 1 — name + price
+        const row1 = document.createElement('div');
+        Object.assign(row1.style, {
+          display: 'flex', alignItems: 'baseline',
+          justifyContent: 'space-between', gap: '8px',
+        });
+
+        const nameEl = document.createElement('p');
+        nameEl.textContent = meta.name;
+        Object.assign(nameEl.style, {
+          margin: '0', flex: '1', minWidth: '0',
+          fontFamily: 'var(--font-body)', fontSize: '0.8125rem', fontWeight: '700',
+          color: 'var(--color-ink)', lineHeight: '1.2',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        });
+
+        const priceEl = document.createElement('p');
+        priceEl.textContent = `${linePrice} €`;
+        Object.assign(priceEl.style, {
+          margin: '0', flexShrink: '0',
+          fontFamily: 'var(--font-display)', fontSize: '0.8125rem', fontWeight: '700',
+          color: CORAL, letterSpacing: '-0.02em', whiteSpace: 'nowrap',
+        });
+
+        row1.appendChild(nameEl);
+        row1.appendChild(priceEl);
+
+        // Row 2 — unit info + stepper + delete
+        const row2 = document.createElement('div');
+        Object.assign(row2.style, {
+          display: 'flex', alignItems: 'center',
+          justifyContent: 'space-between', gap: '6px',
+        });
+
+        const metaEl = document.createElement('p');
+        metaEl.textContent = unitLine;
+        Object.assign(metaEl.style, {
+          margin: '0', flex: '1', minWidth: '0',
+          fontFamily: 'var(--font-body)', fontSize: '0.6875rem',
+          color: 'var(--color-muted)', lineHeight: '1',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        });
+
+        const actions = document.createElement('div');
+        Object.assign(actions.style, {
+          display: 'flex', alignItems: 'center', gap: '8px', flexShrink: '0',
+        });
+
+        // Coral pill stepper
+        const stepper = document.createElement('div');
+        Object.assign(stepper.style, {
+          display: 'inline-flex', alignItems: 'stretch',
+          height: '28px', borderRadius: '14px',
+          overflow: 'hidden', background: CORAL, flexShrink: '0',
+        });
+
+        function makeStepBtn(label: string, text: string) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = text;
+          btn.setAttribute('aria-label', label);
+          Object.assign(btn.style, {
+            width: '28px', height: '28px',
+            border: 'none', background: 'transparent',
+            fontSize: '1rem', fontWeight: '400', lineHeight: '1',
+            cursor: 'pointer', color: 'white', padding: '0', flexShrink: '0',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          });
+          btn.addEventListener('mouseenter', () => { btn.style.background = CORAL_DIM; });
+          btn.addEventListener('mouseleave', () => { btn.style.background = 'transparent'; });
+          return btn;
+        }
+
+        const decBtn = makeStepBtn(`Retirer un ${meta.name}`, '−');
+        const incBtn = makeStepBtn(`Ajouter un ${meta.name}`, '+');
+
+        const qtyValEl = document.createElement('span');
+        qtyValEl.textContent = String(qty);
+        qtyValEl.setAttribute('aria-live', 'polite');
+        Object.assign(qtyValEl.style, {
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          minWidth: '22px', padding: '0 3px',
+          fontFamily: 'var(--font-body)', fontSize: '0.75rem', fontWeight: '700',
+          color: 'white', lineHeight: '1',
+        });
+
+        stepper.append(decBtn, qtyValEl, incBtn);
+
+        // "Supprimer" text button
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.textContent = 'Supprimer';
+        delBtn.setAttribute('aria-label', `Supprimer ${meta.name} du panier`);
+        Object.assign(delBtn.style, {
+          border: 'none', background: 'none', padding: '0', margin: '0',
+          fontFamily: 'var(--font-body)', fontSize: '0.6875rem', fontWeight: '500',
+          color: RED, cursor: 'pointer', lineHeight: '1',
+          textDecoration: 'none', whiteSpace: 'nowrap',
+        });
+        delBtn.addEventListener('mouseenter', () => {
+          delBtn.style.color = RED_DEEP; delBtn.style.textDecoration = 'underline';
+        });
+        delBtn.addEventListener('mouseleave', () => {
+          delBtn.style.color = RED; delBtn.style.textDecoration = 'none';
+        });
+
+        actions.append(stepper, delBtn);
+        row2.append(metaEl, actions);
+        body.append(row1, row2);
+        li.append(avatar, body);
+        drawerItemsList.appendChild(li);
+
+        // ── Events ────────────────────────────────────────────
+        decBtn.addEventListener('click', () => {
           if ((cartState[id] ?? 0) <= 0) return;
           cartState[id]--;
           syncCardControl(id);
           sendCartUpdate(id, cartState[id]);
           renderCart();
         });
-
-        li.querySelector('.d-qty-inc')?.addEventListener('click', () => {
+        incBtn.addEventListener('click', () => {
           cartState[id] = (cartState[id] ?? 0) + 1;
           syncCardControl(id);
           sendCartUpdate(id, cartState[id]);
           renderCart();
         });
-
-        li.querySelector('.drawer-item-del')?.addEventListener('click', () => {
+        delBtn.addEventListener('click', () => {
           cartState[id] = 0;
           syncCardControl(id);
           sendCartUpdate(id, 0);
           renderCart();
         });
-
-        drawerItemsList.appendChild(li);
       });
     }
 
