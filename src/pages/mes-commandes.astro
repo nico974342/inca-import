@@ -51,17 +51,31 @@ function orderTotal(orderId: string): number | null {
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  recu:      'Reçu',
-  confirme:  'Confirmé',
-  livre:     'Livré',
-  annule:    'Annulé',
+  en_attente:     'En attente',
+  confirmee:      'Confirmée',
+  en_preparation: 'En préparation',
+  expediee:       'Expédiée',
+  livree:         'Livrée',
+  annulee:        'Annulée',
+  // legacy fallbacks
+  recu:    'Reçu',
+  confirme: 'Confirmé',
+  livre:   'Livré',
+  annule:  'Annulé',
 };
 
 const STATUS_COLOR: Record<string, string> = {
-  recu:      'muted',
-  confirme:  'blue',
-  livre:     'green',
-  annule:    'red',
+  en_attente:     'muted',
+  confirmee:      'blue',
+  en_preparation: 'amber',
+  expediee:       'purple',
+  livree:         'green',
+  annulee:        'red',
+  // legacy fallbacks
+  recu:    'muted',
+  confirme: 'blue',
+  livre:   'green',
+  annule:  'red',
 };
 
 function formatDate(iso: string): string {
@@ -195,6 +209,14 @@ function shortId(id: string): string {
                         <strong>Notes :</strong> {order.notes}
                       </p>
                     )}
+                    <div class="order-footer-actions">
+                      <a href={`/api/orders/${order.id}/invoice`} class="btn-invoice" download>
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                          <path d="M7 1v8M4 6l3 3 3-3M2 10v1a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        Télécharger la facture PDF
+                      </a>
+                    </div>
                   </div>
                 </details>
               </li>
@@ -391,10 +413,12 @@ details[open] .chevron-icon { transform: rotate(180deg); }
   flex-shrink: 0;
   letter-spacing: 0.01em;
 }
-.status-badge--muted  { background: var(--color-surface);           color: var(--color-muted); }
-.status-badge--blue   { background: oklch(0.93 0.05 220);           color: oklch(0.33 0.12 220); }
-.status-badge--green  { background: oklch(0.92 0.08 150);           color: oklch(0.32 0.12 150); }
-.status-badge--red    { background: oklch(0.95 0.04 25);            color: oklch(0.46 0.18 25); }
+.status-badge--muted  { background: var(--color-surface);     color: var(--color-muted); }
+.status-badge--blue   { background: oklch(0.93 0.05 220);     color: oklch(0.33 0.12 220); }
+.status-badge--amber  { background: oklch(0.95 0.07 80);      color: oklch(0.40 0.14 80); }
+.status-badge--purple { background: oklch(0.93 0.05 295);     color: oklch(0.38 0.12 295); }
+.status-badge--green  { background: oklch(0.92 0.08 150);     color: oklch(0.32 0.12 150); }
+.status-badge--red    { background: oklch(0.95 0.04 25);      color: oklch(0.46 0.18 25); }
 
 /* Expanded body */
 .order-body {
@@ -494,6 +518,34 @@ details[open] .chevron-icon { transform: rotate(180deg); }
   font-size: var(--text-sm);
   color: var(--color-muted);
   text-align: center;
+}
+
+/* Invoice download */
+.order-footer-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: var(--space-4);
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.btn-invoice {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-primary);
+  text-decoration: none;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid oklch(0.568 0.149 45.9 / 0.28);
+  background: oklch(0.568 0.149 45.9 / 0.04);
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+.btn-invoice:hover {
+  background: oklch(0.568 0.149 45.9 / 0.09);
+  border-color: oklch(0.568 0.149 45.9 / 0.45);
 }
 
 /* Responsive */

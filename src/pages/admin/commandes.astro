@@ -1,0 +1,583 @@
+---
+import AdminLayout from '../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../lib/supabase';
+import { sendLowStockAlert } from '../../lib/email';
+
+// Handle POST: update order status
+if (Astro.request.method === 'POST') {
+  const data       = await Astro.request.formData();
+  const order_id   = data.get('order_id') as string;
+  const new_status = data.get('status')   as string;
+  const VALID = ['en_attente', 'confirmee', 'en_preparation', 'expediee', 'livree', 'annulee'];
+
+  if (order_id && VALID.includes(new_status)) {
+    // Fetch current status to detect first-time confirmation
+    const { data: current } = await supabaseAdmin
+      .from('orders').select('status').eq('id', order_id).single();
+
+    await supabaseAdmin.from('orders').update({ status: new_status }).eq('id', order_id);
+
+    // Decrement stock only on first transition to confirmee
+    if (current?.status !== 'confirmee' && new_status === 'confirmee') {
+      const { data: items } = await supabaseAdmin
+        .from('order_items')
+        .select('product_id, quantity')
+        .eq('order_id', order_id);
+
+      for (const item of items ?? []) {
+        if (!item.product_id) continue;
+
+        const { data: prod } = await supabaseAdmin
+          .from('products')
+          .select('stock_quantity, name')
+          .eq('id', item.product_id)
+          .single();
+
+        if (!prod) continue;
+
+        const newQty     = Math.max(0, prod.stock_quantity - item.quantity);
+        const newInStock = newQty > 0;
+
+        await supabaseAdmin
+          .from('products')
+          .update({ stock_quantity: newQty, in_stock: newInStock })
+          .eq('id', item.product_id);
+
+        if (newQty < 5) {
+          sendLowStockAlert(prod.name, newQty).catch(() => {});
+        }
+      }
+    }
+  }
+  return Astro.redirect('/admin/commandes');
+}
+
+const filterStatus = Astro.url.searchParams.get('status') ?? '';
+
+// Fetch all orders (filter applied in DB only when set)
+let query = supabaseAdmin
+  .from('orders')
+  .select('id, status, created_at, nom, societe, email, telephone, notes, user_id')
+  .order('created_at', { ascending: false });
+
+const { data: allOrders } = await supabaseAdmin
+  .from('orders')
+  .select('id, status, created_at, nom, societe, email, telephone, notes, user_id')
+  .order('created_at', { ascending: false });
+
+const orders = filterStatus
+  ? (allOrders ?? []).filter(o => o.status === filterStatus)
+  : (allOrders ?? []);
+
+// Fetch items for displayed orders
+const orderIds = orders.map(o => o.id);
+const { data: allItems } = orderIds.length
+  ? await supabaseAdmin
+      .from('order_items')
+      .select('order_id, product_name, quantity, unit, products(price_ht)')
+      .in('order_id', orderIds)
+  : { data: [] };
+
+const itemsByOrder: Record<string, typeof allItems> = {};
+for (const item of allItems ?? []) {
+  if (!itemsByOrder[item.order_id]) itemsByOrder[item.order_id] = [];
+  itemsByOrder[item.order_id].push(item);
+}
+
+function orderTotal(orderId: string): number | null {
+  const items = itemsByOrder[orderId] ?? [];
+  let total = 0, hasPrice = false;
+  for (const item of items) {
+    const price = (item as any).products?.price_ht;
+    if (price != null) { total += Number(price) * item.quantity; hasPrice = true; }
+  }
+  return hasPrice ? total : null;
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  en_attente:     'En attente',
+  confirmee:      'Confirmée',
+  en_preparation: 'En préparation',
+  expediee:       'Expédiée',
+  livree:         'Livrée',
+  annulee:        'Annulée',
+};
+
+const STATUS_COLOR: Record<string, string> = {
+  en_attente:     'muted',
+  confirmee:      'blue',
+  en_preparation: 'amber',
+  expediee:       'purple',
+  livree:         'green',
+  annulee:        'red',
+};
+
+// Counts per status across ALL orders
+const counts: Record<string, number> = {};
+for (const key of Object.keys(STATUS_LABEL)) {
+  counts[key] = (allOrders ?? []).filter(o => o.status === key).length;
+}
+
+function formatDate(iso: string) {
+  return new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+}
+
+function shortId(id: string) {
+  return id.slice(0, 8).toUpperCase();
+}
+---
+<AdminLayout title="Commandes" activeNav="commandes">
+
+  <!-- Filter tabs -->
+  <div class="filter-bar">
+    <a href="/admin/commandes" class={`filter-tab ${!filterStatus ? 'filter-tab--active' : ''}`}>
+      Toutes
+      <span class="filter-count">{allOrders?.length ?? 0}</span>
+    </a>
+    {Object.entries(STATUS_LABEL).map(([key, label]) => (
+      <a href={`/admin/commandes?status=${key}`} class={`filter-tab filter-tab--${STATUS_COLOR[key]} ${filterStatus === key ? 'filter-tab--active' : ''}`}>
+        {label}
+        {counts[key] > 0 && <span class="filter-count">{counts[key]}</span>}
+      </a>
+    ))}
+  </div>
+
+  {orders.length === 0 ? (
+    <div class="empty-state">
+      <p class="empty-title">Aucune commande{filterStatus ? ` avec ce statut` : ''}.</p>
+    </div>
+  ) : (
+    <ul class="order-list">
+      {orders.map(order => {
+        const items    = itemsByOrder[order.id] ?? [];
+        const total    = orderTotal(order.id);
+        const status   = order.status ?? 'en_attente';
+        const colorKey = STATUS_COLOR[status] ?? 'muted';
+        return (
+          <li class="order-card">
+            <details class="order-details">
+              <summary class="order-summary">
+                <div class="summary-client">
+                  <span class="client-name">{order.nom}</span>
+                  {order.societe && <span class="client-co">{order.societe}</span>}
+                  <span class="order-meta">#{shortId(order.id)} · {formatDate(order.created_at)}</span>
+                </div>
+
+                <div class="summary-mid">
+                  <span class="item-count">{items.length} article{items.length !== 1 ? 's' : ''}</span>
+                  {total !== null && (
+                    <span class="order-total">{total.toFixed(2).replace('.', ',')} € HT</span>
+                  )}
+                </div>
+
+                <div class="summary-right">
+                  <span class={`badge badge--${colorKey}`}>{STATUS_LABEL[status] ?? status}</span>
+                  <svg class="chevron" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                    <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </div>
+              </summary>
+
+              <div class="order-body">
+                <!-- Status update form -->
+                <form method="POST" class="status-form">
+                  <input type="hidden" name="order_id" value={order.id} />
+                  <label class="status-label-text">Statut :</label>
+                  <select name="status" class="status-select">
+                    {Object.entries(STATUS_LABEL).map(([val, lbl]) => (
+                      <option value={val} selected={status === val}>{lbl}</option>
+                    ))}
+                  </select>
+                  <button type="submit" class="status-save">Enregistrer</button>
+                </form>
+
+                <!-- Client info -->
+                <div class="client-info">
+                  {order.email && <span>{order.email}</span>}
+                  {order.telephone && <span>{order.telephone}</span>}
+                </div>
+
+                <!-- Items table -->
+                {items.length > 0 ? (
+                  <table class="items-table">
+                    <thead>
+                      <tr>
+                        <th>Produit</th>
+                        <th class="th-r">Qté</th>
+                        <th class="th-r">PU HT</th>
+                        <th class="th-r">Total HT</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {items.map(item => {
+                        const pu = (item as any).products?.price_ht;
+                        return (
+                          <tr>
+                            <td>
+                              <span class="item-name">{item.product_name}</span>
+                              {item.unit && <span class="item-unit">{item.unit}</span>}
+                            </td>
+                            <td class="td-r">{item.quantity}</td>
+                            <td class="td-r">{pu != null ? Number(pu).toFixed(2).replace('.', ',') + ' €' : '—'}</td>
+                            <td class="td-r td-bold">{pu != null ? (Number(pu) * item.quantity).toFixed(2).replace('.', ',') + ' €' : '—'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    {total !== null && (
+                      <tfoot>
+                        <tr>
+                          <td colspan="3" class="tfoot-label">Total HT</td>
+                          <td class="td-r td-bold tfoot-total">{total.toFixed(2).replace('.', ',')} €</td>
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                ) : (
+                  <p class="no-items">Aucun article enregistré.</p>
+                )}
+
+                {order.notes && (
+                  <p class="order-notes"><strong>Notes :</strong> {order.notes}</p>
+                )}
+              </div>
+            </details>
+          </li>
+        );
+      })}
+    </ul>
+  )}
+
+</AdminLayout>
+
+<style>
+/* ── Filter bar ──────────────────────────────── */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-6);
+}
+
+.filter-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-muted);
+  text-decoration: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-bg);
+  transition: all var(--dur-fast);
+}
+.filter-tab:hover { color: var(--color-ink); border-color: var(--color-border-strong); }
+.filter-tab--active {
+  color: var(--color-ink);
+  background: var(--color-surface-2);
+  border-color: var(--color-border-strong);
+  font-weight: 600;
+}
+
+.filter-count {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: var(--color-muted);
+  background: var(--color-surface);
+  padding: 1px 5px;
+  border-radius: 99px;
+  border: 1px solid var(--color-border);
+  min-width: 18px;
+  text-align: center;
+}
+
+/* ── Empty state ─────────────────────────────── */
+.empty-state {
+  padding: var(--space-16) 0;
+  text-align: center;
+}
+.empty-title {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+
+/* ── Order list ──────────────────────────────── */
+.order-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.order-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-bg);
+  transition: border-color var(--dur-fast);
+}
+.order-card:has(details[open]) {
+  border-color: var(--color-border-strong);
+}
+
+.order-details summary { list-style: none; }
+.order-details summary::-webkit-details-marker { display: none; }
+
+.order-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--dur-fast);
+}
+.order-summary:hover { background: var(--color-surface); }
+
+.summary-client {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.client-name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.client-co {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.order-meta {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  font-family: var(--font-body);
+  letter-spacing: 0.01em;
+}
+
+.summary-mid {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.item-count {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
+
+.order-total {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--color-ink);
+  white-space: nowrap;
+}
+
+.summary-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+.chevron {
+  color: var(--color-muted);
+  flex-shrink: 0;
+  transition: transform 0.2s var(--ease-out-expo);
+}
+details[open] .chevron { transform: rotate(180deg); }
+
+/* ── Status badges ───────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+.badge--muted  { background: var(--color-surface);       color: var(--color-muted); }
+.badge--blue   { background: oklch(0.93 0.05 220);       color: oklch(0.33 0.12 220); }
+.badge--amber  { background: oklch(0.95 0.07 80);        color: oklch(0.40 0.14 80); }
+.badge--purple { background: oklch(0.93 0.05 295);       color: oklch(0.38 0.12 295); }
+.badge--green  { background: oklch(0.92 0.08 150);       color: oklch(0.32 0.12 150); }
+.badge--red    { background: oklch(0.95 0.04 25);        color: oklch(0.46 0.18 25); }
+
+/* ── Order body ──────────────────────────────── */
+.order-body {
+  padding: var(--space-4);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+  animation: slide-in 0.18s var(--ease-out-expo);
+}
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Status form */
+.status-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.status-label-text {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+
+.status-select {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+.status-select:focus { outline: 2px solid var(--color-primary); }
+
+.status-save {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: white;
+  background: var(--color-primary);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-4);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity var(--dur-fast);
+  height: 34px;
+}
+.status-save:hover { opacity: 0.88; }
+
+/* Client info */
+.client-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
+
+/* Items table */
+.items-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  background: var(--color-bg);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  margin-bottom: var(--space-3);
+}
+
+.items-table th {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-2);
+  border-bottom: 1px solid var(--color-border);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.items-table th.th-r { text-align: right; }
+
+.items-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-ink);
+  vertical-align: middle;
+}
+.items-table tbody tr:last-child td { border-bottom: none; }
+
+.item-name { display: block; font-weight: 500; }
+.item-unit { display: block; font-size: var(--text-xs); color: var(--color-muted); }
+
+.td-r    { text-align: right; white-space: nowrap; }
+.td-bold { font-weight: 700; }
+
+.items-table tfoot td {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border-strong);
+  border-bottom: none;
+  background: var(--color-surface);
+}
+.tfoot-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: right;
+  padding-right: var(--space-3);
+}
+.tfoot-total {
+  font-weight: 700;
+  font-size: var(--text-base);
+  text-align: right;
+  padding-right: var(--space-3);
+}
+
+.no-items {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  padding: var(--space-3) 0;
+}
+
+.order-notes {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  line-height: 1.6;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg);
+  border-radius: var(--radius-sm);
+  border: 1px solid oklch(0.90 0.015 45.9);
+}
+.order-notes strong { color: var(--color-ink); }
+
+/* ── Responsive ──────────────────────────────── */
+@media (max-width: 640px) {
+  .summary-mid { display: none; }
+  .status-form { flex-wrap: wrap; }
+  .items-table th:nth-child(3),
+  .items-table td:nth-child(3) { display: none; }
+}
+</style>

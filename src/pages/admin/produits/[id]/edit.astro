@@ -24,15 +24,16 @@ if (Astro.request.method === 'POST') {
   const unit             = (data.get('unit')             as string)?.trim() || 'carton';
   const units_per_carton = data.get('units_per_carton')  ? parseInt(data.get('units_per_carton') as string, 10) || null : null;
   const image_url        = (data.get('image_url')        as string)?.trim() || null;
-  const in_stock    = data.get('in_stock') === 'true';
-  const position    = data.get('position') ? parseInt(data.get('position') as string) : 0;
+  const in_stock       = data.get('in_stock') === 'true';
+  const position       = data.get('position') ? parseInt(data.get('position') as string) : 0;
+  const stock_quantity = data.get('stock_quantity') ? parseInt(data.get('stock_quantity') as string, 10) : 0;
 
   if (!name || !slug || !category) {
     formError = 'Le nom, le slug et la catégorie sont requis.';
   } else {
     const { error } = await supabaseAdmin
       .from('products')
-      .update({ name, slug, category, description, sku, price_ht, unit, units_per_carton, image_url, in_stock, position })
+      .update({ name, slug, category, description, sku, price_ht, unit, units_per_carton, image_url, in_stock, position, stock_quantity })
       .eq('id', id);
 
     if (error) {
@@ -102,7 +103,11 @@ if (Astro.request.method === 'POST') {
           <input type="url" id="image_url" name="image_url" value={product.image_url ?? ''} placeholder="https://…" />
         </div>
 
-        <div class="field-group">
+        <div class="field-group field-group--3">
+          <div class="field">
+            <label for="stock_quantity">Quantité en stock</label>
+            <input type="number" id="stock_quantity" name="stock_quantity" min="0" value={product.stock_quantity ?? 0} />
+          </div>
           <div class="field">
             <label for="in_stock">Disponibilité</label>
             <select id="in_stock" name="in_stock">

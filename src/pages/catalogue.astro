@@ -6,7 +6,7 @@ import { supabaseAdmin, createAuthClient } from '../lib/supabase';
 
 const { data: products } = await supabaseAdmin
   .from('products')
-  .select('id, name, slug, category, description, image_url, in_stock, unit, units_per_carton, price_ht')
+  .select('id, name, slug, category, description, image_url, in_stock, unit, units_per_carton, price_ht, stock_quantity')
   .order('position', { ascending: true })
   .order('name', { ascending: true });
 
@@ -177,6 +177,14 @@ const productsMetaJSON = JSON.stringify(
                   ) : p.unit ? (
                     <p class="product-unit">{p.unit}</p>
                   ) : null}
+
+                  {isClient && (p.stock_quantity ?? 0) > 0 && (
+                    <p class={`prod-stock prod-stock--${(p.stock_quantity ?? 0) < 5 ? 'low' : 'ok'}`}>
+                      {p.stock_quantity === 1
+                        ? `1 ${p.unit ?? 'carton'} disponible`
+                        : `${p.stock_quantity} ${p.unit ?? 'carton'}s disponibles`}
+                    </p>
+                  )}
 
                   {p.description && <p class="product-desc">{p.description}</p>}
 
@@ -1075,6 +1083,13 @@ const productsMetaJSON = JSON.stringify(
   font-weight: 500;
   letter-spacing: 0.01em;
 }
+
+.prod-stock {
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+.prod-stock--ok  { color: oklch(0.42 0.14 145); }
+.prod-stock--low { color: oklch(0.48 0.17 40); }
 
 .product-desc {
   font-size: var(--text-sm);

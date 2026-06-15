@@ -4,7 +4,7 @@ import { supabaseAdmin } from '../../../lib/supabase';
 
 const { data: products, error } = await supabaseAdmin
   .from('products')
-  .select('id, name, category, sku, price_ht, unit, in_stock, position')
+  .select('id, name, category, sku, price_ht, unit, in_stock, stock_quantity, position')
   .order('position', { ascending: true })
   .order('name', { ascending: true });
 
@@ -50,9 +50,13 @@ function formatPrice(p: number | null) {
               <td class="td-mono">{p.sku ?? '—'}</td>
               <td class="td-mono">{formatPrice(p.price_ht)}</td>
               <td>
-                <span class={`stock-dot ${p.in_stock ? 'stock-dot--in' : 'stock-dot--out'}`} title={p.in_stock ? 'En stock' : 'Rupture'}>
-                  {p.in_stock ? 'En stock' : 'Rupture'}
-                </span>
+                {(p.stock_quantity ?? 0) === 0 ? (
+                  <span class="stock-chip stock-chip--out">Rupture</span>
+                ) : (p.stock_quantity ?? 0) < 5 ? (
+                  <span class="stock-chip stock-chip--low" title="Stock bas">{p.stock_quantity}</span>
+                ) : (
+                  <span class="stock-chip stock-chip--ok">{p.stock_quantity}</span>
+                )}
               </td>
               <td class="td-muted">{p.position}</td>
               <td class="td-actions">
@@ -142,24 +146,18 @@ function formatPrice(p: number | null) {
 .badge--snacks      { background: oklch(0.94 0.05 60);  color: oklch(0.40 0.12 60);  }
 .badge--confiseries { background: oklch(0.93 0.06 330); color: oklch(0.40 0.12 330); }
 
-.stock-dot {
+.stock-chip {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
   font-size: var(--text-xs);
-  font-weight: 500;
-}
-.stock-dot::before {
-  content: '';
-  width: 6px;
-  height: 6px;
+  font-weight: 600;
+  padding: 2px 9px;
   border-radius: var(--radius-full);
-  flex-shrink: 0;
+  white-space: nowrap;
 }
-.stock-dot--in  { color: oklch(0.42 0.14 145); }
-.stock-dot--in::before  { background: oklch(0.55 0.18 145); }
-.stock-dot--out { color: oklch(0.50 0.14 25); }
-.stock-dot--out::before { background: oklch(0.60 0.18 25); }
+.stock-chip--ok  { background: oklch(0.92 0.08 145); color: oklch(0.32 0.14 145); }
+.stock-chip--low { background: oklch(0.95 0.07 60);  color: oklch(0.38 0.15 55);  }
+.stock-chip--out { background: oklch(0.95 0.04 25);  color: oklch(0.46 0.18 25);  }
 
 .action-link {
   font-size: var(--text-sm);
