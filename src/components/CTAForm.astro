@@ -11,52 +11,78 @@
           Rejoignez les gérants de La Réunion qui font confiance à Inca Import
           pour un réassort sans surprise.
         </p>
+        <ul class="cta-perks" aria-label="Avantages">
+          <li>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M3 8l3.5 3.5L13 4.5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Activation sous 24h ouvrées
+          </li>
+          <li>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M3 8l3.5 3.5L13 4.5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Catalogue complet avec prix
+          </li>
+          <li>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M3 8l3.5 3.5L13 4.5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Sans engagement ni minimum
+          </li>
+        </ul>
       </div>
 
-      <form class="cta-form" novalidate aria-label="Demande d'ouverture de compte">
-        <div class="form-row">
-          <div class="form-group">
-            <label for="f-nom">Prénom & Nom</label>
-            <input
-              type="text"
-              id="f-nom"
-              name="nom"
-              placeholder="Marie Dupont"
-              required
-              autocomplete="name"
-            />
+      <div class="cta-form-wrap">
+        <form class="cta-form" novalidate aria-label="Demande d'ouverture de compte">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="f-nom">Prénom &amp; Nom</label>
+              <input
+                type="text"
+                id="f-nom"
+                name="nom"
+                placeholder="Marie Dupont"
+                required
+                autocomplete="name"
+              />
+            </div>
+            <div class="form-group">
+              <label for="f-societe">Société</label>
+              <input
+                type="text"
+                id="f-societe"
+                name="societe"
+                placeholder="Station Total Saint-Denis"
+                required
+                autocomplete="organization"
+              />
+            </div>
           </div>
           <div class="form-group">
-            <label for="f-societe">Société</label>
+            <label for="f-telephone">Téléphone</label>
             <input
-              type="text"
-              id="f-societe"
-              name="societe"
-              placeholder="Station Total Saint-Denis"
+              type="tel"
+              id="f-telephone"
+              name="telephone"
+              placeholder="+262 6 92 XX XX XX"
               required
-              autocomplete="organization"
+              autocomplete="tel"
             />
           </div>
-        </div>
-        <div class="form-group">
-          <label for="f-telephone">Téléphone</label>
-          <input
-            type="tel"
-            id="f-telephone"
-            name="telephone"
-            placeholder="+262 6 92 XX XX XX"
-            required
-            autocomplete="tel"
-          />
-        </div>
-        <button type="submit" class="btn btn-primary cta-submit">
-          Envoyer ma demande
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </button>
-        <p class="form-note">Votre compte est activé sous 24h ouvrées. Aucun engagement.</p>
-      </form>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary cta-submit">
+              Envoyer ma demande
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </div>
+          <p class="form-alt">
+            Ou <a href="/inscription" class="form-alt-link">inscrivez-vous directement →</a>
+          </p>
+        </form>
+      </div>
     </div>
   </div>
 </section>
@@ -103,13 +129,14 @@
 <style>
 .cta-section {
   padding: clamp(var(--space-16), 7vw, var(--space-24)) 0;
-  background: var(--color-surface);
+  background: var(--color-bg);
+  border-top: 1px solid var(--color-border);
 }
 
 .cta-inner {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: clamp(var(--space-12), 6vw, var(--space-20));
+  gap: clamp(var(--space-12), 7vw, var(--space-24));
   align-items: start;
 }
 
@@ -130,6 +157,30 @@
   line-height: 1.65;
   color: var(--color-muted);
   max-width: 38ch;
+  margin-bottom: var(--space-8);
+}
+
+/* Perks list */
+.cta-perks {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.cta-perks li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.cta-perks li svg {
+  color: var(--color-primary);
+  flex-shrink: 0;
 }
 
 /* Form */
@@ -147,15 +198,15 @@
   gap: var(--space-2);
 }
 
-label {
+.cta-form label {
   font-family: var(--font-body);
   font-size: var(--text-sm);
   font-weight: 500;
   color: var(--color-ink);
 }
 
-input[type="text"],
-input[type="tel"] {
+.cta-form input[type="text"],
+.cta-form input[type="tel"] {
   width: 100%;
   padding: 0.8125rem 1rem;
   font-family: var(--font-body);
@@ -167,29 +218,42 @@ input[type="tel"] {
   transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
   min-height: 44px;
   outline: none;
+  box-sizing: border-box;
 }
 
-input::placeholder { color: var(--color-muted); }
+.cta-form input::placeholder { color: var(--color-muted); }
 
-input:focus {
+.cta-form input:focus {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.15);
 }
 
-input.input-error {
+.cta-form input.input-error {
   border-color: oklch(0.55 0.20 25);
   box-shadow: 0 0 0 3px oklch(0.55 0.20 25 / 0.12);
 }
 
-.cta-submit { align-self: flex-start; }
+.form-actions { display: flex; }
 
-.form-note {
+.cta-submit { gap: var(--space-3); }
+
+/* Alt link */
+.form-alt {
   font-family: var(--font-body);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--color-muted);
   margin-top: calc(-1 * var(--space-2));
 }
 
+.form-alt-link {
+  color: var(--color-primary-deep);
+  font-weight: 500;
+  text-decoration: none;
+  transition: color var(--dur-fast);
+}
+.form-alt-link:hover { color: var(--color-primary); }
+
+/* Success */
 .form-success {
   font-family: var(--font-body);
   font-size: var(--text-lg);
@@ -199,6 +263,20 @@ input.input-error {
   line-height: 1.5;
 }
 
+/* Scroll reveal */
+@media (prefers-reduced-motion: no-preference) {
+  .cta-inner.will-animate {
+    opacity: 0;
+    transform: translateY(36px);
+    transition: opacity 0.85s var(--ease-out-expo), transform 0.85s var(--ease-out-expo);
+  }
+  .cta-inner.will-animate.is-revealed {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Responsive */
 @media (max-width: 900px) {
   .cta-inner { grid-template-columns: 1fr; }
   .cta-sub   { max-width: none; }
@@ -208,3 +286,17 @@ input.input-error {
   .form-row { grid-template-columns: 1fr; }
 }
 </style>
+
+<script>
+  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const inner = document.querySelector<HTMLElement>('.cta-inner');
+    if (inner) {
+      inner.classList.add('will-animate');
+      new IntersectionObserver(([e], obs) => {
+        if (!e.isIntersecting) return;
+        inner.classList.add('is-revealed');
+        obs.unobserve(inner);
+      }, { threshold: 0.12 }).observe(inner);
+    }
+  }
+</script>

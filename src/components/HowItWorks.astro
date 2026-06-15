@@ -1,17 +1,17 @@
 ---
 const steps = [
   {
-    n: '1',
+    n: '01',
     title: 'Créez votre compte',
     body: 'Remplissez notre formulaire en ligne. Validation sous 24h ouvrées, sans engagement.',
   },
   {
-    n: '2',
+    n: '02',
     title: 'Parcourez le catalogue',
     body: '200+ références classées par catégorie, avec prix et disponibilité en temps réel.',
   },
   {
-    n: '3',
+    n: '03',
     title: 'Recevez votre commande',
     body: 'Livraison sous 48h à votre point de vente, partout à La Réunion.',
   },
@@ -31,9 +31,10 @@ const steps = [
             <p class="step-body">{step.body}</p>
           </div>
           {i < steps.length - 1 && (
-            <div class="step-arrow" aria-hidden="true">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                <path d="M5 12h14M14 7l5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <div class="step-connector" aria-hidden="true">
+              <svg width="32" height="2" viewBox="0 0 32 2" fill="none">
+                <line x1="0" y1="1" x2="32" y2="1"
+                  stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 3"/>
               </svg>
             </div>
           )}
@@ -65,24 +66,19 @@ const steps = [
   gap: var(--space-4);
 }
 
-.step {
-  flex: 1;
-}
+.step { flex: 1; }
 
+/* Large proud numeral — no circle */
 .step-n {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2.5rem;
-  height: 2.5rem;
-  border-radius: var(--radius-full);
-  background: var(--color-primary);
-  color: white;
+  display: block;
   font-family: var(--font-display);
-  font-size: 1rem;
+  font-size: clamp(2.5rem, 6vw, 4rem);
   font-weight: 700;
+  letter-spacing: -0.04em;
+  color: var(--color-primary);
+  line-height: 1;
   margin-bottom: var(--space-5);
-  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .step-title {
@@ -103,11 +99,28 @@ const steps = [
   max-width: 26ch;
 }
 
-.step-arrow {
+/* Connector — aligned to midpoint of numeral */
+.step-connector {
   color: var(--color-border-strong);
   flex-shrink: 0;
-  margin-top: 0.75rem;
+  /* align to vertical center of the step-n numeral */
+  margin-top: calc(clamp(2.5rem, 6vw, 4rem) / 2 - 1px);
   align-self: flex-start;
+}
+
+/* Scroll reveals — staggered per child */
+@media (prefers-reduced-motion: no-preference) {
+  .step.will-animate,
+  .step-connector.will-animate {
+    opacity: 0;
+    transform: translateY(28px);
+    transition: opacity 0.65s var(--ease-out-expo), transform 0.65s var(--ease-out-expo);
+  }
+  .step.will-animate.is-revealed,
+  .step-connector.will-animate.is-revealed {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 @media (max-width: 640px) {
@@ -115,12 +128,35 @@ const steps = [
     flex-direction: column;
     gap: var(--space-8);
   }
-  .step-arrow {
+  .step-connector {
     transform: rotate(90deg);
     margin-top: 0;
     align-self: flex-start;
-    margin-left: var(--space-4);
+    margin-left: clamp(1.25rem, 3vw, 2rem);
   }
+  .step-connector.will-animate { transform: rotate(90deg) translateY(28px); }
+  .step-connector.will-animate.is-revealed { transform: rotate(90deg); }
   .step-body { max-width: none; }
 }
 </style>
+
+<script>
+  const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!prefersReduced) {
+    const section = document.querySelector('.how-it-works');
+    const items   = section?.querySelectorAll<HTMLElement>('.step, .step-connector');
+    items?.forEach(el => el.classList.add('will-animate'));
+
+    const obs = new IntersectionObserver(entries => {
+      entries.forEach(e => {
+        if (!e.isIntersecting) return;
+        items?.forEach((el, i) =>
+          setTimeout(() => el.classList.add('is-revealed'), i * 110)
+        );
+        obs.unobserve(e.target);
+      });
+    }, { threshold: 0.15 });
+
+    if (section) obs.observe(section);
+  }
+</script>

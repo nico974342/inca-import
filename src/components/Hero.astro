@@ -1,9 +1,13 @@
 ---
 ---
 <section class="hero">
-  <div class="container hero-inner">
+  <div class="hero-parallax" aria-hidden="true"></div>
+  <div class="hero-inner container">
     <div class="hero-content">
-      <p class="hero-tag" data-h="1" aria-hidden="true">Grossiste B2B · La Réunion</p>
+      <div class="hero-badge" data-h="1">
+        <span class="badge-dot" aria-hidden="true"></span>
+        Fournisseur B2B · La&nbsp;Réunion
+      </div>
       <h1 class="hero-heading" data-h="2">
         Boissons, snacks&nbsp;&amp;&nbsp;confiseries —<br>
         toujours en&nbsp;stock, livrés chez&nbsp;vous.
@@ -32,25 +36,65 @@
   align-items: center;
 }
 
+/* Dot grid — on parallax layer */
+.hero-parallax {
+  position: absolute;
+  inset: -20% 0;
+  background-image: radial-gradient(circle, oklch(1 0 0 / 0.12) 1px, transparent 1px);
+  background-size: 28px 28px;
+  pointer-events: none;
+  z-index: 0;
+  will-change: transform;
+}
+
 .hero-inner {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   padding-top: clamp(var(--space-16), 6vw, var(--space-24));
   padding-bottom: clamp(var(--space-16), 6vw, var(--space-24));
 }
 
-.hero-content {
-  max-width: 680px;
-}
+.hero-content { max-width: 680px; }
 
-/* Tag */
-.hero-tag {
+/* Badge */
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   font-family: var(--font-body);
   font-size: var(--text-sm);
   font-weight: 500;
-  color: rgba(255, 255, 255, 0.65);
+  color: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: var(--radius-full);
+  padding: 0.3125rem 0.875rem 0.3125rem 0.625rem;
+  margin-bottom: var(--space-6);
   letter-spacing: 0.01em;
-  margin-bottom: var(--space-5);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.88);
+  flex-shrink: 0;
+  position: relative;
+}
+
+.badge-dot::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+  animation: badge-pulse 2.6s var(--ease-out-quart) infinite;
+}
+
+@keyframes badge-pulse {
+  0%   { transform: scale(0.7); opacity: 0.8; }
+  65%  { transform: scale(1.7); opacity: 0; }
+  100% { transform: scale(1.7); opacity: 0; }
 }
 
 /* Heading */
@@ -58,19 +102,19 @@
   font-family: var(--font-display);
   font-size: var(--text-hero);
   font-weight: 700;
-  line-height: 1.08;
+  line-height: 1.07;
   letter-spacing: -0.025em;
   color: white;
   margin-bottom: var(--space-6);
 }
 
-/* Sub — white text at ≥18px + weight 500 gives 3.28:1 vs coral, passes SKILL large-text threshold */
+/* Sub */
 .hero-sub {
   font-family: var(--font-body);
   font-size: clamp(1.125rem, 2vw, 1.25rem);
   font-weight: 500;
   line-height: 1.65;
-  color: white;
+  color: rgba(255, 255, 255, 0.86);
   max-width: 520px;
   margin-bottom: var(--space-10);
 }
@@ -85,14 +129,15 @@
 /* Decorative 974 */
 .hero-deco {
   position: absolute;
-  right: -0.05em;
-  bottom: -0.18em;
+  right: -0.04em;
+  bottom: -0.2em;
+  z-index: 1;
   font-family: var(--font-display);
   font-size: clamp(10rem, 28vw, 22rem);
   font-weight: 700;
   line-height: 1;
   letter-spacing: -0.04em;
-  color: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.05);
   user-select: none;
   pointer-events: none;
   white-space: nowrap;
@@ -102,4 +147,20 @@
   .hero-heading { letter-spacing: -0.02em; }
   .hero-deco    { display: none; }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .badge-dot::after { animation: none; }
+  .hero-parallax    { will-change: auto; }
+}
 </style>
+
+<script>
+  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const parallax = document.querySelector<HTMLElement>('.hero-parallax');
+    if (parallax) {
+      window.addEventListener('scroll', () => {
+        parallax.style.transform = `translateY(${window.scrollY * 0.28}px)`;
+      }, { passive: true });
+    }
+  }
+</script>

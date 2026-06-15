@@ -34,7 +34,7 @@ const categories = [
         <span class="cat-count">{cat.count}</span>
         <h2 class="cat-name">{cat.name}</h2>
         <p class="cat-desc">{cat.desc}</p>
-        <a href="#compte" class="cat-link">
+        <a href={`/catalogue?cat=${cat.slug}`} class="cat-link">
           Voir les {cat.name.toLowerCase()}
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -67,7 +67,6 @@ const categories = [
   min-height: 460px;
 }
 
-/* Alternate: flip on even bands */
 .cat-band--flip .cat-image { order: -1; }
 
 /* Content cell */
@@ -83,6 +82,7 @@ const categories = [
   background: var(--color-surface);
 }
 
+/* Count */
 .cat-count {
   display: inline-block;
   font-family: var(--font-mono);
@@ -93,6 +93,7 @@ const categories = [
   margin-bottom: var(--space-4);
 }
 
+/* Name */
 .cat-name {
   font-family: var(--font-display);
   font-size: clamp(2.25rem, 5vw, 3.5rem);
@@ -103,6 +104,7 @@ const categories = [
   line-height: 1.05;
 }
 
+/* Desc */
 .cat-desc {
   font-family: var(--font-body);
   font-size: var(--text-base);
@@ -112,6 +114,7 @@ const categories = [
   margin-bottom: var(--space-8);
 }
 
+/* Link */
 .cat-link {
   display: inline-flex;
   align-items: center;
@@ -121,10 +124,10 @@ const categories = [
   font-weight: 600;
   color: var(--color-primary-deep);
   text-decoration: none;
-  transition: gap var(--dur-fast) var(--ease-out-quart),
-              color var(--dur-fast);
+  transition: gap var(--dur-fast) var(--ease-out-quart), color var(--dur-fast);
+  align-self: flex-start;
 }
-.cat-link:hover { gap: var(--space-3); color: var(--color-ink); }
+.cat-link:hover { gap: var(--space-3); color: var(--color-primary); }
 .cat-link:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 3px;
@@ -140,10 +143,37 @@ const categories = [
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: transform 0.7s var(--ease-out-expo);
+  transition: transform 0.8s var(--ease-out-expo);
 }
 .cat-band:hover .cat-image img {
   transform: scale(1.04);
+}
+
+/* Scroll reveals — more pronounced */
+@media (prefers-reduced-motion: no-preference) {
+  .cat-content.will-animate {
+    opacity: 0;
+    transform: translateX(-52px);
+    transition: opacity 0.9s var(--ease-out-expo), transform 0.9s var(--ease-out-expo);
+  }
+  .cat-band--flip .cat-content.will-animate {
+    transform: translateX(52px);
+  }
+  .cat-content.will-animate.is-revealed {
+    opacity: 1;
+    transform: none;
+  }
+
+  .cat-image.will-animate {
+    opacity: 0;
+    transform: scale(1.08);
+    transition: opacity 1.0s var(--ease-out-expo), transform 1.0s var(--ease-out-expo);
+    transition-delay: 0.1s;
+  }
+  .cat-image.will-animate.is-revealed {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 /* Mobile */
@@ -159,4 +189,25 @@ const categories = [
   }
   .cat-desc { max-width: none; }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .cat-band:hover .cat-image img { transform: none; }
+}
 </style>
+
+<script>
+  const items = document.querySelectorAll<HTMLElement>('.cat-content, .cat-image');
+  items.forEach(el => el.classList.add('will-animate'));
+
+  const obs = new IntersectionObserver(
+    entries => entries.forEach(e => {
+      if (e.isIntersecting) {
+        e.target.classList.add('is-revealed');
+        obs.unobserve(e.target);
+      }
+    }),
+    { threshold: 0.12, rootMargin: '0px 0px -40px 0px' }
+  );
+
+  items.forEach(el => obs.observe(el));
+</script>

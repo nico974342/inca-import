@@ -1,0 +1,168 @@
+---
+const stats = [
+  { target: 120, suffix: '+', label: 'références au catalogue' },
+  { target: 3,   suffix: '',   label: 'points de vente livrés' },
+  { target: 7,   suffix: 'j/7', label: 'disponibilité garantie' },
+  { target: 100, suffix: '%',  label: 'réunionnais' },
+];
+---
+
+<section class="stats-strip" aria-label="Chiffres clés">
+  <div class="container">
+    <ul class="stats-list" role="list">
+      {stats.map(s => (
+        <li class="stat-item">
+          <span
+            class="stat-value"
+            data-target={s.target}
+            data-suffix={s.suffix}
+            aria-label={`${s.target}${s.suffix}`}
+          >
+            {s.target}{s.suffix}
+          </span>
+          <span class="stat-label">{s.label}</span>
+        </li>
+      ))}
+    </ul>
+  </div>
+</section>
+
+<style>
+.stats-strip {
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  padding: clamp(var(--space-10), 5vw, var(--space-16)) 0;
+}
+
+.stats-list {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: var(--space-4) var(--space-6);
+  position: relative;
+}
+
+.stat-item + .stat-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 20%;
+  bottom: 20%;
+  width: 1px;
+  background: var(--color-border-strong);
+}
+
+.stat-value {
+  display: block;
+  font-family: var(--font-display);
+  font-size: clamp(2.25rem, 5vw, 3.25rem);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  color: var(--color-primary);
+  line-height: 1;
+  margin-bottom: var(--space-2);
+  font-variant-numeric: tabular-nums;
+  /* will-change set by JS only when animating */
+}
+
+.stat-label {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-muted);
+  line-height: 1.4;
+  max-width: 14ch;
+}
+
+/* Scroll reveal on the strip */
+@media (prefers-reduced-motion: no-preference) {
+  .stat-item.will-animate {
+    opacity: 0;
+    transform: translateY(20px);
+    transition: opacity 0.6s var(--ease-out-expo), transform 0.6s var(--ease-out-expo);
+  }
+  .stat-item.will-animate:nth-child(2) { transition-delay: 0.08s; }
+  .stat-item.will-animate:nth-child(3) { transition-delay: 0.16s; }
+  .stat-item.will-animate:nth-child(4) { transition-delay: 0.24s; }
+  .stat-item.will-animate.is-revealed  { opacity: 1; transform: none; }
+}
+
+@media (max-width: 640px) {
+  .stats-list { grid-template-columns: repeat(2, 1fr); }
+  .stat-item:nth-child(3)::before {
+    display: none; /* top-left of 2×2: no left border */
+  }
+  .stat-item:nth-child(3),
+  .stat-item:nth-child(4) {
+    border-top: 1px solid var(--color-border-strong);
+  }
+}
+
+@media (max-width: 360px) {
+  .stats-list { grid-template-columns: 1fr; }
+  .stat-item::before { display: none; }
+  .stat-item + .stat-item { border-top: 1px solid var(--color-border); }
+}
+</style>
+
+<script>
+  const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const items = document.querySelectorAll<HTMLElement>('.stat-item');
+
+  if (!prefersReduced) {
+    items.forEach(el => el.classList.add('will-animate'));
+  }
+
+  function animateCounter(el: HTMLElement) {
+    const target  = parseInt(el.dataset.target ?? '0', 10);
+    const suffix  = el.dataset.suffix ?? '';
+    const duration = target > 20 ? 1400 : 900;
+
+    el.style.willChange = 'contents';
+    let start: number | null = null;
+
+    function step(ts: number) {
+      if (!start) start = ts;
+      const progress = Math.min((ts - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3); // ease-out-cubic
+      const current = Math.round(eased * target);
+      el.textContent = current + suffix;
+      if (progress < 1) {
+        requestAnimationFrame(step);
+      } else {
+        el.style.willChange = 'auto';
+      }
+    }
+
+    requestAnimationFrame(step);
+  }
+
+  const obs = new IntersectionObserver(
+    entries => entries.forEach(e => {
+      if (!e.isIntersecting) return;
+
+      const item = e.target as HTMLElement;
+      item.classList.add('is-revealed');
+      obs.unobserve(item);
+
+      if (!prefersReduced) {
+        // Delay counter start by the same time as the stagger
+        const delay = parseFloat(getComputedStyle(item).transitionDelay) * 1000;
+        const valueEl = item.querySelector<HTMLElement>('.stat-value');
+        if (valueEl) setTimeout(() => animateCounter(valueEl), delay);
+      }
+    }),
+    { threshold: 0.25 }
+  );
+
+  items.forEach(el => obs.observe(el));
+</script>
