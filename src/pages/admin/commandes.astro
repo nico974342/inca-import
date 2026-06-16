@@ -139,6 +139,34 @@ function orderTotal(orderId: string): number | null {
   return hasPrice ? total : null;
 }
 
+function pennylaneSummary(order: (typeof orders)[number], items: any[], total: number | null): string {
+  const fmt = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
+
+  const lines = items.map(item => {
+    const pu     = item.products?.price_ht;
+    const puNum  = pu != null ? Number(pu) : null;
+    const lineHt = puNum != null ? puNum * item.quantity : null;
+    return `- ${item.product_name}${item.unit ? ' (' + item.unit + ')' : ''} — Qté ${item.quantity} × ${puNum != null ? fmt(puNum) : '—'} = ${lineHt != null ? fmt(lineHt) : '—'}`;
+  });
+
+  const tva = total != null ? total * 0.085 : null;
+  const ttc = total != null && tva != null ? total + tva : null;
+
+  return [
+    `Client : ${order.nom}`,
+    order.societe ? `Société : ${order.societe}` : null,
+    order.email ? `Email : ${order.email}` : null,
+    order.telephone ? `Téléphone : ${order.telephone}` : null,
+    '',
+    'Produits :',
+    ...(lines.length ? lines : ['(aucun article)']),
+    '',
+    `Total HT : ${total != null ? fmt(total) : '—'}`,
+    `TVA (8,5%) : ${tva != null ? fmt(tva) : '—'}`,
+    `Total TTC : ${ttc != null ? fmt(ttc) : '—'}`,
+  ].filter((l): l is string => l !== null).join('\n');
+}
+
 const STATUS_LABEL: Record<string, string> = {
   en_attente:     'En attente',
   confirmee:      'Confirmée',
@@ -284,6 +312,19 @@ function shortId(id: string) {
 
                 {order.notes && (
                   <p class="order-notes"><strong>Notes :</strong> {order.notes}</p>
+                )}
+
+                {status === 'confirmee' && (
+                  <div class="pennylane-panel">
+                    <div class="pennylane-header">
+                      <span class="pennylane-tag">Outil interne</span>
+                      <h4 class="pennylane-title">Résumé Pennylane</h4>
+                      <button type="button" class="pennylane-copy-btn" data-copy-target={`pl-${order.id}`}>
+                        Copier tout
+                      </button>
+                    </div>
+                    <pre class="pennylane-content" id={`pl-${order.id}`}>{pennylaneSummary(order, items, total)}</pre>
+                  </div>
                 )}
               </div>
             </details>
@@ -618,6 +659,76 @@ details[open] .chevron { transform: rotate(180deg); }
 }
 .order-notes strong { color: var(--color-ink); }
 
+/* ── Pennylane summary panel ─────────────────── */
+.pennylane-panel {
+  margin-top: var(--space-4);
+  border: 1.5px dashed oklch(0.72 0.11 250);
+  border-radius: var(--radius-md);
+  background: oklch(0.96 0.02 250);
+  padding: var(--space-4);
+}
+
+.pennylane-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+.pennylane-tag {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: oklch(0.38 0.13 250);
+  background: oklch(0.90 0.05 250);
+  padding: 2px 9px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+
+.pennylane-title {
+  flex: 1;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: oklch(0.30 0.10 250);
+  margin: 0;
+}
+
+.pennylane-copy-btn {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: white;
+  background: oklch(0.45 0.14 250);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-4);
+  height: 32px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity var(--dur-fast), background var(--dur-fast);
+}
+.pennylane-copy-btn:hover { opacity: 0.88; }
+.pennylane-copy-btn--done { background: oklch(0.45 0.13 150); }
+
+.pennylane-content {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  color: oklch(0.28 0.02 250);
+  background: var(--color-bg);
+  border: 1px solid oklch(0.84 0.03 250);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
 /* ── Responsive ──────────────────────────────── */
 @media (max-width: 640px) {
   .summary-mid { display: none; }
@@ -626,3 +737,35 @@ details[open] .chevron { transform: rotate(180deg); }
   .items-table td:nth-child(3) { display: none; }
 }
 </style>
+
+<script>
+document.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement)?.closest('.pennylane-copy-btn') as HTMLButtonElement | null;
+  if (!btn) return;
+
+  const targetId = btn.dataset.copyTarget;
+  const el = targetId ? document.getElementById(targetId) : null;
+  if (!el) return;
+
+  const text = el.textContent ?? '';
+  const showCopied = () => {
+    const original = btn.textContent;
+    btn.textContent = 'Copié ✓';
+    btn.classList.add('pennylane-copy-btn--done');
+    setTimeout(() => {
+      btn.textContent = original;
+      btn.classList.remove('pennylane-copy-btn--done');
+    }, 1500);
+  };
+
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(showCopied).catch(() => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    });
+  }
+});
+</script>
