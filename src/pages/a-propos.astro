@@ -1,0 +1,202 @@
+---
+import Base from '../layouts/Base.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import { createAuthClient } from '../lib/supabase';
+
+const supabase = createAuthClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+---
+<Base title="À propos — Inca Import" description="L'histoire d'Inca Import, grossiste familial réunionnais basé à La Possession.">
+  <Nav user={user} />
+  <main>
+    <section class="about-hero">
+      <div class="container">
+        <p class="about-badge">Notre histoire</p>
+        <h1 class="about-heading">
+          Une affaire de famille,<br>au service de La&nbsp;Réunion.
+        </h1>
+        <p class="about-sub">
+          Inca Import est née d'une conviction simple&nbsp;: les gérants de stations-service
+          et de supérettes de l'île méritent un fournisseur fiable, réactif, et qui les connaît
+          vraiment.
+        </p>
+      </div>
+    </section>
+
+    <section class="about-story">
+      <div class="container about-story-grid">
+        <div class="about-photo" aria-hidden="true">
+          <span class="about-photo-label">Photo de l'équipe</span>
+        </div>
+        <div class="about-story-content">
+          <h2 class="about-story-title">Nicolas &amp; Arnaud Incana</h2>
+          <p>
+            Inca Import est dirigée par Nicolas et Arnaud Incana, deux frères réunionnais qui ont
+            grandi sur l'île et connaissent ses routes, ses commerces et ses contraintes mieux que
+            quiconque.
+          </p>
+          <p>
+            Ce qui a commencé comme une petite activité familiale est aujourd'hui un grossiste
+            de référence pour les professionnels de la distribution de boissons, snacks et
+            confiseries à La Réunion. Mais l'esprit reste le même&nbsp;: quand vous appelez Inca
+            Import, vous parlez à quelqu'un qui vous connaît — pas à un centre d'appels.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="about-warehouse">
+      <div class="container about-warehouse-grid">
+        <div class="about-warehouse-content">
+          <h2 class="about-story-title">Notre entrepôt à La Possession</h2>
+          <p>
+            Toute notre logistique part de notre entrepôt situé à La Possession. C'est de là que
+            partent chaque jour les commandes vers les stations-service et supérettes de toute
+            l'île, avec un objectif constant&nbsp;: un réassort sans surprise, livré en 48h.
+          </p>
+          <p>
+            Un stock permanent de plus de 120 références nous permet de répondre rapidement à
+            toutes les demandes, sans rupture et sans intermédiaire.
+          </p>
+        </div>
+        <div class="about-photo" aria-hidden="true">
+          <span class="about-photo-label">Photo de l'entrepôt</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="about-mission">
+      <div class="container">
+        <h2 class="about-mission-title">Notre mission</h2>
+        <p class="about-mission-body">
+          Approvisionner durablement les stations-service et supérettes de La Réunion, avec un
+          service à taille humaine, une livraison fiable, et l'accompagnement d'une équipe locale
+          qui comprend les réalités du terrain.
+        </p>
+      </div>
+    </section>
+  </main>
+  <Footer />
+</Base>
+
+<style>
+.about-hero {
+  padding: clamp(var(--space-16), 8vw, var(--space-24)) 0 clamp(var(--space-12), 6vw, var(--space-16));
+  background: var(--color-primary);
+}
+
+.about-badge {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.8);
+  letter-spacing: 0.04em;
+  margin-bottom: var(--space-4);
+}
+
+.about-heading {
+  font-family: var(--font-display);
+  font-size: var(--text-hero);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.08;
+  color: white;
+  max-width: 760px;
+  margin-bottom: var(--space-6);
+  text-wrap: balance;
+}
+
+.about-sub {
+  font-family: var(--font-body);
+  font-size: var(--text-lg);
+  line-height: 1.65;
+  color: rgba(255, 255, 255, 0.86);
+  max-width: 560px;
+}
+
+.about-story,
+.about-warehouse {
+  padding: clamp(var(--space-16), 7vw, var(--space-24)) 0;
+}
+
+.about-warehouse {
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.about-story-grid,
+.about-warehouse-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: clamp(var(--space-10), 6vw, var(--space-20));
+  align-items: center;
+}
+
+.about-photo {
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, var(--color-primary), oklch(0.45 0.13 45.9));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.about-photo-label {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.about-story-title {
+  font-family: var(--font-display);
+  font-size: var(--text-3xl);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--color-ink);
+  margin-bottom: var(--space-5);
+}
+
+.about-story-content p,
+.about-warehouse-content p {
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.75;
+  color: var(--color-muted);
+  max-width: 56ch;
+  margin-bottom: var(--space-4);
+}
+
+.about-mission {
+  padding: clamp(var(--space-16), 7vw, var(--space-24)) 0;
+  text-align: center;
+}
+
+.about-mission-title {
+  font-family: var(--font-display);
+  font-size: var(--text-3xl);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--color-ink);
+  margin-bottom: var(--space-5);
+}
+
+.about-mission-body {
+  font-family: var(--font-body);
+  font-size: var(--text-lg);
+  line-height: 1.7;
+  color: var(--color-muted);
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+@media (max-width: 768px) {
+  .about-story-grid,
+  .about-warehouse-grid {
+    grid-template-columns: 1fr;
+  }
+  .about-warehouse .about-warehouse-grid .about-photo { order: -1; }
+}
+</style>

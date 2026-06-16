@@ -1,0 +1,133 @@
+---
+const points = [
+  {
+    title: 'Société réunionnaise',
+    body: 'Une entreprise familiale basée à La Réunion, qui connaît le terrain et ses contraintes.',
+  },
+  {
+    title: 'Large choix',
+    body: '120+ références en stock permanent — boissons, snacks et confiseries.',
+  },
+  {
+    title: 'Service réactif',
+    body: 'Une équipe disponible 7 jours sur 7 pour répondre à vos commandes et questions.',
+  },
+  {
+    title: 'Livraison 48h garantie',
+    body: 'Votre commande arrive en 48h, directement à votre point de vente.',
+  },
+  {
+    title: 'Accompagnement personnalisé',
+    body: 'Un interlocuteur dédié qui connaît votre activité, pas un centre d\'appels.',
+  },
+];
+---
+
+<section class="why-choose" aria-labelledby="why-choose-heading">
+  <div class="container">
+    <h2 class="why-choose-heading" id="why-choose-heading">Pourquoi choisir Inca Import&nbsp;?</h2>
+
+    <div class="why-choose-grid">
+      {points.map(p => (
+        <div class="why-choose-card">
+          <span class="why-choose-mark" aria-hidden="true"></span>
+          <h3 class="why-choose-title">{p.title}</h3>
+          <p class="why-choose-body">{p.body}</p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+.why-choose {
+  padding: clamp(var(--space-16), 7vw, var(--space-24)) 0;
+  background: var(--color-bg);
+}
+
+.why-choose-heading {
+  font-family: var(--font-display);
+  font-size: var(--text-4xl);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--color-ink);
+  text-align: center;
+  margin-bottom: clamp(var(--space-10), 5vw, var(--space-14));
+  text-wrap: balance;
+}
+
+.why-choose-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-5);
+}
+
+.why-choose-card {
+  padding: var(--space-7) var(--space-6);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur-base), transform var(--dur-base);
+}
+
+.why-choose-card:hover {
+  border-color: var(--color-primary);
+  transform: translateY(-3px);
+}
+
+.why-choose-mark {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  margin-bottom: var(--space-5);
+}
+
+.why-choose-title {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--color-ink);
+  margin-bottom: var(--space-2);
+}
+
+.why-choose-body {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--color-muted);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .why-choose-card.will-animate {
+    opacity: 0;
+    transform: translateY(18px);
+    transition: opacity 0.6s var(--ease-out-expo), transform 0.6s var(--ease-out-expo);
+  }
+  .why-choose-card.will-animate.is-revealed { opacity: 1; transform: none; }
+}
+</style>
+
+<script>
+  const cards = document.querySelectorAll<HTMLElement>('.why-choose-card');
+  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    cards.forEach((el, i) => {
+      el.classList.add('will-animate');
+      el.style.transitionDelay = `${Math.min(i, 4) * 0.07}s`;
+    });
+
+    const obs = new IntersectionObserver(
+      entries => entries.forEach(e => {
+        if (e.isIntersecting) {
+          e.target.classList.add('is-revealed');
+          obs.unobserve(e.target);
+        }
+      }),
+      { threshold: 0.2 }
+    );
+
+    cards.forEach(el => obs.observe(el));
+  }
+</script>

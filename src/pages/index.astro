@@ -7,7 +7,9 @@ import Categories from '../components/Categories.astro';
 import WhyInca from '../components/WhyInca.astro';
 import HowItWorks from '../components/HowItWorks.astro';
 import Brands from '../components/Brands.astro';
-import Testimonial from '../components/Testimonial.astro';
+import WhyChoose from '../components/WhyChoose.astro';
+import DeliveryCoverage from '../components/DeliveryCoverage.astro';
+import FAQ from '../components/FAQ.astro';
 import CTAForm from '../components/CTAForm.astro';
 import Footer from '../components/Footer.astro';
 import { createAuthClient } from '../lib/supabase';
@@ -24,7 +26,9 @@ const { data: { user } } = await supabase.auth.getUser();
     <WhyInca />
     <HowItWorks />
     <Brands />
-    <Testimonial />
+    <WhyChoose />
+    <DeliveryCoverage />
+    <FAQ />
     <CTAForm />
   </main>
   <Footer />
