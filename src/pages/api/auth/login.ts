@@ -17,5 +17,8 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
     return redirect('/admin/login?error=identifiants_invalides');
   }
 
-  return redirect('/admin');
+  const userAgent = request.headers.get('user-agent') ?? '';
+  const isMobile = /iPhone|iPad|iPod|Android/i.test(userAgent);
+
+  return redirect(isMobile ? '/admin/commande-rapide' : '/admin');
 };

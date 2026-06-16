@@ -37,6 +37,7 @@ if (Astro.request.method === 'POST') {
       telephone: user.user_metadata?.telephone ?? '',
       email:     user.email ?? '',
       notes,
+      status:    'en_attente',
     })
     .select('id')
     .single();
