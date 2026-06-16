@@ -246,6 +246,8 @@ const { title, activeNav } = Astro.props;
   border-radius: var(--radius-sm);
   transition: color var(--dur-fast), background var(--dur-fast);
   line-height: 1.4;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 .nav-link svg { flex-shrink: 0; }
 .nav-link:hover { color: var(--color-ink); background: var(--color-surface); }
@@ -283,6 +285,8 @@ const { title, activeNav } = Astro.props;
   cursor: pointer;
   width: 100%;
   transition: color var(--dur-fast), background var(--dur-fast);
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 .sidebar-site-link:hover,
 .sidebar-logout-btn:hover {
@@ -315,6 +319,8 @@ const { title, activeNav } = Astro.props;
   color: var(--color-ink);
   cursor: pointer;
   flex-shrink: 0;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 .topbar-menu-btn:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 
@@ -342,9 +348,13 @@ const { title, activeNav } = Astro.props;
   background: oklch(0 0 0 / 0.35);
   z-index: calc(var(--z-sticky) + 1);
   opacity: 0;
+  pointer-events: none;
   transition: opacity var(--dur-base);
 }
-.sidebar-overlay.is-visible { opacity: 1; }
+.sidebar-overlay.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
 
 /* ── Main content ────────────────────────────────── */
 .admin-main {
@@ -370,6 +380,12 @@ const { title, activeNav } = Astro.props;
 .admin-content {
   padding: var(--space-6) var(--space-8);
   flex: 1;
+}
+
+.admin-content :global(button),
+.admin-content :global(a) {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* ── Responsive ──────────────────────────────────── */
