@@ -8,8 +8,6 @@ const { user } = Astro.props;
 const isClient = user?.user_metadata?.role === 'client';
 ---
 <header class="site-header" id="site-header">
-  <input type="checkbox" id="navToggle" class="nav-toggle-checkbox" />
-
   <div class="container nav-inner">
 
     <a href="/" class="wordmark" aria-label="Inca Import — accueil">
@@ -39,33 +37,35 @@ const isClient = user?.user_metadata?.role === 'client';
       )}
     </div>
 
-    <label for="navToggle" class="nav-toggle" aria-label="Ouvrir le menu">
-      <span></span>
-      <span></span>
-      <span></span>
-    </label>
-  </div>
+    <details class="nav-details">
+      <summary class="nav-toggle" aria-label="Ouvrir le menu">
+        <span></span>
+        <span></span>
+        <span></span>
+      </summary>
 
-  <div class="nav-mobile" id="mobile-menu">
-    <nav aria-label="Navigation mobile">
-      <a href="/catalogue">Catalogue</a>
-      <a href="#marques">Nos marques</a>
-      <a href="/inscription">Devenir client</a>
-      {isClient ? (
-        <>
-          <a href="/mes-commandes">Mes commandes</a>
-          <a href="/mon-compte" class="mobile-user">{user?.user_metadata?.nom ?? user?.email}</a>
-          <form action="/api/auth/client-logout" method="POST" class="mobile-logout-form">
-            <button type="submit" class="mobile-logout-btn">Déconnexion</button>
-          </form>
-        </>
-      ) : (
-        <>
-          <a href="/connexion">Connexion</a>
-          <a href="/inscription" class="btn btn-primary mobile-cta">Ouvrir un compte</a>
-        </>
-      )}
-    </nav>
+      <div class="nav-mobile" id="mobile-menu">
+        <nav aria-label="Navigation mobile">
+          <a href="/catalogue">Catalogue</a>
+          <a href="#marques">Nos marques</a>
+          <a href="/inscription">Devenir client</a>
+          {isClient ? (
+            <>
+              <a href="/mes-commandes">Mes commandes</a>
+              <a href="/mon-compte" class="mobile-user">{user?.user_metadata?.nom ?? user?.email}</a>
+              <form action="/api/auth/client-logout" method="POST" class="mobile-logout-form">
+                <button type="submit" class="mobile-logout-btn">Déconnexion</button>
+              </form>
+            </>
+          ) : (
+            <>
+              <a href="/connexion">Connexion</a>
+              <a href="/inscription" class="btn btn-primary mobile-cta">Ouvrir un compte</a>
+            </>
+          )}
+        </nav>
+      </div>
+    </details>
   </div>
 </header>
 
@@ -95,16 +95,6 @@ const isClient = user?.user_metadata?.role === 'client';
   align-items: center;
   height: 64px;
   gap: var(--space-6);
-}
-
-/* Checkbox-hack toggle — visually hidden but focusable/operable via keyboard (Tab + Space), no JS required */
-.nav-toggle-checkbox {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
 }
 
 /* Wordmark */
@@ -179,22 +169,31 @@ a.nav-user:hover { color: var(--color-primary); }
 }
 .nav-ghost:hover { color: var(--color-ink); }
 
-/* Hamburger */
-.nav-toggle {
+/* Disclosure widget wrapping the hamburger + mobile panel — native open/close, no JS or CSS state hacks */
+.nav-details {
   display: none;
+  margin-left: auto;
+}
+
+/* Hamburger (the <summary>) */
+.nav-toggle {
+  display: flex;
   flex-direction: column;
   justify-content: center;
   gap: 5px;
-  background: none;
-  border: none;
+  list-style: none;
   padding: var(--space-2);
   cursor: pointer;
-  margin-left: auto;
   min-width: 44px;
   min-height: 44px;
   align-items: center;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+}
+.nav-toggle::-webkit-details-marker,
+.nav-toggle::marker {
+  display: none;
+  content: '';
 }
 .nav-toggle span {
   display: block;
@@ -205,32 +204,19 @@ a.nav-user:hover { color: var(--color-primary); }
   transition: transform var(--dur-base) var(--ease-out-quart),
               opacity var(--dur-fast);
 }
-#navToggle:checked ~ .nav-inner .nav-toggle span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
-#navToggle:checked ~ .nav-inner .nav-toggle span:nth-child(2) { opacity: 0; transform: scaleX(0); }
-#navToggle:checked ~ .nav-inner .nav-toggle span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+.nav-details[open] .nav-toggle span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+.nav-details[open] .nav-toggle span:nth-child(2) { opacity: 0; transform: scaleX(0); }
+.nav-details[open] .nav-toggle span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
 
-/* Mobile menu */
+/* Mobile menu — rendered by the browser only while <details> is open */
 .nav-mobile {
-  display: none;
   position: fixed;
   inset: 64px 0 0 0;
   background: var(--color-bg);
   z-index: var(--z-dropdown);
   overflow-y: auto;
-  transform: translateY(-8px);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--dur-base) var(--ease-out-quart),
-              transform var(--dur-base) var(--ease-out-quart);
-}
-#navToggle:checked ~ .nav-mobile {
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
 }
 
-/* Lock background scroll while menu is open (progressive — degrades gracefully without :has support) */
-body:has(#navToggle:checked) { overflow: hidden; }
 .nav-mobile nav {
   display: flex;
   flex-direction: column;
@@ -282,8 +268,7 @@ a.mobile-user:hover { color: var(--color-primary); }
 @media (max-width: 768px) {
   .nav-links,
   .nav-actions { display: none; }
-  .nav-toggle  { display: flex; }
-  .nav-mobile  { display: block; }
+  .nav-details { display: block; }
   .nav-inner   { gap: var(--space-4); }
 }
 </style>
