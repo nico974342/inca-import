@@ -1,0 +1,206 @@
+---
+import Base from '../layouts/Base.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import { createAuthClient } from '../lib/supabase';
+
+const supabase = createAuthClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+---
+<Base
+  title="Conditions générales de vente — Inca Import"
+  description="Conditions générales de vente B2B d'Inca Import : prix, paiement, livraison et réclamations à La Réunion."
+>
+  <Nav user={user} />
+  <main class="legal-main">
+    <div class="container">
+      <article class="legal-article">
+
+        <header class="legal-header">
+          <h1 class="legal-title">Conditions générales de vente</h1>
+          <p class="legal-updated">En vigueur au 1er janvier 2025</p>
+        </header>
+
+        <section class="legal-section">
+          <h2>1. Objet et champ d'application</h2>
+          <p>
+            Les présentes conditions générales de vente (CGV) régissent exclusivement les relations
+            commerciales entre la société <strong>INCA IMPORT</strong> (SIRET 945 112 753), grossiste
+            en boissons, snacks et confiseries, et ses clients professionnels (commerçants, gérants
+            de stations-service, supérettes, etc.). Elles s'appliquent à toute commande passée via
+            la plateforme inca-import.fr, à l'exclusion de toute vente aux consommateurs.
+          </p>
+          <p>
+            Toute commande implique l'acceptation sans réserve des présentes CGV par le client
+            professionnel, qui reconnaît en avoir pris connaissance préalablement.
+          </p>
+        </section>
+
+        <section class="legal-section">
+          <h2>2. Prix</h2>
+          <p>
+            Les prix des produits sont indiqués <strong>hors taxes (HT)</strong> sur le catalogue et
+            les bons de commande. S'y ajoute la <strong>TVA au taux de 8,5 %</strong>, taux applicable
+            dans les départements et régions d'outre-mer (DOM) conformément à l'article 296 du Code
+            général des impôts.
+          </p>
+          <p>
+            INCA IMPORT se réserve le droit de modifier ses tarifs à tout moment ; les produits sont
+            facturés sur la base des prix en vigueur au jour de la validation de la commande.
+          </p>
+        </section>
+
+        <section class="legal-section">
+          <h2>3. Commandes</h2>
+          <p>
+            Les commandes sont passées par le client via son espace professionnel sur la plateforme.
+            Toute commande validée fait l'objet d'une confirmation par e-mail. INCA IMPORT se réserve
+            le droit de refuser ou d'annuler toute commande en cas de compte client suspendu, d'impayé
+            antérieur ou de rupture de stock.
+          </p>
+        </section>
+
+        <section class="legal-section">
+          <h2>4. Conditions de paiement</h2>
+          <p>
+            Sauf accord particulier, le délai de paiement est fixé à <strong>30 jours</strong> à
+            compter de la date d'émission de la facture, conformément aux dispositions de la loi
+            n°2008-776 du 4 août 2008 de modernisation de l'économie (LME) et à l'article L.441-10
+            du Code de commerce.
+          </p>
+          <p>
+            Tout retard de paiement entraîne, de plein droit et sans mise en demeure préalable,
+            l'application de pénalités de retard au taux d'intérêt légal en vigueur majoré de 10 points,
+            ainsi qu'une indemnité forfaitaire pour frais de recouvrement de 40 €, conformément à
+            l'article L.441-10 du Code de commerce.
+          </p>
+        </section>
+
+        <section class="legal-section">
+          <h2>5. Livraison</h2>
+          <p>
+            INCA IMPORT livre exclusivement sur le territoire de <strong>La Réunion</strong>. Les
+            délais de livraison sont communiqués à titre indicatif lors de la validation de la
+            commande et ne sauraient engager la responsabilité d'INCA IMPORT en cas de retard
+            imputable à des circonstances extérieures (transport, force majeure).
+          </p>
+          <p>
+            Le client est tenu de vérifier l'état de la livraison à réception et de formuler toute
+            réserve auprès du transporteur.
+          </p>
+        </section>
+
+        <section class="legal-section">
+          <h2>6. Réclamations</h2>
+          <p>
+            Toute réclamation relative à une non-conformité, un défaut ou une erreur de livraison
+            doit être adressée à INCA IMPORT dans un délai de <strong>48 heures</strong> à compter
+            de la réception de la commande, par e-mail à
+            <a href="mailto:inca-import@hotmail.com">inca-import@hotmail.com</a>, accompagnée si
+            possible de photographies. Passé ce délai, la commande est réputée conforme et acceptée
+            sans réserve.
+          </p>
+        </section>
+
+        <section class="legal-section">
+          <h2>7. Responsabilité et garanties</h2>
+          <p>
+            INCA IMPORT garantit la conformité des produits livrés aux commandes passées. Sa
+            responsabilité ne saurait être engagée en cas de mauvaise utilisation, stockage
+            inapproprié ou revente des produits par le client en dehors des conditions normales
+            de conservation.
+          </p>
+        </section>
+
+        <section class="legal-section">
+          <h2>8. Droit applicable et litiges</h2>
+          <p>
+            Les présentes CGV sont soumises au <strong>droit français</strong>. En cas de litige
+            relatif à leur interprétation ou à leur exécution, et après tentative de résolution
+            amiable, compétence exclusive est attribuée aux <strong>tribunaux compétents de
+            Saint-Paul, La Réunion</strong>, même en cas de pluralité de défendeurs ou de recours
+            en garantie.
+          </p>
+        </section>
+
+      </article>
+    </div>
+  </main>
+  <Footer />
+</Base>
+
+<style>
+.legal-main {
+  padding: clamp(var(--space-10), 6vw, var(--space-20)) 0;
+}
+
+.legal-article {
+  max-width: 720px;
+}
+
+.legal-header {
+  margin-bottom: clamp(var(--space-10), 5vw, var(--space-16));
+  padding-bottom: var(--space-8);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.legal-title {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--color-ink);
+  line-height: 1.08;
+  margin-bottom: var(--space-3);
+  text-wrap: balance;
+}
+
+.legal-updated {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+
+.legal-section {
+  margin-bottom: clamp(var(--space-8), 4vw, var(--space-12));
+  padding-bottom: clamp(var(--space-8), 4vw, var(--space-12));
+  border-bottom: 1px solid var(--color-border);
+}
+
+.legal-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+.legal-section h2 {
+  font-family: var(--font-display);
+  font-size: clamp(1.125rem, 2.5vw, 1.375rem);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--color-ink);
+  margin-bottom: var(--space-5);
+  line-height: 1.2;
+}
+
+.legal-section p {
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.75;
+  color: oklch(0.30 0.015 45.9);
+  max-width: 68ch;
+  margin-bottom: var(--space-4);
+  text-wrap: pretty;
+}
+
+.legal-section p:last-child { margin-bottom: 0; }
+
+.legal-section a {
+  color: var(--color-primary-deep);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  transition: color var(--dur-fast);
+}
+.legal-section a:hover { color: var(--color-primary); }
+</style>
