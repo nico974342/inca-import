@@ -1,19 +1,31 @@
 ---
 const communes = [
-  'Saint-Denis',
-  'Saint-Paul',
-  'Le Port',
-  'Saint-Pierre',
-  'Saint-Leu',
-  'Saint-Benoît',
-  'Sainte-Marie',
-  'Saint-André',
+  { name: 'Saint-Denis',  x: 194.79, y: 54.39  },
+  { name: 'Sainte-Marie', x: 253.35, y: 65.02  },
+  { name: 'Saint-André',  x: 311.15, y: 106.79 },
+  { name: 'Saint-Benoît', x: 347.98, y: 150.16 },
+  { name: 'Saint-Pierre', x: 212.08, y: 338.85 },
+  { name: 'Saint-Leu',    x: 103.68, y: 234.25 },
+  { name: 'Le Port',      x: 104.66, y: 90.48  },
+  { name: 'Saint-Paul',   x: 92.44,  y: 135.15 },
 ];
 
-const lat = -21.115141;
-const lng = 55.536384;
-const zoom = 10;
-const mapSrc = `https://www.google.com/maps?q=${lat},${lng}&z=${zoom}&output=embed`;
+const islandPath =
+  'M61.28,153.33 L65.62,162.51 L64.15,178 L83.01,197.2 L82.39,199.53 L92.74,210.59 ' +
+  'L93.19,221.8 L101.82,228.51 L102.18,242.3 L98.16,254.69 L105.41,271.37 L127.09,289.19 ' +
+  'L128.1,298.12 L132.2,302.84 L162.48,310.27 L181.88,329.86 L195.25,332.02 L201.76,340.19 ' +
+  'L210.28,343.23 L212.97,340.12 L212.35,344.3 L215.63,346.62 L225.81,346.01 L246.77,354.08 ' +
+  'L253.71,360.4 L256.34,358.46 L266.11,361.73 L274.42,358.73 L288.03,368.42 L303.5,365.64 ' +
+  'L309.1,370 L316.63,365.65 L323.43,366.42 L328.69,360.77 L345,361.89 L356.09,357.49 ' +
+  'L369.24,356.42 L372.59,353.42 L383.38,355.02 L396.04,345.7 L402.05,336.87 L399.84,320.32 ' +
+  'L402.42,306.96 L398.52,289.73 L402.6,269.56 L411.89,254.68 L412.48,244.2 L418.72,242.49 ' +
+  'L417.79,228.31 L412.49,217.87 L403.22,214.14 L395.46,206.71 L387.23,205.66 L361.65,172.33 ' +
+  'L357.91,165.46 L358.68,159.8 L350.12,148.76 L344.48,146.18 L341.53,139.95 L338.11,107.31 ' +
+  'L320.27,83.39 L312.2,78.14 L294.09,73.96 L277.86,64.92 L258.63,62.2 L248.55,64.11 ' +
+  'L227.62,56.57 L207.78,57.83 L196.46,50 L168.14,54.89 L149.08,66.26 L134.66,81.11 ' +
+  'L127.32,84.49 L122.06,83.61 L123.79,89.25 L117.03,87.87 L120.61,86.72 L120.49,84.11 ' +
+  'L103.51,87.84 L99.31,95.41 L100.69,90.94 L98.68,90.38 L96.39,100.49 L99.43,114.27 ' +
+  'L96.39,128.68 L83.81,139.43 L72.12,140.25 L61.28,153.33 Z';
 ---
 
 <section class="coverage" aria-labelledby="coverage-heading">
@@ -24,20 +36,48 @@ const mapSrc = `https://www.google.com/maps?q=${lat},${lng}&z=${zoom}&output=emb
     </div>
 
     <div class="coverage-map-wrap">
-      <iframe
+      <svg
         class="coverage-map"
-        src={mapSrc}
-        title="Carte de La Réunion — zone de livraison Inca Import"
-        loading="lazy"
-        referrerpolicy="no-referrer-when-downgrade"
-        allowfullscreen
-      ></iframe>
+        viewBox="0 0 480 420"
+        role="img"
+        aria-labelledby="coverage-map-title"
+      >
+        <title id="coverage-map-title">Carte de La Réunion — communes livrées par Inca Import</title>
+
+        <rect class="ocean" x="0" y="0" width="480" height="420" rx="20" />
+
+        <path class="island-shadow" d={islandPath} transform="translate(0 4)" />
+        <path class="island-shape" d={islandPath} />
+
+        {communes.map(c => (
+          <g
+            class="map-pin"
+            tabindex="0"
+            role="button"
+            aria-label={c.name}
+            transform={`translate(${c.x} ${c.y})`}
+          >
+            <circle class="pin-halo" r="11" />
+            <circle class="pin-dot" r="6.5" />
+            <circle class="pin-core" r="2.25" />
+
+            <g class="pin-tooltip" transform={`translate(0 ${-18 - 22})`}>
+              <rect
+                x={-(c.name.length * 3.6 + 10)}
+                y="0"
+                width={c.name.length * 7.2 + 20}
+                height="24"
+                rx="6"
+              />
+              <text x="0" y="16">{c.name}</text>
+            </g>
+          </g>
+        ))}
+      </svg>
     </div>
 
-    <ul class="coverage-pills">
-      {communes.map(c => (
-        <li class="coverage-pill">{c}</li>
-      ))}
+    <ul class="sr-only">
+      {communes.map(c => <li>{c.name}</li>)}
     </ul>
   </div>
 </section>
@@ -75,39 +115,110 @@ const mapSrc = `https://www.google.com/maps?q=${lat},${lng}&z=${zoom}&output=emb
 /* Map */
 .coverage-map-wrap {
   max-width: 700px;
-  margin: 0 auto clamp(var(--space-8), 4vw, var(--space-10));
-  aspect-ratio: 4 / 3;
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  border: 1px solid var(--color-border);
+  margin: 0 auto;
 }
 
 .coverage-map {
   display: block;
   width: 100%;
-  height: 100%;
-  border: 0;
+  height: auto;
+  overflow: visible;
 }
 
-/* Commune pills */
-.coverage-pills {
-  list-style: none;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: var(--space-3);
-  max-width: 700px;
-  margin: 0 auto;
+.ocean {
+  fill: oklch(0.62 0.085 220);
 }
 
-.coverage-pill {
-  padding: var(--space-2) var(--space-5);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
+.island-shadow {
+  fill: oklch(0.10 0.02 45.9 / 0.18);
+}
+
+.island-shape {
+  fill: oklch(0.685 0.085 130);
+  stroke: oklch(0.50 0.09 130);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.map-pin {
+  cursor: pointer;
+  outline: none;
+}
+
+.pin-halo {
+  fill: var(--color-primary);
+  opacity: 0.22;
+}
+
+.pin-dot {
+  fill: var(--color-primary);
+  stroke: white;
+  stroke-width: 2;
+}
+
+.pin-core {
+  fill: white;
+}
+
+.map-pin,
+.pin-halo,
+.pin-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pin-halo,
+  .pin-dot {
+    transition: transform var(--dur-fast) var(--ease-out-quart);
+  }
+}
+
+.map-pin:hover .pin-dot,
+.map-pin:focus-visible .pin-dot {
+  transform: scale(1.18);
+}
+
+.map-pin:hover .pin-halo,
+.map-pin:focus-visible .pin-halo {
+  transform: scale(1.6);
+}
+
+/* Tooltip */
+.pin-tooltip {
+  opacity: 0;
+  pointer-events: none;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pin-tooltip {
+    transition: opacity var(--dur-fast) var(--ease-out-quart),
+                transform var(--dur-fast) var(--ease-out-quart);
+    transform: translateY(4px);
+  }
+}
+
+.map-pin:hover .pin-tooltip,
+.map-pin:focus-visible .pin-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.pin-tooltip rect {
+  fill: var(--color-ink);
+}
+
+.pin-tooltip text {
+  fill: white;
   font-family: var(--font-body);
-  font-size: var(--text-sm);
+  font-size: 13px;
   font-weight: 600;
-  color: var(--color-ink);
+  text-anchor: middle;
+}
+
+@media (max-width: 480px) {
+  .pin-tooltip text { font-size: 12px; }
 }
 </style>
