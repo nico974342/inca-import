@@ -18,7 +18,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   }
 
   const userAgent = request.headers.get('user-agent') ?? '';
-  const isMobile = /iPhone|iPad|iPod|Android/i.test(userAgent);
+  const isMobile = /Mobile|iPhone|iPad/i.test(userAgent);
 
   return redirect(isMobile ? '/admin/commande-rapide' : '/admin');
 };

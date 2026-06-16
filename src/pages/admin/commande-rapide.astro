@@ -60,9 +60,12 @@ if (Astro.request.method === 'POST') {
     .select('id')
     .single();
 
-  if (orderErr || !order) return Astro.redirect('/admin/commande-rapide?error=order');
+  if (orderErr || !order) {
+    console.error('[commande-rapide] order insert error:', JSON.stringify(orderErr));
+    return Astro.redirect('/admin/commande-rapide?error=order');
+  }
 
-  await supabaseAdmin.from('order_items').insert(
+  const { error: itemsErr } = await supabaseAdmin.from('order_items').insert(
     orderItems.map(item => ({
       order_id:     order.id,
       product_id:   item.product_id,
@@ -71,6 +74,7 @@ if (Astro.request.method === 'POST') {
       unit:         item.unit,
     }))
   );
+  if (itemsErr) console.error('[commande-rapide] order_items insert error:', JSON.stringify(itemsErr));
 
   const totalHT = orderItems.reduce((s, i) => s + i.quantity * Number(i.price_ht ?? 0), 0);
   const today   = new Date().toLocaleDateString('fr-FR');
