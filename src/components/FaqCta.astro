@@ -1,0 +1,461 @@
+---
+const faqs = [
+  {
+    q: 'Y a-t-il un minimum de commande ?',
+    a: 'Non, il n\'y a aucun minimum de commande imposé. Vous commandez selon vos besoins, sans engagement.',
+  },
+  {
+    q: 'Quels sont les délais de livraison ?',
+    a: 'Vos commandes sont livrées en 48h, directement à votre point de vente, partout à La Réunion.',
+  },
+  {
+    q: 'Livrez-vous toute l\'île de La Réunion ?',
+    a: 'Oui, nous livrons l\'ensemble des communes de l\'île, du littoral aux hauts.',
+  },
+  {
+    q: 'Puis-je commander par téléphone ou WhatsApp ?',
+    a: 'Bien sûr. Vous pouvez nous appeler au 0692 47 89 41 ou nous écrire directement sur WhatsApp pour passer commande.',
+  },
+  {
+    q: 'Comment ouvrir un compte professionnel ?',
+    a: 'Remplissez le formulaire ci-contre ou inscrivez-vous directement en ligne. Votre accès catalogue est activé sous 24h ouvrées.',
+  },
+  {
+    q: 'Les prix sont-ils HT ou TTC ?',
+    a: 'Tous les prix affichés dans notre catalogue sont exprimés hors taxes (HT), conformément aux usages B2B.',
+  },
+  {
+    q: 'C\'est réservé aux professionnels uniquement ?',
+    a: 'Oui, Inca Import est un grossiste B2B réservé aux gérants de stations-service, supérettes et commerces professionnels.',
+  },
+];
+---
+
+<section class="faq-cta" id="compte" aria-labelledby="faq-cta-heading">
+  <div class="container">
+    <div class="faq-cta-inner">
+      <div class="faq-col">
+        <h2 class="faq-heading" id="faq-cta-heading">Questions fréquentes</h2>
+
+        <div class="faq-list">
+          {faqs.map((item, i) => (
+            <div class="faq-item">
+              <button
+                class="faq-trigger"
+                type="button"
+                aria-expanded="false"
+                aria-controls={`faq-panel-${i}`}
+                id={`faq-trigger-${i}`}
+              >
+                <span class="faq-question">{item.q}</span>
+                <svg class="faq-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                  <path d="M1 5l6 6 6-6" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              <div
+                class="faq-panel"
+                id={`faq-panel-${i}`}
+                role="region"
+                aria-labelledby={`faq-trigger-${i}`}
+              >
+                <p class="faq-answer">{item.a}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div class="cta-col">
+        <h2 class="cta-heading">Ouvrez votre compte professionnel</h2>
+        <p class="cta-sub">
+          Rejoignez les gérants de La Réunion qui font confiance à Inca Import
+          pour un réassort sans surprise.
+        </p>
+        <ul class="cta-perks" aria-label="Avantages">
+          <li>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M3 8l3.5 3.5L13 4.5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Activation sous 24h ouvrées
+          </li>
+          <li>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M3 8l3.5 3.5L13 4.5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Catalogue complet avec prix
+          </li>
+          <li>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M3 8l3.5 3.5L13 4.5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Sans engagement ni minimum
+          </li>
+        </ul>
+
+        <form class="cta-form" novalidate aria-label="Demande d'ouverture de compte">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="f-nom">Prénom &amp; Nom</label>
+              <input
+                type="text"
+                id="f-nom"
+                name="nom"
+                placeholder="Marie Dupont"
+                required
+                autocomplete="name"
+              />
+            </div>
+            <div class="form-group">
+              <label for="f-societe">Société</label>
+              <input
+                type="text"
+                id="f-societe"
+                name="societe"
+                placeholder="Station Total Saint-Denis"
+                required
+                autocomplete="organization"
+              />
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="f-telephone">Téléphone</label>
+            <input
+              type="tel"
+              id="f-telephone"
+              name="telephone"
+              placeholder="+262 6 92 XX XX XX"
+              required
+              autocomplete="tel"
+            />
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary cta-submit">
+              Envoyer ma demande
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </div>
+          <p class="form-alt">
+            Ou <a href="/inscription" class="form-alt-link">inscrivez-vous directement →</a>
+          </p>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+.faq-cta {
+  padding: clamp(var(--space-16), 7vw, var(--space-24)) 0;
+  background: var(--color-bg);
+  border-top: 1px solid var(--color-border);
+}
+
+.faq-cta-inner {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(var(--space-12), 7vw, var(--space-24));
+  align-items: start;
+}
+
+/* Shared headings */
+.faq-heading,
+.cta-heading {
+  font-family: var(--font-display);
+  font-size: var(--text-4xl);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--color-ink);
+  line-height: 1.08;
+  margin-bottom: var(--space-5);
+}
+
+/* FAQ column */
+.faq-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.faq-item {
+  border-bottom: 1px solid var(--color-border);
+}
+.faq-item:first-child { border-top: 1px solid var(--color-border); }
+
+.faq-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-1);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.faq-icon {
+  flex-shrink: 0;
+  color: var(--color-primary);
+  transition: transform var(--dur-base) var(--ease-out-quart);
+}
+
+.faq-trigger[aria-expanded="true"] .faq-icon {
+  transform: rotate(180deg);
+}
+
+.faq-panel {
+  overflow: hidden;
+  height: 0;
+  transition: height var(--dur-base) var(--ease-out-quart);
+}
+
+.faq-answer {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  color: var(--color-muted);
+  max-width: 64ch;
+  padding: 0 var(--space-1) var(--space-5);
+}
+
+/* CTA column */
+.cta-sub {
+  font-family: var(--font-body);
+  font-size: var(--text-lg);
+  line-height: 1.65;
+  color: var(--color-muted);
+  max-width: 38ch;
+  margin-bottom: var(--space-8);
+}
+
+.cta-perks {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-8);
+}
+
+.cta-perks li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.cta-perks li svg {
+  color: var(--color-primary);
+  flex-shrink: 0;
+}
+
+.cta-form { display: flex; flex-direction: column; gap: var(--space-5); }
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.cta-form label {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.cta-form input[type="text"],
+.cta-form input[type="tel"] {
+  width: 100%;
+  padding: 0.8125rem 1rem;
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+  min-height: 44px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.cta-form input::placeholder { color: var(--color-muted); }
+
+.cta-form input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.15);
+}
+
+.cta-form input.input-error {
+  border-color: oklch(0.55 0.20 25);
+  box-shadow: 0 0 0 3px oklch(0.55 0.20 25 / 0.12);
+}
+
+.form-actions { display: flex; }
+
+.cta-submit { gap: var(--space-3); }
+
+.form-alt {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  margin-top: calc(-1 * var(--space-2));
+}
+
+.form-alt-link {
+  color: var(--color-primary-deep);
+  font-weight: 500;
+  text-decoration: none;
+  transition: color var(--dur-fast);
+}
+.form-alt-link:hover { color: var(--color-primary); }
+
+.form-success {
+  font-family: var(--font-body);
+  font-size: var(--text-lg);
+  font-weight: 500;
+  color: var(--color-accent);
+  padding: var(--space-8) 0;
+  line-height: 1.5;
+}
+
+/* Scroll reveal */
+@media (prefers-reduced-motion: no-preference) {
+  .faq-cta-inner.will-animate {
+    opacity: 0;
+    transform: translateY(36px);
+    transition: opacity 0.85s var(--ease-out-expo), transform 0.85s var(--ease-out-expo);
+  }
+  .faq-cta-inner.will-animate.is-revealed {
+    opacity: 1;
+    transform: none;
+  }
+  .faq-icon, .faq-panel {
+    transition: transform var(--dur-base) var(--ease-out-quart), height var(--dur-base) var(--ease-out-quart);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .faq-icon, .faq-panel { transition: none; }
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .faq-cta-inner { grid-template-columns: 1fr; gap: var(--space-12); }
+  .cta-sub { max-width: none; }
+}
+
+@media (max-width: 480px) {
+  .form-row { grid-template-columns: 1fr; }
+}
+</style>
+
+<script>
+  const items = document.querySelectorAll<HTMLElement>('.faq-item');
+
+  items.forEach(item => {
+    const trigger = item.querySelector<HTMLButtonElement>('.faq-trigger');
+    const panel = item.querySelector<HTMLElement>('.faq-panel');
+    if (!trigger || !panel) return;
+
+    trigger.addEventListener('click', () => {
+      const isOpen = trigger.getAttribute('aria-expanded') === 'true';
+
+      items.forEach(other => {
+        if (other === item) return;
+        const otherTrigger = other.querySelector<HTMLButtonElement>('.faq-trigger');
+        const otherPanel = other.querySelector<HTMLElement>('.faq-panel');
+        if (otherTrigger && otherPanel) {
+          otherTrigger.setAttribute('aria-expanded', 'false');
+          otherPanel.style.height = '0px';
+        }
+      });
+
+      if (isOpen) {
+        trigger.setAttribute('aria-expanded', 'false');
+        panel.style.height = '0px';
+      } else {
+        trigger.setAttribute('aria-expanded', 'true');
+        panel.style.height = panel.scrollHeight + 'px';
+      }
+    });
+  });
+
+  window.addEventListener('resize', () => {
+    items.forEach(item => {
+      const trigger = item.querySelector<HTMLButtonElement>('.faq-trigger');
+      const panel = item.querySelector<HTMLElement>('.faq-panel');
+      if (trigger?.getAttribute('aria-expanded') === 'true' && panel) {
+        panel.style.height = panel.scrollHeight + 'px';
+      }
+    });
+  });
+</script>
+
+<script>
+  const form = document.querySelector('.cta-form') as HTMLFormElement | null;
+  const btn  = form?.querySelector('.cta-submit') as HTMLButtonElement | null;
+
+  form?.addEventListener('submit', async e => {
+    e.preventDefault();
+    if (!form.checkValidity()) {
+      form.querySelectorAll('input').forEach(input => {
+        if (!input.validity.valid) input.classList.add('input-error');
+      });
+      return;
+    }
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Envoi en cours…';
+    }
+    try {
+      const res = await fetch('/api/contact', { method: 'POST', body: new FormData(form) });
+      if (res.ok) {
+        form.innerHTML = `
+          <p class="form-success" role="alert">
+            Merci&nbsp;! Votre demande a bien été envoyée. Nous vous contactons sous 24h.
+          </p>
+        `;
+      } else {
+        if (btn) { btn.disabled = false; btn.textContent = 'Envoyer ma demande'; }
+        alert('Une erreur est survenue. Veuillez réessayer.');
+      }
+    } catch {
+      if (btn) { btn.disabled = false; btn.textContent = 'Envoyer ma demande'; }
+      alert('Une erreur réseau est survenue. Veuillez réessayer.');
+    }
+  });
+
+  form?.querySelectorAll('input').forEach(input => {
+    input.addEventListener('input', () => input.classList.remove('input-error'));
+  });
+</script>
+
+<script>
+  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const inner = document.querySelector<HTMLElement>('.faq-cta-inner');
+    if (inner) {
+      inner.classList.add('will-animate');
+      new IntersectionObserver(([e], obs) => {
+        if (!e.isIntersecting) return;
+        inner.classList.add('is-revealed');
+        obs.unobserve(inner);
+      }, { threshold: 0.12 }).observe(inner);
+    }
+  }
+</script>

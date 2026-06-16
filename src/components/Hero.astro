@@ -20,6 +20,13 @@
         <a href="/catalogue" class="btn btn-white">Voir le catalogue</a>
         <a href="#compte" class="btn btn-outline-white">Recevez votre accès catalogue en moins de 24h</a>
       </div>
+
+      <ul class="hero-stats" data-h="5" role="list">
+        <li><strong>120+</strong> références</li>
+        <li><strong>48h</strong> livraison</li>
+        <li><strong>7j/7</strong> disponibilité</li>
+        <li><strong>Familiale</strong> &amp; réunionnaise</li>
+      </ul>
     </div>
   </div>
 
@@ -124,6 +131,37 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
+}
+
+/* Inline stats row */
+.hero-stats {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-5);
+  margin-top: var(--space-8);
+  padding-top: var(--space-6);
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.hero-stats li {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.78);
+  white-space: nowrap;
+}
+
+.hero-stats li strong {
+  font-family: var(--font-display);
+  font-weight: 700;
+  color: white;
+  letter-spacing: -0.01em;
+}
+
+@media (max-width: 480px) {
+  .hero-stats { gap: var(--space-4); }
 }
 
 /* Decorative 974 */

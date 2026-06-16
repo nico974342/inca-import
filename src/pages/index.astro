@@ -2,15 +2,10 @@
 import Base from '../layouts/Base.astro';
 import Nav from '../components/Nav.astro';
 import Hero from '../components/Hero.astro';
-import Stats from '../components/Stats.astro';
 import Categories from '../components/Categories.astro';
-import WhyInca from '../components/WhyInca.astro';
-import HowItWorks from '../components/HowItWorks.astro';
 import Brands from '../components/Brands.astro';
-import WhyChoose from '../components/WhyChoose.astro';
-import DeliveryCoverage from '../components/DeliveryCoverage.astro';
-import FAQ from '../components/FAQ.astro';
-import CTAForm from '../components/CTAForm.astro';
+import WhyInca from '../components/WhyInca.astro';
+import FaqCta from '../components/FaqCta.astro';
 import Footer from '../components/Footer.astro';
 import { createAuthClient } from '../lib/supabase';
 
@@ -21,15 +16,10 @@ const { data: { user } } = await supabase.auth.getUser();
   <Nav user={user} />
   <main>
     <Hero />
-    <Stats />
     <Categories />
-    <WhyInca />
-    <HowItWorks />
     <Brands />
-    <WhyChoose />
-    <DeliveryCoverage />
-    <FAQ />
-    <CTAForm />
+    <WhyInca />
+    <FaqCta />
   </main>
   <Footer />
 </Base>

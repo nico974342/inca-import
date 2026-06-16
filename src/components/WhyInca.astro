@@ -1,168 +1,110 @@
 ---
-const rows = [
-  {
-    value: '200+',
-    title: 'Stock permanent, zéro rupture',
-    body: "Boissons, snacks, confiseries — toujours disponibles, toujours renouvelés. Votre rayon ne sera jamais vide parce que le nôtre ne l'est jamais.",
-  },
-  {
-    value: '48h',
-    title: 'Livraison locale, partout à La Réunion',
-    body: "On connaît les routes, les horaires, les contraintes de l'île. Votre commande arrive en 48h, directement à votre point de vente, sans intermédiaire.",
-  },
-  {
-    value: '7j/7',
-    title: 'Une famille derrière chaque commande',
-    body: "Inca Import, c'est une affaire de famille réunionnaise. Quand vous nous appelez, vous parlez à quelqu'un qui vous connaît — pas à un centre d'appels. On est là 7 jours sur 7, parce que votre activité n'attend pas le lundi.",
-  },
+const points = [
+  { word: 'Stock permanent', sub: '120+ références toujours disponibles, jamais de rupture.' },
+  { word: 'Livraison 48h', sub: 'Partout à La Réunion, sans exception.' },
+  { word: 'Famille réunionnaise 7j/7', sub: "Une équipe locale qui vous connaît, pas un centre d'appels." },
 ];
 ---
 
-<section class="why-inca" aria-label="Nos engagements">
+<section class="why-inca" aria-label="Pourquoi Inca Import">
   <div class="container">
-    {rows.map((r, i) => (
-      <div class="why-row">
-        <span class="why-value" aria-hidden="true">{r.value}</span>
-        <div class="why-content">
-          <h3 class="why-title">{r.title}</h3>
-          <p class="why-body">{r.body}</p>
+    <div class="why-grid">
+      {points.map(p => (
+        <div class="why-col">
+          <p class="why-word">{p.word}</p>
+          <p class="why-sub">{p.sub}</p>
         </div>
-      </div>
-    ))}
-
-    <div class="why-team">
-      <div class="why-team-photo" aria-hidden="true">
-        <span class="why-team-initials">N&nbsp;&amp;&nbsp;A</span>
-      </div>
-      <p class="why-team-caption">Nicolas &amp; Arnaud Incana — Fondateurs</p>
+      ))}
     </div>
   </div>
 </section>
 
 <style>
 .why-inca {
-  background: oklch(0.105 0.015 45.9);
   padding: clamp(var(--space-16), 7vw, var(--space-24)) 0;
+  background: var(--color-bg);
+  border-top: 1px solid var(--color-border);
 }
 
-/* Row */
-.why-row {
+.why-grid {
   display: grid;
-  grid-template-columns: clamp(6rem, 14vw, 9.5rem) 1fr;
-  gap: clamp(var(--space-8), 5vw, var(--space-16));
-  align-items: start;
-  padding: clamp(var(--space-8), 4vw, var(--space-12)) 0;
-  border-bottom: 1px solid oklch(0.185 0.012 45.9);
+  grid-template-columns: repeat(3, 1fr);
+  gap: clamp(var(--space-8), 5vw, var(--space-12));
 }
 
-.why-row:first-child {
-  border-top: 1px solid oklch(0.185 0.012 45.9);
+.why-col {
+  position: relative;
+  padding: 0 clamp(var(--space-4), 3vw, var(--space-8));
 }
 
-/* Value */
-.why-value {
-  display: block;
+.why-col + .why-col::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.2em;
+  bottom: 0.2em;
+  width: 1px;
+  background: var(--color-border-strong);
+}
+
+.why-word {
   font-family: var(--font-display);
-  font-size: clamp(2.25rem, 6vw, 4rem);
+  font-size: clamp(1.625rem, 3.4vw, 2.25rem);
   font-weight: 700;
-  letter-spacing: -0.035em;
-  color: var(--color-primary);
-  line-height: 1;
-  padding-top: 0.1em;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Content */
-.why-title {
-  font-family: var(--font-display);
-  font-size: clamp(1.25rem, 2.5vw, 1.75rem);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: white;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+  color: var(--color-ink);
   margin-bottom: var(--space-3);
-  line-height: 1.2;
 }
 
-.why-body {
-  font-family: var(--font-body);
-  font-size: var(--text-base);
-  line-height: 1.7;
-  color: oklch(0.660 0.008 45.9);
-  max-width: 54ch;
-}
-
-/* Scroll reveals */
-@media (prefers-reduced-motion: no-preference) {
-  .why-row.will-animate {
-    opacity: 0;
-    transform: translateY(18px);
-    transition: opacity 0.65s var(--ease-out-expo), transform 0.65s var(--ease-out-expo);
-  }
-  .why-row.will-animate:nth-child(2) { transition-delay: 0.10s; }
-  .why-row.will-animate:nth-child(3) { transition-delay: 0.20s; }
-  .why-row.will-animate.is-revealed  { opacity: 1; transform: none; }
-}
-
-/* Team photo placeholder */
-.why-team {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-4);
-  padding-top: clamp(var(--space-10), 5vw, var(--space-16));
-}
-
-.why-team-photo {
-  width: clamp(96px, 14vw, 140px);
-  height: clamp(96px, 14vw, 140px);
-  border-radius: var(--radius-full);
-  background: var(--color-primary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.why-team-initials {
-  font-family: var(--font-display);
-  font-size: clamp(1.5rem, 3vw, 2.25rem);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: white;
-}
-
-.why-team-caption {
+.why-sub {
   font-family: var(--font-body);
   font-size: var(--text-sm);
-  font-weight: 500;
-  color: oklch(0.660 0.008 45.9);
-  text-align: center;
+  line-height: 1.6;
+  color: var(--color-muted);
+  max-width: 30ch;
 }
 
-/* Mobile */
-@media (max-width: 560px) {
-  .why-row {
-    grid-template-columns: 1fr;
-    gap: var(--space-3);
+@media (prefers-reduced-motion: no-preference) {
+  .why-col.will-animate {
+    opacity: 0;
+    transform: translateY(20px);
+    transition: opacity 0.6s var(--ease-out-expo), transform 0.6s var(--ease-out-expo);
   }
-  .why-value { font-size: clamp(2.25rem, 12vw, 3rem); }
-  .why-body  { max-width: none; }
+  .why-col.will-animate:nth-child(2) { transition-delay: 0.1s; }
+  .why-col.will-animate:nth-child(3) { transition-delay: 0.2s; }
+  .why-col.will-animate.is-revealed  { opacity: 1; transform: none; }
+}
+
+@media (max-width: 720px) {
+  .why-grid {
+    grid-template-columns: 1fr;
+    gap: var(--space-8);
+  }
+  .why-col { padding: 0; }
+  .why-col + .why-col::before { display: none; }
+  .why-col + .why-col {
+    padding-top: var(--space-8);
+    border-top: 1px solid var(--color-border-strong);
+  }
 }
 </style>
 
 <script>
-  const rows = document.querySelectorAll<HTMLElement>('.why-row');
-  rows.forEach(el => el.classList.add('will-animate'));
+  const cols = document.querySelectorAll<HTMLElement>('.why-col');
+  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    cols.forEach(el => el.classList.add('will-animate'));
 
-  const obs = new IntersectionObserver(
-    entries => entries.forEach(e => {
-      if (e.isIntersecting) {
-        e.target.classList.add('is-revealed');
-        obs.unobserve(e.target);
-      }
-    }),
-    { threshold: 0.2 }
-  );
+    const obs = new IntersectionObserver(
+      entries => entries.forEach(e => {
+        if (e.isIntersecting) {
+          e.target.classList.add('is-revealed');
+          obs.unobserve(e.target);
+        }
+      }),
+      { threshold: 0.2 }
+    );
 
-  rows.forEach(el => obs.observe(el));
+    cols.forEach(el => obs.observe(el));
+  }
 </script>
