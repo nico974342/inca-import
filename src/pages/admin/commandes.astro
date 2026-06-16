@@ -542,6 +542,10 @@ details[open] .chevron { transform: rotate(180deg); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .order-body { animation: none; }
+}
+
 /* Status form */
 .status-form {
   display: flex;

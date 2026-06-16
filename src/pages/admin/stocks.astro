@@ -133,10 +133,10 @@ const CAT_LABEL: Record<string, string> = {
   }
 
   function rowStyle(qty, idx) {
-    if (qty === 0) return 'background:oklch(0.97 0.025 25);border-left:4px solid oklch(0.55 0.19 25);';
-    if (qty < 5) return 'background:oklch(0.975 0.02 70);border-left:4px solid oklch(0.60 0.15 70);';
+    if (qty === 0) return 'background:oklch(0.97 0.025 25);';
+    if (qty < 5) return 'background:oklch(0.975 0.02 70);';
     const baseBg = idx % 2 === 1 ? 'var(--color-surface)' : 'var(--color-bg)';
-    return `background:${baseBg};border-left:4px solid transparent;`;
+    return `background:${baseBg};`;
   }
 
   function summaryCardHtml(value, label, bg, fg) {
