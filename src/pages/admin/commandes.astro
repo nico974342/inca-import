@@ -2,6 +2,7 @@
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { sendLowStockAlert } from '../../lib/email';
+import { sendOrderConfirmedWebhook } from '../../lib/webhooks';
 
 // Handle POST: update order status
 if (Astro.request.method === 'POST') {
@@ -13,7 +14,9 @@ if (Astro.request.method === 'POST') {
   if (order_id && VALID.includes(new_status)) {
     // Fetch current status to detect first-time confirmation
     const { data: current } = await supabaseAdmin
-      .from('orders').select('status').eq('id', order_id).single();
+      .from('orders')
+      .select('status, nom, societe, email, telephone, user_id, created_at')
+      .eq('id', order_id).single();
 
     await supabaseAdmin.from('orders').update({ status: new_status }).eq('id', order_id);
 
@@ -21,7 +24,7 @@ if (Astro.request.method === 'POST') {
     if (current?.status !== 'confirmee' && new_status === 'confirmee') {
       const { data: items } = await supabaseAdmin
         .from('order_items')
-        .select('product_id, quantity')
+        .select('product_id, product_name, quantity, unit, products(price_ht)')
         .eq('order_id', order_id);
 
       for (const item of items ?? []) {
@@ -46,6 +49,48 @@ if (Astro.request.method === 'POST') {
         if (newQty < 5) {
           sendLowStockAlert(prod.name, newQty).catch(() => {});
         }
+      }
+
+      // Notify Make.com — fire-and-forget, never blocks the status update
+      if (current) {
+        let pointDeVente: string | null = null;
+        if (current.user_id) {
+          const { data: clientAcc } = await supabaseAdmin
+            .from('client_accounts')
+            .select('points_de_vente')
+            .eq('user_id', current.user_id)
+            .maybeSingle();
+          pointDeVente = clientAcc?.points_de_vente ?? null;
+        }
+
+        const products = (items ?? []).map(item => {
+          const priceHt = Number((item as any).products?.price_ht ?? 0);
+          return {
+            name: item.product_name,
+            qty: item.quantity,
+            unit: item.unit ?? null,
+            price_ht: priceHt,
+            total_ht: priceHt * item.quantity,
+          };
+        });
+
+        const totalHt  = products.reduce((s, p) => s + p.total_ht, 0);
+        const tva      = totalHt * 0.085;
+        const totalTtc = totalHt + tva;
+
+        sendOrderConfirmedWebhook({
+          order_id,
+          nom: current.nom,
+          societe: current.societe,
+          email: current.email,
+          telephone: current.telephone,
+          point_de_vente: pointDeVente,
+          products,
+          total_ht: totalHt,
+          tva,
+          total_ttc: totalTtc,
+          date: current.created_at,
+        });
       }
     }
   }

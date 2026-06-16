@@ -2,6 +2,7 @@
 import '../styles/global.css';
 import { createAuthClient, supabaseAdmin } from '../lib/supabase';
 import { sanitizeText, sanitizeEmail } from '../lib/sanitize';
+import { sendClientRegisteredWebhook } from '../lib/webhooks';
 
 // Already logged-in clients go straight to catalogue
 const supabaseCheck = createAuthClient(Astro.request, Astro.cookies);
@@ -60,6 +61,16 @@ if (Astro.request.method === 'POST') {
       user_id: userId,
     });
   }
+
+  sendClientRegisteredWebhook({
+    nom,
+    societe: societe || null,
+    email,
+    telephone: telephone || null,
+    point_de_vente: pointsDeVente || null,
+    adresse_livraison: null,
+    date_inscription: new Date().toISOString(),
+  });
 
   if (authData.session) {
     return Astro.redirect('/catalogue');
