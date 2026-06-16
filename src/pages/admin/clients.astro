@@ -86,7 +86,7 @@ const rows: Row[] = [
     created_at: c.created_at,
   })),
   ...contacts
-    .filter(ct => ct.status !== 'converti' && !convertedContactIds.has(ct.id))
+    .filter(ct => !convertedContactIds.has(ct.id))
     .map((ct): Row => ({
       kind: 'contact',
       id: ct.id,
@@ -96,7 +96,7 @@ const rows: Row[] = [
       email: ct.email,
       pointsDeVente: null,
       status: ct.status,
-      statusLabel: 'Nouveau contact',
+      statusLabel: ct.status === 'converti' ? 'Client converti' : 'Nouveau contact',
       notes: ct.notes,
       created_at: ct.created_at,
     })),
@@ -149,7 +149,7 @@ function formatDate(iso: string) {
                     </select>
                   </form>
                 ) : (
-                  <span class="status-badge status-badge--nouveau">{r.statusLabel}</span>
+                  <span class={`status-badge status-badge--${r.status === 'converti' ? 'converti' : 'nouveau'}`}>{r.statusLabel}</span>
                 )}
               </td>
               <td class="td-muted">{formatDate(r.created_at)}</td>
@@ -173,7 +173,7 @@ function formatDate(iso: string) {
                 </form>
               </td>
               <td>
-                {r.kind === 'contact' && (
+                {r.kind === 'contact' && r.status !== 'converti' && (
                   <form method="post">
                     <input type="hidden" name="action"     value="convert" />
                     <input type="hidden" name="contact_id" value={r.id} />
@@ -255,6 +255,7 @@ function formatDate(iso: string) {
 .status-select--actif      { background: oklch(0.93 0.06 145); color: oklch(0.38 0.12 145); }
 .status-select--suspendu   { background: oklch(0.95 0.02 25);  color: oklch(0.45 0.10 25);  }
 .status-badge--nouveau     { background: oklch(0.95 0.02 220); color: oklch(0.35 0.08 220); }
+.status-badge--converti    { background: oklch(0.93 0.06 145); color: oklch(0.38 0.12 145); }
 
 .notes-form {
   display: flex;
