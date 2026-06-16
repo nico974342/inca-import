@@ -96,7 +96,7 @@ const productsMetaJSON = JSON.stringify(
       </div>
     </section>
 
-    <!-- Sticky filter bar -->
+    <!-- Sticky filter + search bar -->
     <div class="filter-bar-wrap">
       <div class="container">
         <div class="filter-bar">
@@ -107,6 +107,8 @@ const productsMetaJSON = JSON.stringify(
             <button class={`filter-tab${initialCat === 'snacks' ? ' is-active' : ''}`} data-cat="snacks">Snacks</button>
             <button class={`filter-tab${initialCat === 'confiseries' ? ' is-active' : ''}`} data-cat="confiseries">Confiseries</button>
           </div>
+        </div>
+        <div class="search-row">
           <div class="search-wrap">
             <svg class="search-icon" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
               <circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.4"/>
@@ -115,11 +117,17 @@ const productsMetaJSON = JSON.stringify(
             <input
               type="search"
               id="cat-search"
-              placeholder="Rechercher…"
+              placeholder="Rechercher un produit…"
               class="search-input"
-              aria-label="Rechercher un produit"
+              aria-label="Rechercher un produit par nom ou description"
             />
+            <button type="button" class="search-clear" id="searchClear" aria-label="Effacer la recherche" hidden>
+              <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true">
+                <path d="M1 1l9 9M10 1L1 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+            </button>
           </div>
+          <p class="search-results-count" id="searchResultsCount" hidden aria-live="polite"></p>
         </div>
       </div>
     </div>
@@ -137,7 +145,7 @@ const productsMetaJSON = JSON.stringify(
               <article
                 class={`product-card${!p.in_stock ? ' product-card--oos' : ''}`}
                 data-cat={p.category}
-                data-name={p.name.toLowerCase()}
+                data-search={`${p.name} ${p.description ?? ''}`.toLowerCase()}
               >
                 <div
                   class="product-img"
@@ -338,9 +346,12 @@ const productsMetaJSON = JSON.stringify(
   }
 
   // ── Filter & search ───────────────────────────────────────────
-  const cards       = document.querySelectorAll<HTMLElement>('.product-card');
-  const searchInput = document.getElementById('cat-search') as HTMLInputElement;
-  const noResults   = document.getElementById('noResults') as HTMLElement;
+  const cards          = document.querySelectorAll<HTMLElement>('.product-card');
+  const grid            = document.getElementById('productsGrid');
+  const searchInput     = document.getElementById('cat-search') as HTMLInputElement;
+  const searchClearBtn  = document.getElementById('searchClear') as HTMLButtonElement;
+  const resultsCountEl  = document.getElementById('searchResultsCount') as HTMLElement;
+  const noResults       = document.getElementById('noResults') as HTMLElement;
 
   let activeCat   = tabsEl?.dataset.initialCat ?? 'tous';
   let searchQuery = '';
@@ -348,13 +359,36 @@ const productsMetaJSON = JSON.stringify(
   function applyFilters() {
     let visible = 0;
     cards.forEach(card => {
-      const catMatch  = activeCat === 'tous' || card.dataset.cat === activeCat;
-      const nameMatch = (card.dataset.name ?? '').includes(searchQuery);
-      const show = catMatch && nameMatch;
+      const catMatch    = activeCat === 'tous' || card.dataset.cat === activeCat;
+      const searchMatch = (card.dataset.search ?? '').includes(searchQuery);
+      const show = catMatch && searchMatch;
       card.hidden = !show;
       if (show) visible++;
     });
     noResults.hidden = visible > 0;
+
+    if (searchQuery) {
+      resultsCountEl.textContent = `${visible} résultat${visible !== 1 ? 's' : ''} pour « ${searchInput.value.trim()} »`;
+      resultsCountEl.hidden = false;
+    } else {
+      resultsCountEl.hidden = true;
+    }
+  }
+
+  // Brief crossfade on the grid whenever the result set changes
+  let fadeTimer: number | undefined;
+  function applyFiltersWithFade() {
+    if (!grid) { applyFilters(); return; }
+    grid.classList.add('is-updating');
+    window.clearTimeout(fadeTimer);
+    fadeTimer = window.setTimeout(() => {
+      applyFilters();
+      grid.classList.remove('is-updating');
+    }, 90);
+  }
+
+  function updateClearButton() {
+    searchClearBtn.hidden = searchInput.value.length === 0;
   }
 
   tabs.forEach(tab => {
@@ -363,13 +397,22 @@ const productsMetaJSON = JSON.stringify(
       tab.classList.add('is-active');
       activeCat = tab.dataset.cat ?? 'tous';
       moveIndicator(tab);
-      applyFilters();
+      applyFiltersWithFade();
     });
   });
 
   searchInput?.addEventListener('input', () => {
     searchQuery = searchInput.value.toLowerCase().trim();
-    applyFilters();
+    updateClearButton();
+    applyFiltersWithFade();
+  });
+
+  searchClearBtn?.addEventListener('click', () => {
+    searchInput.value = '';
+    searchQuery = '';
+    updateClearButton();
+    applyFiltersWithFade();
+    searchInput.focus();
   });
 
   if (activeCat !== 'tous') applyFilters();
@@ -866,6 +909,19 @@ const productsMetaJSON = JSON.stringify(
   gap: var(--space-4);
 }
 
+.search-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.search-results-count {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+
 .filter-tabs {
   position: relative;
   display: flex;
@@ -915,7 +971,7 @@ const productsMetaJSON = JSON.stringify(
 .filter-tab.is-active { color: white; }
 .filter-tab:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 
-.search-wrap { position: relative; flex-shrink: 0; }
+.search-wrap { position: relative; flex-shrink: 0; width: 320px; max-width: 100%; }
 .search-icon {
   position: absolute;
   left: 11px;
@@ -925,14 +981,14 @@ const productsMetaJSON = JSON.stringify(
   pointer-events: none;
 }
 .search-input {
-  padding: 0.4375rem var(--space-4) 0.4375rem 2rem;
+  padding: 0.4375rem 2rem 0.4375rem 2rem;
   font-family: var(--font-body);
   font-size: var(--text-sm);
   color: var(--color-ink);
   background: var(--color-bg);
   border: 1.5px solid var(--color-border-strong);
   border-radius: var(--radius-full);
-  width: 200px;
+  width: 100%;
   min-height: 36px;
   outline: none;
   transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
@@ -943,6 +999,26 @@ const productsMetaJSON = JSON.stringify(
   box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.12);
 }
 
+.search-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--color-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.search-clear:hover { background: var(--color-border); color: var(--color-ink); }
+.search-clear:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+
 /* ── Products section ─────────────────────────────── */
 .products-section {
   padding: clamp(var(--space-8), 4vw, var(--space-14)) 0;
@@ -952,7 +1028,9 @@ const productsMetaJSON = JSON.stringify(
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: var(--space-5);
+  transition: opacity var(--dur-fast) var(--ease-out-quart);
 }
+.products-grid.is-updating { opacity: 0.35; }
 
 /* ── Product card ─────────────────────────────────── */
 .product-card {
@@ -1651,5 +1729,7 @@ const productsMetaJSON = JSON.stringify(
   .cart-toggle:hover   { transform: none; }
   .cart-toggle.cart-bounce { animation: none; }
   .fly-dot             { display: none; }
+  .products-grid           { transition: none; }
+  .products-grid.is-updating { opacity: 1; }
 }
 </style>
