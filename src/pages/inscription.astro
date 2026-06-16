@@ -38,11 +38,27 @@ if (Astro.request.method === 'POST') {
     return Astro.redirect(`/inscription?error=${code}`);
   }
 
-  // Always create a client_accounts row so admin sees pending registrations
-  await supabaseAdmin.from('client_accounts').upsert(
-    { nom, societe, telephone, email, points_de_vente: pointsDeVente || null, status: 'en_attente' },
-    { onConflict: 'email', ignoreDuplicates: true }
-  );
+  // Link or create the client_accounts row so admin sees this registration
+  const userId = authData.user?.id ?? null;
+  const { data: existingAccount } = await supabaseAdmin
+    .from('client_accounts')
+    .select('id')
+    .eq('email', email)
+    .maybeSingle();
+
+  if (existingAccount) {
+    await supabaseAdmin
+      .from('client_accounts')
+      .update({ user_id: userId })
+      .eq('id', existingAccount.id);
+  } else {
+    await supabaseAdmin.from('client_accounts').insert({
+      nom, societe, telephone, email,
+      points_de_vente: pointsDeVente || null,
+      status: 'actif',
+      user_id: userId,
+    });
+  }
 
   if (authData.session) {
     return Astro.redirect('/catalogue');

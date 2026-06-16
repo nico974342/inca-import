@@ -3,7 +3,7 @@ import '../../styles/global.css';
 
 interface Props {
   title: string;
-  activeNav?: 'dashboard' | 'produits' | 'stocks' | 'contacts' | 'clients' | 'temoignages' | 'commande-rapide' | 'livraison' | 'commandes';
+  activeNav?: 'dashboard' | 'produits' | 'stocks' | 'clients' | 'temoignages' | 'commande-rapide' | 'livraison' | 'commandes';
 }
 
 const { title, activeNav } = Astro.props;
@@ -69,12 +69,6 @@ const { title, activeNav } = Astro.props;
             <path d="M2 5.5 8 9l6-3.5M8 9v5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
           </svg>
           Stocks
-        </a>
-        <a href="/admin/contacts" class={`nav-link ${activeNav === 'contacts' ? 'nav-link--active' : ''}`}>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M10.5 2.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0ZM2 13c0-2.761 2.686-5 6-5s6 2.239 6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-          Contacts
         </a>
         <a href="/admin/clients" class={`nav-link ${activeNav === 'clients' ? 'nav-link--active' : ''}`}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
