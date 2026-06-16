@@ -128,7 +128,9 @@ function formatDate(iso: string) {
         <tbody>
           {rows.map(r => (
             <tr>
-              <td class="td-strong">{r.nom}</td>
+              <td class="td-strong">
+                {r.kind === 'client' ? <a href={`/admin/clients/${r.id}`} class="client-link">{r.nom}</a> : r.nom}
+              </td>
               <td>{r.societe ?? '—'}</td>
               <td class="td-mono">{r.telephone ?? '—'}</td>
               <td class="td-mono">{r.email ?? '—'}</td>
@@ -231,6 +233,8 @@ function formatDate(iso: string) {
 .data-table tbody tr:hover td { background: var(--color-surface); }
 
 .td-strong { font-weight: 500; color: var(--color-ink); white-space: nowrap; }
+.client-link { color: var(--color-primary); text-decoration: none; }
+.client-link:hover { text-decoration: underline; }
 .td-muted  { color: var(--color-muted); white-space: nowrap; }
 .td-mono   { font-family: var(--font-mono); }
 

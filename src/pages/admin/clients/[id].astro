@@ -1,0 +1,468 @@
+---
+import AdminLayout from '../../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../../lib/supabase';
+import { sanitizeText, sanitizeEmail } from '../../../lib/sanitize';
+
+const { id } = Astro.params;
+let formError = '';
+
+const { data: client } = await supabaseAdmin
+  .from('client_accounts')
+  .select('*')
+  .eq('id', id)
+  .single();
+
+if (!client) return Astro.redirect('/admin/clients');
+
+if (Astro.request.method === 'POST') {
+  const data       = await Astro.request.formData();
+  const email      = sanitizeEmail(data.get('email') as string);
+  const telephone  = sanitizeText(data.get('telephone') as string, 40);
+  const status     = data.get('status') as string;
+  const notes      = sanitizeText(data.get('notes') as string, 500);
+
+  const remiseRaw = (data.get('remise') as string)?.trim();
+  const remise    = remiseRaw ? parseFloat(remiseRaw) : null;
+
+  const conditionsRaw       = (data.get('conditions_paiement') as string)?.trim();
+  const conditions_paiement = ['comptant', '30j', '60j'].includes(conditionsRaw) ? conditionsRaw : null;
+
+  const plafondRaw     = (data.get('plafond_credit') as string)?.trim();
+  const plafond_credit = plafondRaw ? parseFloat(plafondRaw) : null;
+
+  const VALID_STATUS = ['en_attente', 'actif', 'suspendu'];
+
+  if (!email) {
+    formError = 'Email invalide.';
+  } else if (!VALID_STATUS.includes(status)) {
+    formError = 'Statut invalide.';
+  } else if (remise != null && (isNaN(remise) || remise < 0 || remise > 100)) {
+    formError = 'La remise doit être comprise entre 0 et 100.';
+  } else if (plafond_credit != null && (isNaN(plafond_credit) || plafond_credit < 0)) {
+    formError = 'Le plafond crédit doit être positif ou nul.';
+  } else {
+    const { error } = await supabaseAdmin
+      .from('client_accounts')
+      .update({
+        email,
+        telephone: telephone || null,
+        status,
+        notes: notes || null,
+        remise,
+        conditions_paiement,
+        plafond_credit,
+      })
+      .eq('id', id);
+
+    if (error) {
+      formError = error.code === '23505'
+        ? 'Cet email est déjà utilisé par un autre client.'
+        : `Erreur : ${error.message}`;
+    } else {
+      return Astro.redirect(`/admin/clients/${id}`);
+    }
+  }
+}
+
+// ── Order history — orders have no client_id FK; match by email (always
+// set, copied verbatim at order-creation time for both self-checkout and
+// admin-placed orders) and by user_id (only set for self-checkout orders,
+// since commande-rapide stamps the admin's own id there) ──────────────
+const orderQueries = [
+  supabaseAdmin.from('orders').select('id, status, created_at, email').eq('email', client.email ?? ''),
+  ...(client.user_id ? [supabaseAdmin.from('orders').select('id, status, created_at, email').eq('user_id', client.user_id)] : []),
+];
+const orderResults = await Promise.all(orderQueries);
+
+const orderMap = new Map<string, { id: string; status: string; created_at: string }>();
+for (const res of orderResults) {
+  for (const o of res.data ?? []) orderMap.set(o.id, o);
+}
+const clientOrders = Array.from(orderMap.values())
+  .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+const orderIds = clientOrders.map(o => o.id);
+const { data: allItems } = orderIds.length
+  ? await supabaseAdmin.from('order_items').select('order_id, quantity, products(price_ht)').in('order_id', orderIds)
+  : { data: [] };
+
+const totalsByOrder: Record<string, number | null> = {};
+for (const item of allItems ?? []) {
+  const price = (item as any).products?.price_ht;
+  if (price != null) {
+    totalsByOrder[item.order_id] = (totalsByOrder[item.order_id] ?? 0) + Number(price) * item.quantity;
+  }
+}
+
+const ordersWithTotal = clientOrders.map(o => ({ ...o, total: totalsByOrder[o.id] ?? null }));
+const lastOrderDate   = clientOrders[0]?.created_at ?? null;
+const totalCA = ordersWithTotal
+  .filter(o => o.status !== 'annulee')
+  .reduce((sum, o) => sum + (o.total ?? 0), 0);
+
+const CLIENT_STATUS_LABEL: Record<string, string> = {
+  en_attente: 'En attente',
+  actif:      'Actif',
+  suspendu:   'Suspendu',
+};
+
+const ORDER_STATUS_LABEL: Record<string, string> = {
+  en_attente:     'En attente',
+  confirmee:      'Confirmée',
+  en_preparation: 'En préparation',
+  expediee:       'Expédiée',
+  livree:         'Livrée',
+  annulee:        'Annulée',
+};
+
+const ORDER_STATUS_COLOR: Record<string, string> = {
+  en_attente:     'muted',
+  confirmee:      'blue',
+  en_preparation: 'amber',
+  expediee:       'purple',
+  livree:         'green',
+  annulee:        'red',
+};
+
+const CONDITIONS_LABEL: Record<string, string> = {
+  comptant: 'Comptant',
+  '30j':    '30 jours',
+  '60j':    '60 jours',
+};
+
+function formatDate(iso: string) {
+  return new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+}
+function shortId(orderId: string) {
+  return orderId.slice(0, 8).toUpperCase();
+}
+
+const livraisonAddr = [client.livraison_rue, client.livraison_code_postal, client.livraison_ville]
+  .filter(Boolean).join(', ') || '—';
+const facturationAddr = client.facturation_same
+  ? 'Identique à la livraison'
+  : ([client.facturation_rue, client.facturation_code_postal, client.facturation_ville].filter(Boolean).join(', ') || '—');
+---
+<AdminLayout title={`Client — ${client.nom}`} activeNav="clients">
+  <a href="/admin/clients" class="back-link">← Retour aux clients</a>
+
+  <div class="client-header">
+    <div>
+      <h1 class="client-h1">{client.nom}</h1>
+      {client.societe && <p class="client-sub">{client.societe}</p>}
+    </div>
+    <a href={`/admin/commande-rapide?client_id=${client.id}`} class="btn btn-primary">Créer une commande</a>
+  </div>
+
+  {formError && <p class="form-error" role="alert">{formError}</p>}
+
+  <div class="grid-2col">
+    <div class="card">
+      <h2 class="card-title">Informations</h2>
+      <dl class="info-list">
+        <div class="info-row"><dt>Nom</dt><dd>{client.nom}</dd></div>
+        <div class="info-row"><dt>Société</dt><dd>{client.societe ?? '—'}</dd></div>
+        <div class="info-row"><dt>Point de vente</dt><dd>{client.points_de_vente ?? '—'}</dd></div>
+        <div class="info-row"><dt>Adresse PDV</dt><dd>{client.adresse_pdv ?? '—'}</dd></div>
+        <div class="info-row"><dt>Adresse livraison</dt><dd>{livraisonAddr}</dd></div>
+        <div class="info-row"><dt>Adresse facturation</dt><dd>{facturationAddr}</dd></div>
+        <div class="info-row"><dt>Statut</dt><dd><span class={`status-badge status-badge--${client.status}`}>{CLIENT_STATUS_LABEL[client.status] ?? client.status}</span></dd></div>
+        <div class="info-row"><dt>Inscription</dt><dd>{formatDate(client.created_at)}</dd></div>
+      </dl>
+    </div>
+
+    <div class="card">
+      <h2 class="card-title">Activité</h2>
+      <dl class="info-list">
+        <div class="info-row"><dt>Compte créé le</dt><dd>{formatDate(client.created_at)}</dd></div>
+        <div class="info-row"><dt>Dernière commande</dt><dd>{lastOrderDate ? formatDate(lastOrderDate) : '—'}</dd></div>
+        <div class="info-row"><dt>Nombre de commandes</dt><dd>{clientOrders.length}</dd></div>
+        <div class="info-row"><dt>CA total généré</dt><dd class="ca-total">{totalCA.toFixed(2).replace('.', ',')} € HT</dd></div>
+      </dl>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="card-title">Modifier le client</h2>
+    <form method="post" class="edit-form" novalidate>
+      <input type="hidden" name="action" value="update_client" />
+
+      <div class="field-group">
+        <div class="field">
+          <label for="email">Email <span class="required">*</span></label>
+          <input type="email" id="email" name="email" required value={client.email ?? ''} />
+        </div>
+        <div class="field">
+          <label for="telephone">Téléphone</label>
+          <input type="text" id="telephone" name="telephone" value={client.telephone ?? ''} />
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="status">Statut</label>
+        <select id="status" name="status">
+          <option value="en_attente" selected={client.status === 'en_attente'}>En attente</option>
+          <option value="actif"      selected={client.status === 'actif'}>Actif</option>
+          <option value="suspendu"   selected={client.status === 'suspendu'}>Suspendu</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="notes">Notes internes</label>
+        <textarea id="notes" name="notes" rows="3" placeholder="Notes visibles uniquement par l'équipe…">{client.notes ?? ''}</textarea>
+      </div>
+
+      <h3 class="subsection-title">Conditions commerciales</h3>
+      <div class="field-group field-group--3">
+        <div class="field">
+          <label for="remise">Remise (%)</label>
+          <input type="number" id="remise" name="remise" step="0.5" min="0" max="100" value={client.remise ?? ''} placeholder="0" />
+        </div>
+        <div class="field">
+          <label for="conditions_paiement">Conditions de paiement</label>
+          <select id="conditions_paiement" name="conditions_paiement">
+            <option value=""         selected={!client.conditions_paiement}>—</option>
+            <option value="comptant" selected={client.conditions_paiement === 'comptant'}>Comptant</option>
+            <option value="30j"      selected={client.conditions_paiement === '30j'}>30 jours</option>
+            <option value="60j"      selected={client.conditions_paiement === '60j'}>60 jours</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="plafond_credit">Plafond crédit (€)</label>
+          <input type="number" id="plafond_credit" name="plafond_credit" step="0.01" min="0" value={client.plafond_credit ?? ''} placeholder="0.00" />
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Enregistrer</button>
+        <a href="/admin/clients" class="btn btn-ghost">Annuler</a>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2 class="card-title">Historique des commandes</h2>
+    {ordersWithTotal.length === 0 ? (
+      <p class="empty-orders">Aucune commande pour ce client.</p>
+    ) : (
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Référence</th>
+              <th class="th-r">Total HT</th>
+              <th>Statut</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ordersWithTotal.map(o => (
+              <tr>
+                <td class="td-muted">{formatDate(o.created_at)}</td>
+                <td class="td-mono">#{shortId(o.id)}</td>
+                <td class="td-r">{o.total != null ? o.total.toFixed(2).replace('.', ',') + ' €' : '—'}</td>
+                <td><span class={`badge badge--${ORDER_STATUS_COLOR[o.status] ?? 'muted'}`}>{ORDER_STATUS_LABEL[o.status] ?? o.status}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </div>
+</AdminLayout>
+
+<style>
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-muted);
+  text-decoration: none;
+  margin-bottom: var(--space-4);
+  transition: color var(--dur-fast);
+}
+.back-link:hover { color: var(--color-ink); }
+
+.client-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+  flex-wrap: wrap;
+}
+.client-h1 {
+  font-family: var(--font-display);
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--color-ink);
+  margin: 0;
+}
+.client-sub {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  margin: var(--space-1) 0 0;
+}
+
+.grid-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-6);
+  margin-bottom: var(--space-4);
+}
+
+.card-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-ink);
+  margin: 0 0 var(--space-4);
+}
+
+.info-list { display: flex; flex-direction: column; gap: var(--space-3); margin: 0; }
+.info-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+.info-row:last-child { padding-bottom: 0; border-bottom: none; }
+.info-row dt { font-size: var(--text-xs); color: var(--color-muted); white-space: nowrap; }
+.info-row dd { font-size: var(--text-sm); font-weight: 500; color: var(--color-ink); text-align: right; margin: 0; }
+.ca-total { color: var(--color-primary-deep); font-weight: 700; }
+
+.status-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+.status-badge--en_attente { background: oklch(0.95 0.02 60);  color: oklch(0.45 0.10 60); }
+.status-badge--actif      { background: oklch(0.93 0.06 145); color: oklch(0.38 0.12 145); }
+.status-badge--suspendu   { background: oklch(0.95 0.02 25);  color: oklch(0.45 0.10 25); }
+
+.form-error {
+  font-size: var(--text-sm);
+  color: oklch(0.50 0.19 25);
+  background: oklch(0.97 0.04 25);
+  border: 1px solid oklch(0.88 0.07 25);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.edit-form { display: flex; flex-direction: column; gap: var(--space-5); }
+
+.subsection-title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: var(--space-2) 0 calc(var(--space-3) * -1);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.field-group { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+.field-group--3 { grid-template-columns: 1fr 1fr 1fr; }
+.field { display: flex; flex-direction: column; gap: var(--space-2); }
+
+label { font-size: var(--text-sm); font-weight: 500; color: var(--color-ink); }
+.required { color: var(--color-primary); }
+
+input[type="text"],
+input[type="email"],
+input[type="number"],
+select,
+textarea {
+  width: 100%;
+  padding: 0.6875rem 0.875rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  min-height: 44px;
+  outline: none;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+textarea { min-height: 80px; resize: vertical; }
+input::placeholder, textarea::placeholder { color: var(--color-muted); }
+input:focus, select:focus, textarea:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.15);
+}
+
+.form-actions {
+  display: flex;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.empty-orders { font-size: var(--text-sm); color: var(--color-muted); }
+
+.table-wrap { overflow-x: auto; }
+.data-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.data-table thead th {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+.data-table thead th.th-r { text-align: right; }
+.data-table tbody td {
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+.data-table tbody tr:last-child td { border-bottom: none; }
+.td-r { text-align: right; white-space: nowrap; }
+.td-mono { font-family: var(--font-mono); }
+.td-muted { color: var(--color-muted); white-space: nowrap; }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+.badge--muted  { background: var(--color-surface);  color: var(--color-muted); }
+.badge--blue   { background: oklch(0.93 0.05 220);  color: oklch(0.33 0.12 220); }
+.badge--amber  { background: oklch(0.95 0.07 80);   color: oklch(0.40 0.14 80); }
+.badge--purple { background: oklch(0.93 0.05 295);  color: oklch(0.38 0.12 295); }
+.badge--green  { background: oklch(0.92 0.08 150);  color: oklch(0.32 0.12 150); }
+.badge--red    { background: oklch(0.95 0.04 25);   color: oklch(0.46 0.18 25); }
+
+@media (max-width: 768px) {
+  .grid-2col { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .field-group,
+  .field-group--3 { grid-template-columns: 1fr; }
+  .info-row { flex-direction: column; align-items: flex-start; gap: var(--space-1); }
+  .info-row dd { text-align: left; }
+}
+</style>

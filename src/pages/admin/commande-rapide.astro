@@ -206,6 +206,9 @@ const ERROR_MSG: Record<string, string> = {
   order:  'Erreur lors de la création de la commande.',
 };
 
+const preselectId    = Astro.url.searchParams.get('client_id');
+const PRESELECT_VALUE = preselectId ? `client:${preselectId}` : null;
+
 const CLIENTS_JSON  = JSON.stringify(clients);
 const PRODUCTS_JSON = JSON.stringify(products);
 ---
@@ -339,7 +342,7 @@ const PRODUCTS_JSON = JSON.stringify(products);
 
 </AdminLayout>
 
-<script define:vars={{ CLIENTS_JSON, PRODUCTS_JSON, CAT_LABEL }}>
+<script define:vars={{ CLIENTS_JSON, PRODUCTS_JSON, CAT_LABEL, PRESELECT_VALUE }}>
   const clients  = JSON.parse(CLIENTS_JSON);
   const products = JSON.parse(PRODUCTS_JSON);
 
@@ -427,6 +430,11 @@ const PRODUCTS_JSON = JSON.stringify(products);
 
   clientSearch.addEventListener('input', () => renderClients(clientSearch.value));
   renderClients('');
+
+  if (PRESELECT_VALUE) {
+    const pre = clients.find(c => c.value === PRESELECT_VALUE);
+    if (pre) selectClient(pre);
+  }
 
   // ── Product cards ─────────────────────────────────────────
   function escapeHtml(s) {
