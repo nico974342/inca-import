@@ -26,6 +26,11 @@ const islandPath =
   'L127.32,84.49 L122.06,83.61 L123.79,89.25 L117.03,87.87 L120.61,86.72 L120.49,84.11 ' +
   'L103.51,87.84 L99.31,95.41 L100.69,90.94 L98.68,90.38 L96.39,100.49 L99.43,114.27 ' +
   'L96.39,128.68 L83.81,139.43 L72.12,140.25 L61.28,153.33 Z';
+
+const sub = 'Livraison 48h';
+function tooltipWidth(name) {
+  return Math.max(name.length, sub.length) * 6.6 + 28;
+}
 ---
 
 <section class="coverage" aria-labelledby="coverage-heading">
@@ -41,39 +46,71 @@ const islandPath =
         viewBox="0 0 480 420"
         role="img"
         aria-labelledby="coverage-map-title"
+        style="display:block; width:100%; height:auto; overflow:visible;"
       >
         <title id="coverage-map-title">Carte de La Réunion — communes livrées par Inca Import</title>
 
-        <rect class="ocean" x="0" y="0" width="480" height="420" rx="20" />
+        <rect
+          x="0" y="0" width="480" height="420" rx="24"
+          style={`fill: oklch(0.95 0.01 220);`}
+        />
 
-        <path class="island-shadow" d={islandPath} transform="translate(0 4)" />
-        <path class="island-shape" d={islandPath} />
+        <path
+          d={islandPath}
+          style="fill: white; stroke: oklch(0.568 0.149 45.9); stroke-width: 2; stroke-linejoin: round; filter: drop-shadow(0 10px 18px oklch(0.30 0.03 230 / 0.18));"
+        />
 
-        {communes.map(c => (
+        {communes.map((c, i) => (
           <g
             class="map-pin"
             tabindex="0"
             role="button"
-            aria-label={c.name}
+            aria-label={`${c.name} — Livraison 48h`}
             transform={`translate(${c.x} ${c.y})`}
+            style="cursor: pointer; outline: none;"
           >
-            <circle class="pin-halo" r="11" />
-            <circle class="pin-dot" r="6.5" />
-            <circle class="pin-core" r="2.25" />
+            <circle
+              class="pin-pulse"
+              r="7"
+              style={`fill: none; stroke: oklch(0.568 0.149 45.9); stroke-width: 2; transform-box: fill-box; transform-origin: center; animation-delay: ${i * 0.28}s;`}
+            />
+            <circle
+              class="pin-dot"
+              r="6.5"
+              style="fill: oklch(0.568 0.149 45.9); stroke: white; stroke-width: 2; transform-box: fill-box; transform-origin: center;"
+            />
+            <circle class="pin-core" r="2.25" style="fill: white;" />
 
-            <g class="pin-tooltip" transform={`translate(0 ${-18 - 22})`}>
+            <g
+              class="pin-tooltip"
+              transform={`translate(0 ${-18 - 40})`}
+              style="transform-box: fill-box; transform-origin: center;"
+            >
               <rect
-                x={-(c.name.length * 3.6 + 10)}
+                x={-(tooltipWidth(c.name) / 2)}
                 y="0"
-                width={c.name.length * 7.2 + 20}
-                height="24"
-                rx="6"
+                width={tooltipWidth(c.name)}
+                height="42"
+                rx="9"
+                style="fill: white; stroke: oklch(0.90 0.01 220); stroke-width: 1; filter: drop-shadow(0 6px 14px oklch(0.30 0.03 230 / 0.20));"
               />
-              <text x="0" y="16">{c.name}</text>
+              <text
+                x="0" y="17"
+                style="fill: var(--color-ink); font-family: var(--font-body); font-size: 13px; font-weight: 700; text-anchor: middle;"
+              >{c.name}</text>
+              <text
+                x="0" y="32"
+                style="fill: oklch(0.568 0.149 45.9); font-family: var(--font-body); font-size: 11px; font-weight: 600; text-anchor: middle;"
+              >{sub}</text>
             </g>
           </g>
         ))}
       </svg>
+    </div>
+
+    <div class="coverage-legend">
+      <span class="legend-dot" style="background: oklch(0.568 0.149 45.9);"></span>
+      <span class="legend-label">Zone de livraison Inca Import</span>
     </div>
 
     <ul class="sr-only">
@@ -112,63 +149,25 @@ const islandPath =
   color: var(--color-muted);
 }
 
-/* Map */
 .coverage-map-wrap {
   max-width: 700px;
   margin: 0 auto;
 }
 
-.coverage-map {
-  display: block;
-  width: 100%;
-  height: auto;
-  overflow: visible;
-}
-
-.ocean {
-  fill: oklch(0.62 0.085 220);
-}
-
-.island-shadow {
-  fill: oklch(0.10 0.02 45.9 / 0.18);
-}
-
-.island-shape {
-  fill: oklch(0.685 0.085 130);
-  stroke: oklch(0.50 0.09 130);
-  stroke-width: 1.5;
-  stroke-linejoin: round;
-}
-
-.map-pin {
-  cursor: pointer;
-  outline: none;
-}
-
-.pin-halo {
-  fill: var(--color-primary);
-  opacity: 0.22;
-}
-
-.pin-dot {
-  fill: var(--color-primary);
-  stroke: white;
-  stroke-width: 2;
-}
-
-.pin-core {
-  fill: white;
-}
-
-.map-pin,
-.pin-halo,
-.pin-dot {
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
+/* Pulse ring */
 @media (prefers-reduced-motion: no-preference) {
-  .pin-halo,
+  .pin-pulse {
+    animation: pin-pulse 2.4s ease-out infinite;
+  }
+}
+
+@keyframes pin-pulse {
+  0%   { transform: scale(1);    opacity: 0.55; }
+  100% { transform: scale(2.6);  opacity: 0; }
+}
+
+/* Pin hover / focus */
+@media (prefers-reduced-motion: no-preference) {
   .pin-dot {
     transition: transform var(--dur-fast) var(--ease-out-quart);
   }
@@ -176,20 +175,13 @@ const islandPath =
 
 .map-pin:hover .pin-dot,
 .map-pin:focus-visible .pin-dot {
-  transform: scale(1.18);
-}
-
-.map-pin:hover .pin-halo,
-.map-pin:focus-visible .pin-halo {
-  transform: scale(1.6);
+  transform: scale(1.25);
 }
 
 /* Tooltip */
 .pin-tooltip {
   opacity: 0;
   pointer-events: none;
-  transform-box: fill-box;
-  transform-origin: center;
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -206,19 +198,26 @@ const islandPath =
   transform: translateY(0);
 }
 
-.pin-tooltip rect {
-  fill: var(--color-ink);
+/* Legend */
+.coverage-legend {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  margin-top: clamp(var(--space-6), 3vw, var(--space-8));
 }
 
-.pin-tooltip text {
-  fill: white;
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
+.legend-label {
   font-family: var(--font-body);
-  font-size: 13px;
-  font-weight: 600;
-  text-anchor: middle;
-}
-
-@media (max-width: 480px) {
-  .pin-tooltip text { font-size: 12px; }
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-muted);
 }
 </style>
