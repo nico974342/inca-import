@@ -26,15 +26,76 @@ const {
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="alternate icon" href="/favicon.ico" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Inca Import" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
     href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;600;700&family=Figtree:wght@400;500;600&display=swap"
     rel="stylesheet"
   />
+  <script is:inline>
+    (function () {
+      var standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+      if (standalone) document.documentElement.classList.add('pwa-standalone');
+    })();
+  </script>
 </head>
 <body>
+  <div id="pwa-splash" aria-hidden="true">
+    <span class="pwa-splash-logo">II</span>
+  </div>
   <slot />
   <CookieBanner />
 </body>
 </html>
+
+<style>
+#pwa-splash {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  align-items: center;
+  justify-content: center;
+  background: #c45b18;
+  opacity: 1;
+  transition: opacity 0.4s ease-out;
+}
+:global(html.pwa-standalone) #pwa-splash {
+  display: flex;
+}
+#pwa-splash.pwa-splash--hide {
+  opacity: 0;
+  pointer-events: none;
+}
+.pwa-splash-logo {
+  font-family: 'Barlow Semi Condensed', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 4rem;
+  letter-spacing: -0.02em;
+  color: white;
+}
+@media (prefers-reduced-motion: reduce) {
+  #pwa-splash { transition: none; }
+}
+</style>
+
+<script>
+  const splash = document.getElementById('pwa-splash');
+  if (splash) {
+    if (document.documentElement.classList.contains('pwa-standalone')) {
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const delay = reducedMotion ? 0 : 1500;
+      const fade  = reducedMotion ? 0 : 450;
+      setTimeout(() => {
+        splash.classList.add('pwa-splash--hide');
+        setTimeout(() => splash.remove(), fade);
+      }, delay);
+    } else {
+      splash.remove();
+    }
+  }
+</script>
