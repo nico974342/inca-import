@@ -1,0 +1,345 @@
+---
+import AdminLayout from '../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../lib/supabase';
+
+let products: Array<Record<string, unknown>> = [];
+{
+  const { data, error } = await supabaseAdmin
+    .from('products')
+    .select('id, name, category, sku, stock_quantity, stock_updated_at')
+    .order('stock_quantity', { ascending: true })
+    .order('name', { ascending: true });
+
+  if (!error) {
+    products = data ?? [];
+  } else {
+    console.error('admin/stocks SSR query error:', error);
+    const fallback = await supabaseAdmin
+      .from('products')
+      .select('id, name, category, sku, stock_quantity')
+      .order('stock_quantity', { ascending: true })
+      .order('name', { ascending: true });
+    products = (fallback.data ?? []).map((p) => ({ ...p, stock_updated_at: null }));
+  }
+}
+
+const CAT_LABEL: Record<string, string> = {
+  boissons: 'Boissons',
+  snacks: 'Snacks',
+  confiseries: 'Confiseries',
+};
+---
+<AdminLayout title="Stocks" activeNav="stocks">
+  <div
+    id="summaryGrid"
+    style="display:grid;grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));gap:var(--space-4);margin-bottom:var(--space-6);"
+  ></div>
+
+  <div style="display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-5);">
+    <select
+      id="filterCategory"
+      style="padding:0.5rem 0.75rem;font-family:var(--font-body);font-size:var(--text-sm);color:var(--color-ink);background:var(--color-bg);border:1.5px solid var(--color-border-strong);border-radius:var(--radius-sm);min-height:40px;"
+    >
+      <option value="all">Tous</option>
+      <option value="boissons">Boissons</option>
+      <option value="snacks">Snacks</option>
+      <option value="confiseries">Confiseries</option>
+    </select>
+    <input
+      id="filterSearch"
+      type="search"
+      placeholder="Rechercher un produit…"
+      style="flex:1;min-width:200px;padding:0.5rem 0.875rem;font-family:var(--font-body);font-size:var(--text-sm);color:var(--color-ink);background:var(--color-bg);border:1.5px solid var(--color-border-strong);border-radius:var(--radius-sm);min-height:40px;"
+    />
+    <button
+      id="zeroAllBtn"
+      type="button"
+      style="padding:0.5rem 1rem;font-size:var(--text-sm);font-weight:600;color:oklch(0.50 0.19 25);background:oklch(0.97 0.04 25);border:1px solid oklch(0.85 0.08 25);border-radius:var(--radius-sm);cursor:pointer;white-space:nowrap;"
+    >
+      Tout mettre à 0
+    </button>
+    <button
+      id="exportCsvBtn"
+      type="button"
+      style="padding:0.5rem 1rem;font-size:var(--text-sm);font-weight:600;color:var(--color-ink);background:var(--color-surface);border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);cursor:pointer;white-space:nowrap;"
+    >
+      Export CSV
+    </button>
+  </div>
+
+  {products && products.length > 0 ? (
+    <div style="background:var(--color-bg);border:1px solid var(--color-border);border-radius:var(--radius-md);overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:var(--text-sm);">
+        <thead>
+          <tr>
+            <th style="padding:var(--space-3) var(--space-4);text-align:left;font-size:var(--text-xs);font-weight:600;color:var(--color-muted);text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid var(--color-border);white-space:nowrap;">Produit</th>
+            <th style="padding:var(--space-3) var(--space-4);text-align:right;font-size:var(--text-xs);font-weight:600;color:var(--color-muted);text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid var(--color-border);white-space:nowrap;">Stock</th>
+            <th style="padding:var(--space-3) var(--space-4);text-align:right;font-size:var(--text-xs);font-weight:600;color:var(--color-muted);text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid var(--color-border);white-space:nowrap;">Dernière m.à.j.</th>
+          </tr>
+        </thead>
+        <tbody id="stockTbody"></tbody>
+      </table>
+    </div>
+  ) : (
+    <div style="background:var(--color-bg);border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-16) var(--space-8);text-align:center;">
+      <p style="font-weight:600;color:var(--color-ink);margin-bottom:var(--space-2);">Aucun produit encore.</p>
+      <p style="color:var(--color-muted);">Ajoutez des produits pour suivre leur stock ici.</p>
+    </div>
+  )}
+</AdminLayout>
+
+<script define:vars={{ initialProducts: products ?? [], catLabels: CAT_LABEL }}>
+  let allProducts = initialProducts;
+  const filter = { category: 'all', search: '' };
+
+  const summaryGrid    = document.getElementById('summaryGrid');
+  const tbody          = document.getElementById('stockTbody');
+  const filterCategory = document.getElementById('filterCategory');
+  const filterSearch   = document.getElementById('filterSearch');
+  const zeroAllBtn     = document.getElementById('zeroAllBtn');
+  const exportCsvBtn   = document.getElementById('exportCsvBtn');
+
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  function tier(qty) {
+    if (qty === 0) return { label: 'Rupture', color: 'oklch(0.58 0.17 30)' };
+    if (qty <= 4) return { label: String(qty), color: 'oklch(0.50 0.19 25)' };
+    if (qty <= 9) return { label: String(qty), color: 'oklch(0.50 0.15 70)' };
+    return { label: String(qty), color: 'oklch(0.45 0.14 145)' };
+  }
+
+  function catStyle(category) {
+    const map = {
+      boissons:    'background:oklch(0.93 0.05 220);color:oklch(0.35 0.10 220);',
+      snacks:      'background:oklch(0.94 0.05 60);color:oklch(0.40 0.12 60);',
+      confiseries: 'background:oklch(0.93 0.06 330);color:oklch(0.40 0.12 330);',
+    };
+    return map[category] ?? 'background:var(--color-surface-2);color:var(--color-muted);';
+  }
+
+  function formatDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '—';
+    return (
+      d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' }) +
+      ' ' +
+      d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+    );
+  }
+
+  function rowStyle(qty, idx) {
+    if (qty === 0) return 'background:oklch(0.97 0.025 25);border-left:4px solid oklch(0.55 0.19 25);';
+    if (qty < 5) return 'background:oklch(0.975 0.02 70);border-left:4px solid oklch(0.60 0.15 70);';
+    const baseBg = idx % 2 === 1 ? 'var(--color-surface)' : 'var(--color-bg)';
+    return `background:${baseBg};border-left:4px solid transparent;`;
+  }
+
+  function summaryCardHtml(value, label, bg, fg) {
+    return `
+      <div style="background:${bg};border-radius:var(--radius-md);padding:var(--space-5);display:flex;flex-direction:column;gap:var(--space-1);">
+        <span style="font-family:var(--font-display);font-size:1.75rem;font-weight:700;color:${fg};line-height:1.1;">${value}</span>
+        <span style="font-size:var(--text-xs);font-weight:600;color:${fg};opacity:0.8;">${label}</span>
+      </div>
+    `;
+  }
+
+  function renderSummary(products) {
+    if (!summaryGrid) return;
+    const total    = products.length;
+    const enStock  = products.filter((p) => p.stock_quantity >= 5).length;
+    const stockBas = products.filter((p) => p.stock_quantity > 0 && p.stock_quantity < 5).length;
+    const rupture  = products.filter((p) => p.stock_quantity === 0).length;
+
+    summaryGrid.innerHTML = [
+      summaryCardHtml(total,    'Produits',        'var(--color-surface-2)', 'var(--color-ink)'),
+      summaryCardHtml(enStock,  'En stock',         'oklch(0.93 0.07 145)',   'oklch(0.30 0.13 145)'),
+      summaryCardHtml(stockBas, 'Stock bas (1-4)',  'oklch(0.95 0.08 70)',    'oklch(0.40 0.14 60)'),
+      summaryCardHtml(rupture,  'Rupture',          'oklch(0.95 0.06 25)',   'oklch(0.46 0.18 25)'),
+    ].join('');
+  }
+
+  function stockDisplayHtml(p) {
+    const t = tier(p.stock_quantity);
+    return `
+      <button type="button" data-action="dec" data-id="${p.id}"
+        style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;font-size:var(--text-sm);font-weight:700;line-height:1;color:var(--color-ink);background:var(--color-surface);border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);cursor:pointer;"
+        onmouseenter="this.style.background='var(--color-surface-2)'" onmouseleave="this.style.background='var(--color-surface)'"
+        aria-label="Diminuer le stock">−</button>
+      <span data-id="${p.id}" data-qty="${p.stock_quantity}" onclick="stkEnterEdit('${p.id}')"
+        style="font-family:var(--font-display);font-size:1.5rem;font-weight:700;color:${t.color};min-width:3.5ch;text-align:center;cursor:pointer;border-bottom:1px dashed currentColor;"
+        title="Cliquer pour modifier">${t.label}</span>
+      <button type="button" data-action="inc" data-id="${p.id}"
+        style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;font-size:var(--text-sm);font-weight:700;line-height:1;color:var(--color-ink);background:var(--color-surface);border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);cursor:pointer;"
+        onmouseenter="this.style.background='var(--color-surface-2)'" onmouseleave="this.style.background='var(--color-surface)'"
+        aria-label="Augmenter le stock">+</button>
+    `;
+  }
+
+  function stockEditHtml(p) {
+    return `
+      <input type="number" min="0" id="stockInput-${p.id}" value="${p.stock_quantity}"
+        onkeydown="if(event.key==='Enter'){stkSaveEdit('${p.id}')}if(event.key==='Escape'){stkCancelEdit('${p.id}')}"
+        style="width:4.5rem;padding:0.35rem 0.5rem;font-family:var(--font-display);font-size:1.1rem;font-weight:700;text-align:center;color:var(--color-ink);background:var(--color-bg);border:1.5px solid var(--color-primary);border-radius:var(--radius-sm);" />
+      <button type="button" onclick="stkSaveEdit('${p.id}')"
+        style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;color:white;background:oklch(0.55 0.15 145);border:none;border-radius:var(--radius-sm);cursor:pointer;font-weight:700;"
+        aria-label="Valider">✓</button>
+      <button type="button" onclick="stkCancelEdit('${p.id}')"
+        style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;color:var(--color-muted);background:var(--color-surface);border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);cursor:pointer;font-weight:700;"
+        aria-label="Annuler">✕</button>
+    `;
+  }
+
+  window.stkEnterEdit = function (id) {
+    const cell = document.getElementById(`stockCell-${id}`);
+    const p = allProducts.find((prod) => prod.id === id);
+    if (!cell || !p) return;
+    cell.innerHTML = stockEditHtml(p);
+    const input = document.getElementById(`stockInput-${id}`);
+    input?.focus();
+    input?.select();
+  };
+
+  window.stkCancelEdit = function (id) {
+    const cell = document.getElementById(`stockCell-${id}`);
+    const p = allProducts.find((prod) => prod.id === id);
+    if (!cell || !p) return;
+    cell.innerHTML = stockDisplayHtml(p);
+  };
+
+  window.stkSaveEdit = async function (id) {
+    const input = document.getElementById(`stockInput-${id}`);
+    if (!input) return;
+    const value = parseInt(input.value, 10);
+    if (Number.isNaN(value) || value < 0) return;
+
+    const res = await fetch('/api/produits/stocks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, value }),
+    });
+    const data = await res.json();
+    applyData(data.products ?? []);
+  };
+
+  function rowHtml(p, idx) {
+    return `
+      <tr style="${rowStyle(p.stock_quantity, idx)}">
+        <td style="padding:var(--space-3) var(--space-4);border-bottom:1px solid var(--color-border);vertical-align:middle;">
+          <div style="display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap;">
+            <span style="font-weight:600;color:var(--color-ink);">${escapeHtml(p.name)}</span>
+            <span style="display:inline-block;padding:2px 8px;border-radius:var(--radius-full);font-size:var(--text-xs);font-weight:500;white-space:nowrap;${catStyle(p.category)}">${escapeHtml(catLabels[p.category] ?? p.category)}</span>
+          </div>
+          <div style="font-size:var(--text-xs);color:var(--color-muted);margin-top:2px;font-family:var(--font-mono);">${p.sku ? escapeHtml(p.sku) : '—'}</div>
+        </td>
+        <td style="padding:var(--space-3) var(--space-4);border-bottom:1px solid var(--color-border);vertical-align:middle;text-align:right;">
+          <div id="stockCell-${p.id}" style="display:inline-flex;align-items:center;gap:var(--space-3);">${stockDisplayHtml(p)}</div>
+        </td>
+        <td style="padding:var(--space-3) var(--space-4);border-bottom:1px solid var(--color-border);vertical-align:middle;text-align:right;color:var(--color-muted);font-size:var(--text-xs);white-space:nowrap;">${formatDate(p.stock_updated_at)}</td>
+      </tr>
+    `;
+  }
+
+  function filteredProducts() {
+    return allProducts.filter((p) => {
+      const matchCat = filter.category === 'all' || p.category === filter.category;
+      const matchSearch = filter.search === '' || p.name.toLowerCase().includes(filter.search);
+      return matchCat && matchSearch;
+    });
+  }
+
+  function renderTable() {
+    if (!tbody) return;
+    const list = filteredProducts();
+    tbody.innerHTML = list.map((p, idx) => rowHtml(p, idx)).join('');
+  }
+
+  function applyData(products) {
+    allProducts = products;
+    renderSummary(allProducts);
+    renderTable();
+  }
+
+  async function refresh() {
+    const res = await fetch('/api/produits/stocks');
+    const data = await res.json();
+    applyData(data.products ?? []);
+  }
+
+  tbody?.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    const id = btn.dataset.id;
+    if (!id) return;
+
+    const delta = btn.dataset.action === 'inc' ? 1 : -1;
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/produits/stocks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, delta }),
+      });
+      const data = await res.json();
+      applyData(data.products ?? []);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  filterCategory?.addEventListener('change', () => {
+    filter.category = filterCategory.value;
+    renderTable();
+  });
+
+  filterSearch?.addEventListener('input', () => {
+    filter.search = filterSearch.value.trim().toLowerCase();
+    renderTable();
+  });
+
+  zeroAllBtn?.addEventListener('click', async () => {
+    if (!confirm('Mettre tous les stocks à 0 ? Cette action est irréversible.')) return;
+    zeroAllBtn.disabled = true;
+    try {
+      const res = await fetch('/api/produits/stocks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'zero-all' }),
+      });
+      const data = await res.json();
+      applyData(data.products ?? []);
+    } finally {
+      zeroAllBtn.disabled = false;
+    }
+  });
+
+  exportCsvBtn?.addEventListener('click', () => {
+    const header = ['Nom', 'Catégorie', 'SKU', 'Stock', 'Dernière mise à jour'];
+    const rows = allProducts.map((p) => [
+      p.name,
+      catLabels[p.category] ?? p.category,
+      p.sku ?? '',
+      String(p.stock_quantity),
+      p.stock_updated_at ? formatDate(p.stock_updated_at) : '',
+    ]);
+    const csv = [header, ...rows]
+      .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\r\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `stocks-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+
+  applyData(allProducts);
+  setInterval(refresh, 30000);
+</script>
