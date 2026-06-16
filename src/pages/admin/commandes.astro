@@ -1,7 +1,7 @@
 ---
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
-import { sendLowStockAlert } from '../../lib/email';
+import { sendLowStockAlert, sendOrderStatusEmail } from '../../lib/email';
 import { sendOrderConfirmedWebhook } from '../../lib/webhooks';
 
 // Handle POST: update order status
@@ -19,6 +19,27 @@ if (Astro.request.method === 'POST') {
       .eq('id', order_id).single();
 
     await supabaseAdmin.from('orders').update({ status: new_status }).eq('id', order_id);
+
+    // Notify the client by email on every status change — fire-and-forget
+    if (current && current.status !== new_status && current.email) {
+      const { data: statusItems } = await supabaseAdmin
+        .from('order_items')
+        .select('product_name, quantity, unit, products(price_ht)')
+        .eq('order_id', order_id);
+
+      const totalHt = (statusItems ?? []).reduce(
+        (sum, it) => sum + Number((it as any).products?.price_ht ?? 0) * it.quantity,
+        0
+      );
+
+      sendOrderStatusEmail({
+        to: current.email,
+        orderId: order_id,
+        status: new_status,
+        items: (statusItems ?? []).map(it => ({ name: it.product_name, quantity: it.quantity, unit: it.unit })),
+        totalHt,
+      }).catch(() => {});
+    }
 
     // Decrement stock only on first transition to confirmee
     if (current?.status !== 'confirmee' && new_status === 'confirmee') {

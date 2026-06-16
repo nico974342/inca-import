@@ -1,25 +1,31 @@
 ---
-import '../../styles/global.css';
-import { createAuthClient } from '../../lib/supabase';
+import '../styles/global.css';
+import { createAuthClient } from '../lib/supabase';
+import { sanitizeEmail } from '../lib/sanitize';
 
-const supabase = createAuthClient(Astro.request, Astro.cookies);
-const { data: { user } } = await supabase.auth.getUser();
-if (user?.user_metadata?.role === 'client') return Astro.redirect('/catalogue');
+if (Astro.request.method === 'POST') {
+  const form  = await Astro.request.formData();
+  const email = sanitizeEmail(form.get('email') as string);
 
-const error = Astro.url.searchParams.get('error');
-const reinitialise = !!Astro.url.searchParams.get('reinitialise');
+  if (email) {
+    const supabase = createAuthClient(Astro.request, Astro.cookies);
+    await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${Astro.url.origin}/reinitialiser-mot-de-passe`,
+    });
+  }
 
-const ERRORS: Record<string, string> = {
-  champs_requis:        'Email et mot de passe sont obligatoires.',
-  identifiants_invalides: 'Email ou mot de passe incorrect.',
-};
+  // Always show the same confirmation, whether or not the email exists
+  return Astro.redirect('/mot-de-passe-oublie?envoye=1');
+}
+
+const envoye = !!Astro.url.searchParams.get('envoye');
 ---
 <!doctype html>
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Connexion Client — Inca Import</title>
+  <title>Mot de passe oublié — Inca Import</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -32,7 +38,7 @@ const ERRORS: Record<string, string> = {
   <main class="auth-shell">
     <div class="auth-card">
 
-      <a href="/connexion" class="auth-back" aria-label="Retour au choix de connexion">
+      <a href="/connexion/client" class="auth-back" aria-label="Retour à la connexion">
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
           <path d="M9 2L4 7l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
@@ -42,49 +48,41 @@ const ERRORS: Record<string, string> = {
       <a href="/" class="auth-brand" aria-label="Inca Import — accueil">
         <span class="wm-inca">Inca</span><span class="wm-import">Import</span>
       </a>
-      <p class="auth-subtitle">Connexion à votre espace client</p>
+      <p class="auth-subtitle">Réinitialiser votre mot de passe</p>
 
-      {error && (
-        <p class="auth-error" role="alert">{ERRORS[error] ?? 'Une erreur est survenue.'}</p>
-      )}
-
-      {reinitialise && (
-        <p class="auth-success-msg" role="status">Mot de passe mis à jour. Connectez-vous.</p>
-      )}
-
-      <form method="POST" action="/api/auth/client-login" class="auth-form" novalidate>
-        <div class="field">
-          <label for="email">Adresse email</label>
-          <input
-            type="email"
-            id="email"
-            name="email"
-            required
-            autocomplete="email"
-            placeholder="jean@exemple.re"
-            autofocus
-          />
+      {envoye ? (
+        <div class="auth-success" role="status">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <circle cx="10" cy="10" r="9" stroke="oklch(0.52 0.17 145)" stroke-width="1.5"/>
+            <path d="M6 10l3 3 5-5" stroke="oklch(0.52 0.17 145)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <div>
+            <p class="success-title">Email envoyé !</p>
+            <p class="success-body">Si un compte existe avec cette adresse, vous recevrez un lien pour choisir un nouveau mot de passe.</p>
+          </div>
         </div>
+      ) : (
+        <form method="POST" class="auth-form" novalidate>
+          <p class="auth-hint">Indiquez votre adresse email, nous vous envoyons un lien pour créer un nouveau mot de passe.</p>
+          <div class="field">
+            <label for="email">Adresse email</label>
+            <input
+              type="email"
+              id="email"
+              name="email"
+              required
+              autocomplete="email"
+              placeholder="jean@exemple.re"
+              autofocus
+            />
+          </div>
 
-        <div class="field">
-          <label for="password">Mot de passe</label>
-          <input
-            type="password"
-            id="password"
-            name="password"
-            required
-            autocomplete="current-password"
-            placeholder="••••••••"
-          />
-          <a href="/mot-de-passe-oublie" class="auth-forgot">Mot de passe oublié ?</a>
-        </div>
-
-        <button type="submit" class="btn btn-primary auth-submit">Se connecter</button>
-      </form>
+          <button type="submit" class="btn btn-primary auth-submit">Envoyer le lien</button>
+        </form>
+      )}
 
       <p class="auth-footer">
-        Pas encore client ?
-        <a href="/inscription">Ouvrir un compte →</a>
+        <a href="/connexion/client">← Retour à la connexion</a>
       </p>
     </div>
   </main>
@@ -154,25 +152,34 @@ const ERRORS: Record<string, string> = {
   margin-bottom: var(--space-8);
 }
 
-.auth-error {
+.auth-hint {
   font-size: var(--text-sm);
-  color: oklch(0.50 0.19 25);
-  background: oklch(0.97 0.04 25);
-  border: 1px solid oklch(0.88 0.07 25);
-  border-radius: var(--radius-sm);
-  padding: var(--space-3) var(--space-4);
-  margin-bottom: var(--space-5);
+  color: var(--color-muted);
+  line-height: 1.5;
+  margin-bottom: var(--space-2);
 }
 
-.auth-success-msg {
-  font-size: var(--text-sm);
-  font-weight: 500;
-  color: oklch(0.35 0.12 145);
+.auth-success {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
   background: oklch(0.96 0.04 145);
   border: 1px solid oklch(0.85 0.08 145);
   border-radius: var(--radius-sm);
-  padding: var(--space-3) var(--space-4);
-  margin-bottom: var(--space-5);
+  padding: var(--space-4);
+  margin-bottom: var(--space-2);
+}
+.auth-success svg { flex-shrink: 0; margin-top: 2px; }
+.success-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: oklch(0.35 0.12 145);
+  margin-bottom: var(--space-1);
+}
+.success-body {
+  font-size: var(--text-sm);
+  color: oklch(0.40 0.10 145);
+  line-height: 1.5;
 }
 
 .auth-form {
@@ -193,8 +200,7 @@ label {
   color: var(--color-ink);
 }
 
-input[type="email"],
-input[type="password"] {
+input[type="email"] {
   width: 100%;
   padding: 0.6875rem 0.875rem;
   font-family: var(--font-body);
@@ -213,15 +219,6 @@ input:focus {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.15);
 }
-
-.auth-forgot {
-  align-self: flex-end;
-  font-size: var(--text-xs);
-  font-weight: 500;
-  color: var(--color-muted);
-  text-decoration: none;
-}
-.auth-forgot:hover { color: var(--color-primary-deep); }
 
 .auth-submit { width: 100%; margin-top: var(--space-2); }
 

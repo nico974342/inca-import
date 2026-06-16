@@ -132,12 +132,33 @@ if (Astro.request.method === 'POST') {
     console.error('[Resend] Exception:', emailErr);
   }
 
-  return Astro.redirect('/commande?success=1');
+  return Astro.redirect(`/commande?success=1&order=${order.id}`);
 }
 
 // ── GET: show cart ─────────────────────────────────────────────
 const success  = !!Astro.url.searchParams.get('success');
 const hasError = !!Astro.url.searchParams.get('error');
+const orderId  = Astro.url.searchParams.get('order');
+
+type SuccessItem = { product_name: string; quantity: number; unit: string | null };
+let successItems: SuccessItem[] = [];
+let successTotalHT = 0;
+
+if (success && orderId) {
+  const { data: orderItems } = await supabaseAdmin
+    .from('order_items')
+    .select('product_name, quantity, unit, products(price_ht)')
+    .eq('order_id', orderId);
+
+  successItems = (orderItems ?? []).map(it => ({
+    product_name: it.product_name,
+    quantity: it.quantity,
+    unit: it.unit,
+  }));
+  successTotalHT = (orderItems ?? []).reduce(
+    (s, it) => s + it.quantity * Number((it as any).products?.price_ht ?? 0), 0
+  );
+}
 
 type CartItem = {
   quantity: number;
@@ -195,10 +216,32 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
             </svg>
           </div>
           <h2 class="success-title">Commande bien reçue !</h2>
+          {orderId && (
+            <p class="success-order-number">Commande n° {orderId.slice(0, 8).toUpperCase()}</p>
+          )}
           <p class="success-body">
             L'équipe Inca Import a été notifiée et vous contactera rapidement
             pour confirmer et organiser la livraison.
+            Vous recevrez un email de confirmation à chaque mise à jour du statut de votre commande.
           </p>
+
+          {successItems.length > 0 && (
+            <div class="success-summary">
+              <h3 class="success-summary-title">Récapitulatif</h3>
+              <ul class="success-summary-list">
+                {successItems.map(item => (
+                  <li>
+                    <span>{item.quantity} × {item.product_name}{item.unit ? ` (${item.unit})` : ''}</span>
+                  </li>
+                ))}
+              </ul>
+              <div class="success-summary-total">
+                <span>Total HT</span>
+                <span>{fmtHT(successTotalHT)}</span>
+              </div>
+            </div>
+          )}
+
           <a href="/catalogue" class="btn btn-primary">Retour au catalogue</a>
         </div>
       )}
@@ -383,6 +426,13 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
   margin-bottom: var(--space-4);
 }
 
+.success-order-number {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-primary-deep);
+  margin-bottom: var(--space-4);
+}
+
 .success-body {
   font-size: var(--text-base);
   color: var(--color-muted);
@@ -391,6 +441,43 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
   max-width: 400px;
   margin-inline: auto;
   margin-bottom: var(--space-8);
+}
+
+.success-summary {
+  text-align: left;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-5) var(--space-6);
+  margin-bottom: var(--space-8);
+}
+
+.success-summary-title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+  margin-bottom: var(--space-3);
+}
+
+.success-summary-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  margin-bottom: var(--space-4);
+}
+
+.success-summary-total {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-ink);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
 }
 
 /* ── Error ──────────────────────────────────────── */

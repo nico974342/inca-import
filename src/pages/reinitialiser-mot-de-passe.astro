@@ -1,0 +1,214 @@
+---
+import '../styles/global.css';
+import { createAuthClient } from '../lib/supabase';
+
+const supabase = createAuthClient(Astro.request, Astro.cookies);
+
+// Supabase's recovery link includes a `code` param to exchange for a session
+const code = Astro.url.searchParams.get('code');
+if (code) {
+  await supabase.auth.exchangeCodeForSession(code);
+}
+
+const { data: { user } } = await supabase.auth.getUser();
+
+let errorMessage = '';
+
+if (Astro.request.method === 'POST') {
+  if (!user) {
+    errorMessage = 'Lien invalide ou expiré. Refaites une demande de réinitialisation.';
+  } else {
+    const form = await Astro.request.formData();
+    const password  = form.get('password') as string;
+    const confirm   = form.get('confirm') as string;
+
+    if (!password || password.length < 8) {
+      errorMessage = 'Le mot de passe doit contenir au moins 8 caractères.';
+    } else if (password !== confirm) {
+      errorMessage = 'Les mots de passe ne correspondent pas.';
+    } else {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) {
+        errorMessage = 'Une erreur est survenue. Veuillez réessayer.';
+      } else {
+        return Astro.redirect('/connexion/client?reinitialise=1');
+      }
+    }
+  }
+}
+---
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nouveau mot de passe — Inca Import</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@700&family=Figtree:wght@400;500;600&display=swap"
+    rel="stylesheet"
+  />
+</head>
+<body class="auth-body">
+  <main class="auth-shell">
+    <div class="auth-card">
+
+      <a href="/" class="auth-brand" aria-label="Inca Import — accueil">
+        <span class="wm-inca">Inca</span><span class="wm-import">Import</span>
+      </a>
+      <p class="auth-subtitle">Choisissez un nouveau mot de passe</p>
+
+      {errorMessage && (
+        <p class="auth-error" role="alert">{errorMessage}</p>
+      )}
+
+      {!user ? (
+        <p class="auth-hint">
+          Ce lien n'est plus valide. <a href="/mot-de-passe-oublie">Refaire une demande →</a>
+        </p>
+      ) : (
+        <form method="POST" class="auth-form" novalidate>
+          <div class="field">
+            <label for="password">Nouveau mot de passe</label>
+            <input
+              type="password"
+              id="password"
+              name="password"
+              required
+              minlength="8"
+              autocomplete="new-password"
+              placeholder="••••••••"
+              autofocus
+            />
+          </div>
+
+          <div class="field">
+            <label for="confirm">Confirmer le mot de passe</label>
+            <input
+              type="password"
+              id="confirm"
+              name="confirm"
+              required
+              minlength="8"
+              autocomplete="new-password"
+              placeholder="••••••••"
+            />
+          </div>
+
+          <button type="submit" class="btn btn-primary auth-submit">Enregistrer le mot de passe</button>
+        </form>
+      )}
+    </div>
+  </main>
+</body>
+</html>
+
+<style>
+.auth-body {
+  font-family: var(--font-body);
+  background: var(--color-surface);
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+}
+
+.auth-shell {
+  width: 100%;
+  max-width: 420px;
+}
+
+.auth-card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-10);
+}
+
+.auth-brand {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  text-decoration: none;
+  margin-bottom: var(--space-2);
+}
+.wm-inca   { color: var(--color-primary); }
+.wm-import { color: var(--color-ink); font-weight: 400; }
+
+.auth-subtitle {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-muted);
+  margin-bottom: var(--space-8);
+}
+
+.auth-hint {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  line-height: 1.5;
+}
+.auth-hint a {
+  color: var(--color-primary-deep);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.auth-error {
+  font-size: var(--text-sm);
+  color: oklch(0.50 0.19 25);
+  background: oklch(0.97 0.04 25);
+  border: 1px solid oklch(0.88 0.07 25);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+label {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+input[type="password"] {
+  width: 100%;
+  padding: 0.6875rem 0.875rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  min-height: 44px;
+  outline: none;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+  box-sizing: border-box;
+}
+input::placeholder { color: var(--color-muted); }
+input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.15);
+}
+
+.auth-submit { width: 100%; margin-top: var(--space-2); }
+
+@media (max-width: 480px) {
+  .auth-card { padding: var(--space-8) var(--space-6); }
+}
+</style>

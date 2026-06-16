@@ -162,9 +162,12 @@ const productsMetaJSON = JSON.stringify(
                 </div>
 
                 <div class="product-body">
-                  <span class={`cat-badge cat-badge--${p.category}`}>
-                    {CAT_LABEL[p.category] ?? p.category}
-                  </span>
+                  <div class="badge-row">
+                    <span class={`cat-badge cat-badge--${p.category}`}>
+                      {CAT_LABEL[p.category] ?? p.category}
+                    </span>
+                    <span class="min-badge">min. 1 {p.unit ?? 'carton'}</span>
+                  </div>
 
                   <div class="product-name-group">
                     <h2 class="product-name">
@@ -1116,6 +1119,26 @@ const productsMetaJSON = JSON.stringify(
 .cat-badge--boissons    { background: oklch(0.93 0.05 220); color: oklch(0.33 0.10 220); }
 .cat-badge--snacks      { background: oklch(0.94 0.05 60);  color: oklch(0.38 0.12 60);  }
 .cat-badge--confiseries { background: oklch(0.93 0.06 330); color: oklch(0.36 0.12 330); }
+
+.badge-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.min-badge {
+  display: inline-flex;
+  align-self: flex-start;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  line-height: 1.6;
+  background: var(--color-surface);
+  color: var(--color-muted);
+  border: 1px solid var(--color-border);
+}
 
 .product-name-group {
   display: flex;
