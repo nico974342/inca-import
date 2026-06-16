@@ -127,9 +127,15 @@ function formatDate(iso: string) {
         </thead>
         <tbody>
           {rows.map(r => (
-            <tr>
+            <tr class={r.kind === 'client' ? 'client-row' : ''} data-href={r.kind === 'client' ? `/admin/clients/${r.id}` : undefined}>
               <td class="td-strong">
-                {r.kind === 'client' ? <a href={`/admin/clients/${r.id}`} class="client-link">{r.nom}</a> : r.nom}
+                {r.kind === 'client' ? (
+                  <a
+                    href={`/admin/clients/${r.id}`}
+                    class="client-link"
+                    style="position: relative; z-index: 5; display: inline-block; cursor: pointer; pointer-events: auto; color: var(--color-primary); text-decoration: none;"
+                  >{r.nom}</a>
+                ) : r.nom}
               </td>
               <td>{r.societe ?? '—'}</td>
               <td class="td-mono">{r.telephone ?? '—'}</td>
@@ -198,6 +204,17 @@ function formatDate(iso: string) {
   )}
 </AdminLayout>
 
+<script>
+  document.querySelectorAll<HTMLTableRowElement>('tr.client-row').forEach(row => {
+    row.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('a, form, input, select, button, textarea')) return;
+      const href = row.dataset.href;
+      if (href) window.location.href = href;
+    });
+  });
+</script>
+
 <style>
 .table-wrap {
   background: var(--color-bg);
@@ -231,6 +248,7 @@ function formatDate(iso: string) {
 }
 .data-table tbody tr:last-child td { border-bottom: none; }
 .data-table tbody tr:hover td { background: var(--color-surface); }
+.data-table tbody tr.client-row { cursor: pointer; }
 
 .td-strong { font-weight: 500; color: var(--color-ink); white-space: nowrap; }
 .client-link { color: var(--color-primary); text-decoration: none; }
