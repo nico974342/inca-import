@@ -8,15 +8,29 @@ const adminUser = Astro.locals.user;
 
 // ── POST: create order ─────────────────────────────────────────
 if (Astro.request.method === 'POST') {
-  const form     = await Astro.request.formData();
-  const clientId = form.get('client_id') as string;
-  const notes    = (form.get('notes') as string)?.trim() ?? '';
+  const form         = await Astro.request.formData();
+  const clientIdRaw  = form.get('client_id') as string;
+  const notes        = (form.get('notes') as string)?.trim() ?? '';
 
-  const { data: client } = await supabaseAdmin
-    .from('client_accounts')
-    .select('nom, societe, email, telephone')
-    .eq('id', clientId)
-    .single();
+  const [clientKind, clientId] = (clientIdRaw ?? '').split(':');
+
+  let client: { nom: string; societe: string | null; email: string | null; telephone: string | null } | null = null;
+
+  if (clientKind === 'contact') {
+    const { data } = await supabaseAdmin
+      .from('contact_requests')
+      .select('nom, societe, email, telephone')
+      .eq('id', clientId)
+      .single();
+    client = data;
+  } else if (clientKind === 'client') {
+    const { data } = await supabaseAdmin
+      .from('client_accounts')
+      .select('nom, societe, email, telephone')
+      .eq('id', clientId)
+      .single();
+    client = data;
+  }
 
   if (!client) return Astro.redirect('/admin/commande-rapide?error=client');
 
@@ -118,14 +132,16 @@ if (Astro.request.method === 'POST') {
 
   const resend = new Resend(import.meta.env.RESEND_API_KEY);
 
-  const { error: e1 } = await resend.emails.send({
-    from: 'onboarding@resend.dev',
-    to:   client.email,
-    subject: `Votre commande Inca Import`,
-    text: emailBody,
-    attachments,
-  });
-  if (e1) console.error('[Resend] client email error:', JSON.stringify(e1));
+  if (client.email) {
+    const { error: e1 } = await resend.emails.send({
+      from: 'onboarding@resend.dev',
+      to:   client.email,
+      subject: `Votre commande Inca Import`,
+      text: emailBody,
+      attachments,
+    });
+    if (e1) console.error('[Resend] client email error:', JSON.stringify(e1));
+  }
 
   const { error: e2 } = await resend.emails.send({
     from: 'onboarding@resend.dev',
@@ -143,10 +159,26 @@ if (Astro.request.method === 'POST') {
 const success   = Astro.url.searchParams.get('success') === '1';
 const errorType = Astro.url.searchParams.get('error');
 
-const { data: clients } = await supabaseAdmin
+const { data: clientAccounts } = await supabaseAdmin
   .from('client_accounts')
-  .select('id, nom, societe, email')
+  .select('id, nom, societe, email, contact_request_id')
+  .eq('status', 'actif')
   .order('nom', { ascending: true });
+
+const { data: convertedContacts } = await supabaseAdmin
+  .from('contact_requests')
+  .select('id, nom, societe, email')
+  .eq('status', 'converti')
+  .order('nom', { ascending: true });
+
+const linkedContactIds = new Set((clientAccounts ?? []).map(c => c.contact_request_id).filter(Boolean));
+
+const clients = [
+  ...(clientAccounts ?? []).map(c => ({ value: `client:${c.id}`, nom: c.nom, societe: c.societe, email: c.email })),
+  ...(convertedContacts ?? [])
+    .filter(ct => !linkedContactIds.has(ct.id))
+    .map(ct => ({ value: `contact:${ct.id}`, nom: ct.nom, societe: ct.societe, email: ct.email })),
+].sort((a, b) => a.nom.localeCompare(b.nom));
 
 const { data: products } = await supabaseAdmin
   .from('products')
@@ -201,8 +233,8 @@ const ERROR_MSG: Record<string, string> = {
           <select name="client_id" id="client_id" required class="client-select">
             <option value="" disabled selected>Choisir un client…</option>
             {clients.map(c => (
-              <option value={c.id}>
-                {c.nom}{c.societe ? ` — ${c.societe}` : ''} ({c.email})
+              <option value={c.value}>
+                {c.nom}{c.societe ? ` — ${c.societe}` : ''}{c.email ? ` (${c.email})` : ''}
               </option>
             ))}
           </select>
