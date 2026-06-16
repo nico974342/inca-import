@@ -208,13 +208,19 @@ a.nav-user:hover { color: var(--color-primary); }
 .nav-details[open] .nav-toggle span:nth-child(2) { opacity: 0; transform: scaleX(0); }
 .nav-details[open] .nav-toggle span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
 
-/* Mobile menu — rendered by the browser only while <details> is open */
+/* Mobile menu — explicitly gated on [open], not left to the UA's implicit
+   details-content hiding (unreliable for out-of-flow fixed children on some
+   WebKit versions, which can leave an invisible full-viewport tap-blocker). */
 .nav-mobile {
+  display: none;
   position: fixed;
   inset: 64px 0 0 0;
   background: var(--color-bg);
   z-index: var(--z-dropdown);
   overflow-y: auto;
+}
+.nav-details[open] .nav-mobile {
+  display: block;
 }
 
 .nav-mobile nav {
