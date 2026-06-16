@@ -1,13 +1,9 @@
 ---
 import { supabaseAdmin } from '../lib/supabase';
 
-const FALLBACK = {
-  texte: "Depuis qu'on travaille avec Inca Import, le réassort est simple. Stock fiable, livraison dans les temps — et quand on a un souci, y'a toujours quelqu'un qui répond.",
-  nom: 'Jean-Marc Payet',
-  role: 'Gérant, Station Total — Saint-Denis',
-};
+type Testimonial = { texte: string; nom: string; role: string };
 
-let testimonial = FALLBACK;
+let testimonial: Testimonial | null = null;
 
 const { data, error } = await supabaseAdmin
   .from('testimonials')
@@ -21,27 +17,31 @@ if (!error && data) {
   testimonial = { texte: data.texte, nom: data.nom, role: data.role ?? '' };
 }
 
-const initials = testimonial.nom
-  .split(' ')
-  .map(n => n[0])
-  .join('')
-  .slice(0, 2)
-  .toUpperCase();
+const initials = testimonial
+  ? testimonial.nom.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()
+  : '';
 ---
 
 <section class="testimonial" aria-label="Témoignage client">
   <div class="container">
-    <blockquote class="quote-block">
-      <div class="quote-mark" aria-hidden="true">"</div>
-      <p class="quote-text">{testimonial.texte}</p>
-      <footer class="quote-footer">
-        <div class="quote-avatar" aria-hidden="true">{initials}</div>
-        <div class="quote-byline">
-          <cite class="quote-name">{testimonial.nom}</cite>
-          {testimonial.role && <p class="quote-role">{testimonial.role}</p>}
-        </div>
-      </footer>
-    </blockquote>
+    {testimonial ? (
+      <blockquote class="quote-block">
+        <div class="quote-mark" aria-hidden="true">"</div>
+        <p class="quote-text">{testimonial.texte}</p>
+        <footer class="quote-footer">
+          <div class="quote-avatar" aria-hidden="true">{initials}</div>
+          <div class="quote-byline">
+            <cite class="quote-name">{testimonial.nom}</cite>
+            {testimonial.role && <p class="quote-role">{testimonial.role}</p>}
+          </div>
+        </footer>
+      </blockquote>
+    ) : (
+      <div class="quote-block quote-placeholder">
+        <div class="quote-mark" aria-hidden="true">"</div>
+        <p class="quote-text quote-text--placeholder">Témoignage à venir</p>
+      </div>
+    )}
   </div>
 </section>
 
@@ -83,6 +83,12 @@ const initials = testimonial.nom
   text-wrap: pretty;
   position: relative;
   z-index: 1;
+}
+
+.quote-placeholder { padding-bottom: clamp(var(--space-8), 4vw, var(--space-12)); }
+.quote-text--placeholder {
+  color: rgba(255, 255, 255, 0.55);
+  margin-bottom: 0;
 }
 
 /* Footer */

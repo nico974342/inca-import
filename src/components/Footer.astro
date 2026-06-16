@@ -27,7 +27,9 @@ const year = new Date().getFullYear();
       <p class="footer-nav-label">Contact</p>
       <ul>
         <li>
-          <a href="mailto:inca-import@hotmail.com">inca-import@hotmail.com</a>
+          <a id="footerEmail" href="#" rel="nofollow">
+            <noscript>inca-import [at] hotmail [dot] com</noscript>
+          </a>
         </li>
         <li>
           <a href="tel:+262692478941">0692 47 89 41</a>
@@ -50,6 +52,18 @@ const year = new Date().getFullYear();
     </div>
   </div>
 </footer>
+
+<script is:inline>
+  (function () {
+    var el = document.getElementById('footerEmail');
+    if (!el) return;
+    var user = 'inca-import';
+    var domain = 'hotmail.com';
+    var address = user + '@' + domain;
+    el.href = 'mailto:' + address;
+    el.textContent = address;
+  })();
+</script>
 
 <style>
 .site-footer {
