@@ -1,14 +1,19 @@
 ---
 const communes = [
-  { name: 'Saint-Denis',   x: 205, y: 42  },
-  { name: 'Sainte-Marie',  x: 248, y: 60  },
-  { name: 'Saint-André',   x: 280, y: 96  },
-  { name: 'Saint-Benoît',  x: 300, y: 165 },
-  { name: 'Saint-Pierre',  x: 192, y: 342 },
-  { name: 'Saint-Leu',     x: 104, y: 222 },
-  { name: 'Le Port',       x: 122, y: 72  },
-  { name: 'Saint-Paul',    x: 104, y: 112 },
+  'Saint-Denis',
+  'Saint-Paul',
+  'Le Port',
+  'Saint-Pierre',
+  'Saint-Leu',
+  'Saint-Benoît',
+  'Sainte-Marie',
+  'Saint-André',
 ];
+
+const lat = -21.115141;
+const lng = 55.536384;
+const zoom = 10;
+const mapSrc = `https://www.google.com/maps?q=${lat},${lng}&z=${zoom}&output=embed`;
 ---
 
 <section class="coverage" aria-labelledby="coverage-heading">
@@ -19,50 +24,20 @@ const communes = [
     </div>
 
     <div class="coverage-map-wrap">
-      <svg
+      <iframe
         class="coverage-map"
-        viewBox="0 0 400 400"
-        role="img"
-        aria-labelledby="coverage-map-title"
-      >
-        <title id="coverage-map-title">Carte des communes livrées à La Réunion</title>
-
-        <path
-          class="island-shape"
-          d="M205,40 C262,40 318,68 348,138 C368,186 362,258 322,308
-             C282,354 232,366 190,356 C132,344 90,300 70,240
-             C53,188 58,128 98,84 C128,54 166,40 205,40 Z"
-        />
-
-        {communes.map(c => (
-          <g
-            class="map-pin"
-            tabindex="0"
-            role="button"
-            aria-label={c.name}
-            transform={`translate(${c.x} ${c.y})`}
-          >
-            <circle class="pin-halo" r="11" />
-            <circle class="pin-dot" r="6.5" />
-            <circle class="pin-core" r="2.25" />
-
-            <g class="pin-tooltip" transform={`translate(0 ${-18 - 22})`}>
-              <rect
-                x={-(c.name.length * 3.6 + 10)}
-                y="0"
-                width={c.name.length * 7.2 + 20}
-                height="24"
-                rx="6"
-              />
-              <text x="0" y="16">{c.name}</text>
-            </g>
-          </g>
-        ))}
-      </svg>
+        src={mapSrc}
+        title="Carte de La Réunion — zone de livraison Inca Import"
+        loading="lazy"
+        referrerpolicy="no-referrer-when-downgrade"
+        allowfullscreen
+      ></iframe>
     </div>
 
-    <ul class="sr-only">
-      {communes.map(c => <li>{c.name}</li>)}
+    <ul class="coverage-pills">
+      {communes.map(c => (
+        <li class="coverage-pill">{c}</li>
+      ))}
     </ul>
   </div>
 </section>
@@ -100,101 +75,39 @@ const communes = [
 /* Map */
 .coverage-map-wrap {
   max-width: 700px;
-  margin: 0 auto;
+  margin: 0 auto clamp(var(--space-8), 4vw, var(--space-10));
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
 }
 
 .coverage-map {
   display: block;
   width: 100%;
-  height: auto;
-  overflow: visible;
+  height: 100%;
+  border: 0;
 }
 
-.island-shape {
-  fill: var(--color-surface-2);
-  stroke: var(--color-border-strong);
-  stroke-width: 2;
+/* Commune pills */
+.coverage-pills {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-3);
+  max-width: 700px;
+  margin: 0 auto;
 }
 
-.map-pin {
-  cursor: pointer;
-  outline: none;
-}
-
-.pin-halo {
-  fill: var(--color-primary);
-  opacity: 0.16;
-}
-
-.pin-dot {
-  fill: var(--color-primary);
-  stroke: white;
-  stroke-width: 2;
-}
-
-.pin-core {
-  fill: white;
-}
-
-.map-pin,
-.pin-halo,
-.pin-dot {
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .pin-halo,
-  .pin-dot {
-    transition: transform var(--dur-fast) var(--ease-out-quart);
-  }
-}
-
-.map-pin:hover .pin-dot,
-.map-pin:focus-visible .pin-dot {
-  transform: scale(1.18);
-}
-
-.map-pin:hover .pin-halo,
-.map-pin:focus-visible .pin-halo {
-  transform: scale(1.6);
-}
-
-/* Tooltip */
-.pin-tooltip {
-  opacity: 0;
-  pointer-events: none;
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .pin-tooltip {
-    transition: opacity var(--dur-fast) var(--ease-out-quart),
-                transform var(--dur-fast) var(--ease-out-quart);
-    transform: translateY(4px);
-  }
-}
-
-.map-pin:hover .pin-tooltip,
-.map-pin:focus-visible .pin-tooltip {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.pin-tooltip rect {
-  fill: var(--color-ink);
-}
-
-.pin-tooltip text {
-  fill: white;
+.coverage-pill {
+  padding: var(--space-2) var(--space-5);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
   font-family: var(--font-body);
-  font-size: 13px;
+  font-size: var(--text-sm);
   font-weight: 600;
-  text-anchor: middle;
-}
-
-@media (max-width: 480px) {
-  .pin-tooltip text { font-size: 12px; }
+  color: var(--color-ink);
 }
 </style>
