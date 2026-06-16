@@ -1,9 +1,9 @@
 ---
 const stats = [
-  { target: 120, suffix: '+', label: 'références au catalogue' },
-  { target: 3,   suffix: '',   label: 'points de vente livrés' },
-  { target: 7,   suffix: 'j/7', label: 'disponibilité garantie' },
-  { target: 100, suffix: '%',  label: 'réunionnais' },
+  { target: '120', suffix: '+',   label: 'références au catalogue' },
+  { target: '48',  suffix: 'h',   label: 'livraison garantie' },
+  { target: '7',   suffix: 'j/7', label: 'disponibilité garantie' },
+  { target: 'Familiale', suffix: '', label: 'entreprise réunionnaise' },
 ];
 ---
 
@@ -158,7 +158,8 @@ const stats = [
         // Delay counter start by the same time as the stagger
         const delay = parseFloat(getComputedStyle(item).transitionDelay) * 1000;
         const valueEl = item.querySelector<HTMLElement>('.stat-value');
-        if (valueEl) setTimeout(() => animateCounter(valueEl), delay);
+        const isNumeric = valueEl && /^\d+$/.test(valueEl.dataset.target ?? '');
+        if (valueEl && isNumeric) setTimeout(() => animateCounter(valueEl), delay);
       }
     }),
     { threshold: 0.25 }

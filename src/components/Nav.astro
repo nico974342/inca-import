@@ -16,23 +16,29 @@ const isClient = user?.user_metadata?.role === 'client';
 
     <nav class="nav-links" aria-label="Navigation principale">
       <a href="/catalogue">Catalogue</a>
-      <a href="#marques">Nos marques</a>
-      <a href="/inscription">Devenir client</a>
     </nav>
 
     <div class="nav-actions">
       {isClient ? (
-        <>
-          <a href="/mes-commandes" class="nav-ghost nav-orders">Mes commandes</a>
-          <a href="/mon-compte" class="nav-user">{user?.user_metadata?.nom ?? user?.email}</a>
-          <form action="/api/auth/client-logout" method="POST" class="nav-logout-form">
-            <button type="submit" class="nav-ghost nav-logout-btn">Déconnexion</button>
-          </form>
-        </>
+        <details class="nav-user-dropdown">
+          <summary class="nav-user-trigger">
+            <span class="nav-user-name">{user?.user_metadata?.nom ?? user?.email}</span>
+            <svg class="nav-user-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true">
+              <path d="M1 1L5 5L9 1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </summary>
+          <div class="nav-user-menu">
+            <a href="/mon-compte">Mon compte</a>
+            <a href="/mes-commandes">Mes commandes</a>
+            <form action="/api/auth/client-logout" method="POST" class="nav-logout-form">
+              <button type="submit" class="nav-logout-btn">Déconnexion</button>
+            </form>
+          </div>
+        </details>
       ) : (
         <>
           <a href="/connexion" class="nav-ghost">Connexion</a>
-          <a href="/inscription" class="btn btn-primary">Ouvrir un compte</a>
+          <a href="/inscription" class="btn btn-primary">Ouvrir un compte →</a>
         </>
       )}
     </div>
@@ -47,8 +53,6 @@ const isClient = user?.user_metadata?.role === 'client';
       <div class="nav-mobile" id="mobile-menu">
         <nav aria-label="Navigation mobile">
           <a href="/catalogue">Catalogue</a>
-          <a href="#marques">Nos marques</a>
-          <a href="/inscription">Devenir client</a>
           {isClient ? (
             <>
               <a href="/mes-commandes">Mes commandes</a>
@@ -60,7 +64,7 @@ const isClient = user?.user_metadata?.role === 'client';
           ) : (
             <>
               <a href="/connexion">Connexion</a>
-              <a href="/inscription" class="btn btn-primary mobile-cta">Ouvrir un compte</a>
+              <a href="/inscription" class="btn btn-primary mobile-cta">Ouvrir un compte →</a>
             </>
           )}
         </nav>
@@ -75,6 +79,19 @@ const isClient = user?.user_metadata?.role === 'client';
   const onScroll = () => header.classList.toggle('scrolled', window.scrollY > 8);
   window.addEventListener('scroll', onScroll, { passive: true });
   onScroll();
+
+  // Close the user dropdown on outside click or Escape (native <details> only toggles on summary click)
+  const userDropdown = document.querySelector<HTMLDetailsElement>('.nav-user-dropdown');
+  if (userDropdown) {
+    document.addEventListener('click', (e) => {
+      if (userDropdown.open && !userDropdown.contains(e.target as Node)) {
+        userDropdown.open = false;
+      }
+    });
+    userDropdown.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') userDropdown.open = false;
+    });
+  }
 </script>
 
 <style>
@@ -133,28 +150,83 @@ const isClient = user?.user_metadata?.role === 'client';
   gap: var(--space-3);
 }
 
-/* Logged-in client display */
-.nav-user {
+/* Logged-in client dropdown */
+.nav-user-dropdown {
+  position: relative;
+}
+
+.nav-user-trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--color-ink);
   padding: 0 var(--space-2);
+  min-height: 44px;
   white-space: nowrap;
+  cursor: pointer;
+  list-style: none;
+  transition: color var(--dur-fast);
+}
+.nav-user-trigger::-webkit-details-marker,
+.nav-user-trigger::marker {
+  display: none;
+  content: '';
+}
+.nav-user-trigger:hover { color: var(--color-primary); }
+
+.nav-user-name {
   max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
-  text-decoration: none;
-  transition: color var(--dur-fast);
 }
-a.nav-user:hover { color: var(--color-primary); }
-.nav-logout-form { display: contents; }
+
+.nav-user-chevron {
+  flex-shrink: 0;
+  transition: transform var(--dur-fast) var(--ease-out-quart);
+}
+.nav-user-dropdown[open] .nav-user-chevron { transform: rotate(180deg); }
+
+.nav-user-menu {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: var(--z-dropdown);
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px oklch(0.148 0.020 45.9 / 0.14);
+  padding: var(--space-2);
+  gap: 1px;
+}
+
+.nav-user-menu a,
 .nav-logout-btn {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  text-decoration: none;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
   background: none;
   border: none;
-  font-family: var(--font-body);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  min-height: 40px;
   cursor: pointer;
-  padding: 0;
+  transition: background var(--dur-fast), color var(--dur-fast);
 }
+.nav-user-menu a:hover,
+.nav-logout-btn:hover { background: var(--color-surface-2); }
+.nav-logout-btn:hover { color: oklch(0.50 0.19 25); }
+.nav-logout-form { display: contents; }
 
 .nav-ghost {
   text-decoration: none;

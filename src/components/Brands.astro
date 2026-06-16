@@ -1,8 +1,11 @@
 ---
 const brands = [
-  'Monster', 'Red Bull', 'Lipton', 'Schweppes',
-  'Coca-Cola', 'LIIFE', 'KICK DRINK', 'GUARANA KICK',
-  'RiceUP', 'FitSpo',
+  { name: 'Monster Energy', domain: 'monsterenergy.com', color: '#1AB549' },
+  { name: 'Red Bull',       domain: 'redbull.com',        color: '#002776' },
+  { name: 'Coca-Cola',      domain: 'coca-cola.com',       color: '#F40009' },
+  { name: 'Schweppes',      domain: 'schweppes.com',       color: '#C9A646' },
+  { name: 'Lipton',         domain: 'lipton.com',          color: '#D9A400' },
+  { name: 'Haribo',         domain: 'haribo.com',          color: '#E2231A' },
 ];
 ---
 
@@ -13,15 +16,23 @@ const brands = [
 
   <!-- Screen-reader list -->
   <ul class="sr-only">
-    {brands.map(b => <li>{b}</li>)}
+    {brands.map(b => <li>{b.name}</li>)}
   </ul>
 
   <!-- Visual marquee -->
   <div class="marquee-outer" aria-hidden="true">
     <div class="marquee-track">
       {[...brands, ...brands].map(b => (
-        <span class="brand-item">
-          {b}
+        <span class="brand-item" style={`--brand-color:${b.color};`}>
+          <img
+            class="brand-logo"
+            src={`https://logo.clearbit.com/${b.domain}?size=160`}
+            alt=""
+            loading="lazy"
+            width="120"
+            height="40"
+          />
+          <span class="brand-fallback">{b.name}</span>
           <span class="brand-sep">·</span>
         </span>
       ))}
@@ -73,15 +84,32 @@ const brands = [
 .brand-item {
   display: inline-flex;
   align-items: center;
+  white-space: nowrap;
+  padding: var(--space-2) clamp(var(--space-5), 3vw, var(--space-8));
+}
+
+.brand-logo {
+  display: block;
+  height: clamp(22px, 3vw, 30px);
+  width: auto;
+  max-width: 130px;
+  object-fit: contain;
+  filter: grayscale(1) opacity(0.55);
+  transition: filter var(--dur-fast);
+}
+.brand-item:hover .brand-logo { filter: grayscale(0) opacity(1); }
+
+.brand-logo.is-error { display: none; }
+
+.brand-fallback {
+  display: none;
   font-family: var(--font-display);
   font-size: clamp(1.125rem, 2vw, 1.5rem);
   font-weight: 600;
   letter-spacing: -0.01em;
-  color: var(--color-muted);
-  white-space: nowrap;
-  padding: var(--space-2) clamp(var(--space-5), 3vw, var(--space-8));
-  transition: color var(--dur-fast);
+  color: var(--brand-color);
 }
+.brand-logo.is-error + .brand-fallback { display: inline-flex; }
 
 .brand-sep {
   display: inline-block;
@@ -99,3 +127,9 @@ const brands = [
   .marquee-track { animation-play-state: paused; }
 }
 </style>
+
+<script>
+  document.querySelectorAll<HTMLImageElement>('.brand-logo').forEach(img => {
+    img.addEventListener('error', () => img.classList.add('is-error'), { once: true });
+  });
+</script>
