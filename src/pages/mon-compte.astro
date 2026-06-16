@@ -1,6 +1,7 @@
 ---
 import '../styles/global.css';
 import { createAuthClient, supabaseAdmin } from '../lib/supabase';
+import { sanitizeText } from '../lib/sanitize';
 import Nav from '../components/Nav.astro';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
@@ -29,7 +30,7 @@ const saved = Astro.url.searchParams.get('saved') === '1';
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  const g = (k: string) => (form.get(k) as string)?.trim() ?? '';
+  const g = (k: string) => sanitizeText(form.get(k) as string, 200);
 
   const nom                    = g('nom');
   const societe                = g('societe');

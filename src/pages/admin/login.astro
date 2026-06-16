@@ -4,6 +4,9 @@ import '../../styles/global.css';
 const errorMap: Record<string, string> = {
   identifiants_invalides: 'Email ou mot de passe incorrect.',
   champs_requis: 'Veuillez renseigner tous les champs.',
+  rate_limit: 'Trop de tentatives, réessayez dans 1 minute.',
+  trop_de_tentatives: 'Trop de tentatives échouées. Compte bloqué 15 minutes pour ce réseau.',
+  session_expiree: 'Votre session a expiré après 8 heures d\'inactivité. Veuillez vous reconnecter.',
 };
 const errorCode = Astro.url.searchParams.get('error') ?? '';
 const errorMsg = errorMap[errorCode] ?? '';

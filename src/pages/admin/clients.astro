@@ -1,6 +1,7 @@
 ---
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
+import { sanitizeText } from '../../lib/sanitize';
 
 if (Astro.request.method === 'POST') {
   const data   = await Astro.request.formData();
@@ -30,15 +31,15 @@ if (Astro.request.method === 'POST') {
   } else if (action === 'update_client') {
     const id     = data.get('id')     as string;
     const status = data.get('status') as string;
-    const notes  = data.get('notes')  as string | null;
+    const notes  = sanitizeText(data.get('notes') as string, 500);
     if (id && status) {
-      await supabaseAdmin.from('client_accounts').update({ status, notes: notes ?? null }).eq('id', id);
+      await supabaseAdmin.from('client_accounts').update({ status, notes: notes || null }).eq('id', id);
     }
   } else if (action === 'update_contact_notes') {
-    const id    = data.get('id')    as string;
-    const notes = data.get('notes') as string | null;
+    const id    = data.get('id') as string;
+    const notes = sanitizeText(data.get('notes') as string, 500);
     if (id) {
-      await supabaseAdmin.from('contact_requests').update({ notes: notes ?? null }).eq('id', id);
+      await supabaseAdmin.from('contact_requests').update({ notes: notes || null }).eq('id', id);
     }
   }
   return Astro.redirect('/admin/clients');

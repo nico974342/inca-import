@@ -3,6 +3,7 @@ import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { Resend } from 'resend';
 import { generateOrderPDF } from '../../lib/pdf';
+import { sanitizeText } from '../../lib/sanitize';
 
 const adminUser = Astro.locals.user;
 
@@ -10,7 +11,7 @@ const adminUser = Astro.locals.user;
 if (Astro.request.method === 'POST') {
   const form         = await Astro.request.formData();
   const clientIdRaw  = form.get('client_id') as string;
-  const notes        = (form.get('notes') as string)?.trim() ?? '';
+  const notes        = sanitizeText(form.get('notes') as string, 1000);
 
   const [clientKind, clientId] = (clientIdRaw ?? '').split(':');
 

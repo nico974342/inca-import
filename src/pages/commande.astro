@@ -5,6 +5,7 @@ import Footer from '../components/Footer.astro';
 import { supabaseAdmin, createAuthClient } from '../lib/supabase';
 import { Resend } from 'resend';
 import { generateOrderPDF } from '../lib/pdf';
+import { sanitizeText } from '../lib/sanitize';
 
 const user = Astro.locals.user;
 if (!user) return Astro.redirect('/connexion');
@@ -18,7 +19,7 @@ const CAT_LABEL: Record<string, string> = {
 // ── POST: confirm order ────────────────────────────────────────
 if (Astro.request.method === 'POST') {
   const form  = await Astro.request.formData();
-  const notes = (form.get('notes') as string)?.trim() ?? '';
+  const notes = sanitizeText(form.get('notes') as string, 1000);
 
   const { data: items } = await supabaseAdmin
     .from('cart_items')

@@ -1,11 +1,22 @@
 import type { APIRoute } from 'astro';
 import { supabaseAdmin } from '../../lib/supabase';
+import { sanitizeText } from '../../lib/sanitize';
+import { getClientIp, isRateLimited } from '../../lib/rateLimit';
 
 export const POST: APIRoute = async ({ request }) => {
+  const ip = getClientIp(request);
+
+  if (isRateLimited(`contact:${ip}`, 5, 60_000)) {
+    return new Response(JSON.stringify({ error: 'Trop de tentatives, réessayez dans 1 minute' }), {
+      status: 429,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
   const data = await request.formData();
-  const nom = (data.get('nom') as string)?.trim();
-  const societe = (data.get('societe') as string)?.trim();
-  const telephone = (data.get('telephone') as string)?.trim();
+  const nom = sanitizeText(data.get('nom') as string, 120);
+  const societe = sanitizeText(data.get('societe') as string, 120);
+  const telephone = sanitizeText(data.get('telephone') as string, 30);
 
   if (!nom || !telephone) {
     return new Response(JSON.stringify({ error: 'Champs requis manquants' }), {

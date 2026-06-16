@@ -1,6 +1,7 @@
 ---
 import '../styles/global.css';
 import { createAuthClient, supabaseAdmin } from '../lib/supabase';
+import { sanitizeText, sanitizeEmail } from '../lib/sanitize';
 
 // Already logged-in clients go straight to catalogue
 const supabaseCheck = createAuthClient(Astro.request, Astro.cookies);
@@ -12,11 +13,11 @@ if (existing?.user_metadata?.role === 'client') {
 // Handle registration
 if (Astro.request.method === 'POST') {
   const form      = await Astro.request.formData();
-  const nom            = (form.get('nom') as string)?.trim() ?? '';
-  const societe        = (form.get('societe') as string)?.trim() ?? '';
-  const email          = (form.get('email') as string)?.trim() ?? '';
-  const telephone      = (form.get('telephone') as string)?.trim() ?? '';
-  const pointsDeVente  = (form.get('points_de_vente') as string)?.trim() ?? '';
+  const nom            = sanitizeText(form.get('nom') as string, 120);
+  const societe        = sanitizeText(form.get('societe') as string, 120);
+  const email          = sanitizeEmail(form.get('email') as string);
+  const telephone      = sanitizeText(form.get('telephone') as string, 30);
+  const pointsDeVente  = sanitizeText(form.get('points_de_vente') as string, 120);
   const password       = form.get('password') as string;
 
   if (!nom || !email || !password) {
