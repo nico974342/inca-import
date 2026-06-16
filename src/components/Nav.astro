@@ -8,6 +8,8 @@ const { user } = Astro.props;
 const isClient = user?.user_metadata?.role === 'client';
 ---
 <header class="site-header" id="site-header">
+  <input type="checkbox" id="navToggle" class="nav-toggle-checkbox" />
+
   <div class="container nav-inner">
 
     <a href="/" class="wordmark" aria-label="Inca Import — accueil">
@@ -37,22 +39,15 @@ const isClient = user?.user_metadata?.role === 'client';
       )}
     </div>
 
-    <button
-      type="button"
-      class="nav-toggle"
-      aria-expanded="false"
-      aria-label="Ouvrir le menu"
-      aria-controls="mobile-menu"
-      onclick="incaToggleMobileMenu()"
-    >
+    <label for="navToggle" class="nav-toggle" aria-label="Ouvrir le menu">
       <span></span>
       <span></span>
       <span></span>
-    </button>
+    </label>
   </div>
 
-  <div class="nav-mobile" id="mobile-menu" aria-hidden="true">
-    <nav aria-label="Navigation mobile" onclick="if (event.target.tagName === 'A') incaCloseMobileMenu();">
+  <div class="nav-mobile" id="mobile-menu">
+    <nav aria-label="Navigation mobile">
       <a href="/catalogue">Catalogue</a>
       <a href="#marques">Nos marques</a>
       <a href="/inscription">Devenir client</a>
@@ -73,34 +68,6 @@ const isClient = user?.user_metadata?.role === 'client';
     </nav>
   </div>
 </header>
-
-<script is:inline>
-  function incaToggleMobileMenu() {
-    var toggle = document.querySelector('.nav-toggle');
-    var mobile = document.getElementById('mobile-menu');
-    if (!toggle || !mobile) return;
-    var open = toggle.getAttribute('aria-expanded') === 'true';
-    toggle.setAttribute('aria-expanded', open ? 'false' : 'true');
-    mobile.setAttribute('aria-hidden', open ? 'true' : 'false');
-    if (open) {
-      mobile.classList.remove('is-open');
-      document.body.style.overflow = '';
-    } else {
-      mobile.classList.add('is-open');
-      document.body.style.overflow = 'hidden';
-    }
-  }
-
-  function incaCloseMobileMenu() {
-    var toggle = document.querySelector('.nav-toggle');
-    var mobile = document.getElementById('mobile-menu');
-    if (!toggle || !mobile) return;
-    toggle.setAttribute('aria-expanded', 'false');
-    mobile.setAttribute('aria-hidden', 'true');
-    mobile.classList.remove('is-open');
-    document.body.style.overflow = '';
-  }
-</script>
 
 <script>
   const header = document.getElementById('site-header') as HTMLElement;
@@ -128,6 +95,16 @@ const isClient = user?.user_metadata?.role === 'client';
   align-items: center;
   height: 64px;
   gap: var(--space-6);
+}
+
+/* Checkbox-hack toggle — visually hidden but focusable/operable via keyboard (Tab + Space), no JS required */
+.nav-toggle-checkbox {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
 }
 
 /* Wordmark */
@@ -228,9 +205,9 @@ a.nav-user:hover { color: var(--color-primary); }
   transition: transform var(--dur-base) var(--ease-out-quart),
               opacity var(--dur-fast);
 }
-.nav-toggle[aria-expanded="true"] span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
-.nav-toggle[aria-expanded="true"] span:nth-child(2) { opacity: 0; transform: scaleX(0); }
-.nav-toggle[aria-expanded="true"] span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+#navToggle:checked ~ .nav-inner .nav-toggle span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+#navToggle:checked ~ .nav-inner .nav-toggle span:nth-child(2) { opacity: 0; transform: scaleX(0); }
+#navToggle:checked ~ .nav-inner .nav-toggle span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
 
 /* Mobile menu */
 .nav-mobile {
@@ -246,11 +223,14 @@ a.nav-user:hover { color: var(--color-primary); }
   transition: opacity var(--dur-base) var(--ease-out-quart),
               transform var(--dur-base) var(--ease-out-quart);
 }
-.nav-mobile.is-open {
+#navToggle:checked ~ .nav-mobile {
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
 }
+
+/* Lock background scroll while menu is open (progressive — degrades gracefully without :has support) */
+body:has(#navToggle:checked) { overflow: hidden; }
 .nav-mobile nav {
   display: flex;
   flex-direction: column;
