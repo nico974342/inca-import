@@ -307,6 +307,10 @@ const productsMetaJSON = JSON.stringify(
             <span class="drawer-total-label">Total HT</span>
             <span class="drawer-total-amount" id="drawerTotal">{totalCartHT.toFixed(2).replace('.', ',')} €</span>
           </div>
+          <div class="drawer-ttc-row">
+            <span class="drawer-ttc-label">Total TTC</span>
+            <span class="drawer-ttc-amount" id="drawerTtc">{(totalCartHT * 1.085).toFixed(2).replace('.', ',')} €</span>
+          </div>
           <a href="/commande" class="btn btn-primary drawer-checkout">
             Passer commande
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -464,6 +468,7 @@ const productsMetaJSON = JSON.stringify(
     const drawerItemsList = document.getElementById('drawerItemsList')!;
     const drawerEmptyEl  = document.getElementById('drawerEmpty')!;
     const drawerTotalEl  = document.getElementById('drawerTotal')!;
+    const drawerTtcEl    = document.getElementById('drawerTtc')!;
     const cartBadge      = document.getElementById('cartBadge')!;
     const logoutForm     = document.getElementById('logoutForm') as HTMLFormElement;
 
@@ -520,7 +525,9 @@ const productsMetaJSON = JSON.stringify(
     }
 
     function updateTotal() {
-      drawerTotalEl.textContent = calcTotalHT().toFixed(2).replace('.', ',') + ' €';
+      const ht = calcTotalHT();
+      drawerTotalEl.textContent = ht.toFixed(2).replace('.', ',') + ' €';
+      drawerTtcEl.textContent   = (ht * 1.085).toFixed(2).replace('.', ',') + ' €';
     }
 
     function renderDrawerItems() {
@@ -1723,7 +1730,7 @@ const productsMetaJSON = JSON.stringify(
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--space-2);
 }
 
 .drawer-total-label {
@@ -1739,6 +1746,30 @@ const productsMetaJSON = JSON.stringify(
   font-weight: 700;
   letter-spacing: -0.03em;
   color: var(--color-ink);
+}
+
+.drawer-ttc-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+  margin-bottom: var(--space-4);
+}
+
+.drawer-ttc-label {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.drawer-ttc-amount {
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--color-primary);
 }
 
 .drawer-checkout {
