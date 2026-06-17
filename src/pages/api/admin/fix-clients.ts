@@ -15,12 +15,12 @@ async function runFix(dryRun: boolean) {
   const errors: string[] = [];
 
   // ── Fix 1: insert missing client_accounts for Henrica Dixneuf ─────────────
-  // Auth user exists (96dd09bd-6012-487b-9c96-cbc9ea155c74) but row was never
-  // created because the inscription.astro insert error was silently swallowed.
+  // Auth user exists but row was never created because inscription.astro was
+  // silently failing (it tried to insert user_id which doesn't exist as a column).
   const { data: existing1 } = await supabaseAdmin
     .from('client_accounts')
-    .select('id, email, user_id')
-    .or('email.eq.henrica.dixneuf@compros.re,user_id.eq.96dd09bd-6012-487b-9c96-cbc9ea155c74')
+    .select('id, email')
+    .eq('email', 'henrica.dixneuf@compros.re')
     .maybeSingle();
 
   if (existing1) {
@@ -33,7 +33,6 @@ async function runFix(dryRun: boolean) {
         societe: 'Combox',
         points_de_vente: 'Station st Joseph',
         email: 'henrica.dixneuf@compros.re',
-        user_id: '96dd09bd-6012-487b-9c96-cbc9ea155c74',
         status: 'actif',
       });
       if (error) errors.push(`[fix1] INSERT failed: ${error.message} (${error.code})`);
@@ -42,57 +41,79 @@ async function runFix(dryRun: boolean) {
   }
 
   // ── Fix 2: find email for Henrica Incana (Station de l'Hermitage) ──────────
-  // client_accounts row has email: null. Look up auth.users by phone in metadata.
-  const { data: incanaRow } = await supabaseAdmin
+  // client_accounts row has email: null. Fetch all rows and search locally to
+  // avoid PostgREST .or()/.ilike() quoting issues with %.
+  const { data: allAccounts, error: fetchErr } = await supabaseAdmin
     .from('client_accounts')
-    .select('id, nom, email, telephone, user_id, points_de_vente')
-    .or('nom.ilike.%incana%,points_de_vente.ilike.%hermitage%')
-    .maybeSingle();
+    .select('id, nom, email, telephone, points_de_vente');
 
-  if (!incanaRow) {
-    log.push('[fix2] No client_accounts row found for Henrica Incana / Station de l\'Hermitage');
+  if (fetchErr) {
+    errors.push(`[fix2] Failed to fetch client_accounts: ${fetchErr.message}`);
   } else {
-    log.push(`[fix2] Found row: id=${incanaRow.id}, nom="${incanaRow.nom}", email="${incanaRow.email}", user_id=${incanaRow.user_id}`);
+    log.push(`[fix2] Fetched ${allAccounts?.length ?? 0} client_accounts rows`);
 
-    if (incanaRow.email) {
-      log.push('[fix2] Email already set — skipped');
-    } else {
-      // Search auth.users for phone +262693485282 in metadata or phone field
-      const { data: authData } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
-      const phoneVariants = ['0693485282', '693485282', '+262693485282', '262693485282'];
+    const incanaRow = (allAccounts ?? []).find(r => {
+      const nom = (r.nom ?? '').toLowerCase();
+      const pdv = (r.points_de_vente ?? '').toLowerCase();
+      const tel = (r.telephone ?? '').replace(/\D/g, '');
+      return (
+        nom.includes('incana') ||
+        pdv.includes('hermitage') ||
+        tel.includes('693485282') ||
+        tel.includes('0693485282')
+      );
+    });
 
-      const matchedUsers = (authData?.users ?? []).filter(u => {
-        const meta = JSON.stringify(u.user_metadata ?? '').toLowerCase();
-        const phone = (u.phone ?? '').toLowerCase();
-        const emailStr = (u.email ?? '').toLowerCase();
-        return (
-          phoneVariants.some(p => meta.includes(p) || phone.includes(p)) ||
-          meta.includes('incana') ||
-          emailStr.includes('incana')
-        );
-      });
-
-      log.push(`[fix2] Auth.users matching phone/name: ${matchedUsers.length} found`);
-      for (const u of matchedUsers) {
-        log.push(`  → id=${u.id}, email=${u.email}, metadata=${JSON.stringify(u.user_metadata)}`);
+    if (!incanaRow) {
+      log.push('[fix2] No client_accounts row found matching "incana", "hermitage", or phone 693485282');
+      // Log first 20 rows so we can see what's actually there
+      log.push('[fix2] First 20 rows for inspection:');
+      for (const r of (allAccounts ?? []).slice(0, 20)) {
+        log.push(`  → id=${r.id}, nom="${r.nom}", pdv="${r.points_de_vente}", tel="${r.telephone}", email="${r.email}"`);
       }
+    } else {
+      log.push(`[fix2] Found row: id=${incanaRow.id}, nom="${incanaRow.nom}", email="${incanaRow.email}", tel="${incanaRow.telephone}", pdv="${incanaRow.points_de_vente}"`);
 
-      if (matchedUsers.length === 1 && matchedUsers[0].email) {
-        const foundEmail = matchedUsers[0].email;
-        log.push(`[fix2] Will update client_accounts.email to "${foundEmail}"`);
-        if (!dryRun) {
-          const { error } = await supabaseAdmin
-            .from('client_accounts')
-            .update({ email: foundEmail, user_id: matchedUsers[0].id })
-            .eq('id', incanaRow.id);
-          if (error) errors.push(`[fix2] UPDATE failed: ${error.message} (${error.code})`);
-          else log.push(`[fix2] ✓ Updated email and user_id for Henrica Incana`);
-        }
-      } else if (matchedUsers.length === 0) {
-        log.push('[fix2] No auth.users match found — email must be set manually');
+      if (incanaRow.email) {
+        log.push('[fix2] Email already set — skipped');
       } else {
-        log.push('[fix2] Multiple matches — resolve manually:');
-        for (const u of matchedUsers) log.push(`  - ${u.email} (id=${u.id})`);
+        // Search auth.users for phone +262693485282 in metadata or phone field
+        const { data: authData } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+        const phoneVariants = ['0693485282', '693485282', '+262693485282', '262693485282'];
+
+        const matchedUsers = (authData?.users ?? []).filter(u => {
+          const meta = JSON.stringify(u.user_metadata ?? '').toLowerCase();
+          const phone = (u.phone ?? '').replace(/\D/g, '');
+          const emailStr = (u.email ?? '').toLowerCase();
+          return (
+            phoneVariants.some(p => meta.includes(p.replace(/\D/g, '')) || phone.includes(p.replace(/\D/g, ''))) ||
+            meta.includes('incana') ||
+            emailStr.includes('incana')
+          );
+        });
+
+        log.push(`[fix2] Auth.users matching phone/name: ${matchedUsers.length} found`);
+        for (const u of matchedUsers) {
+          log.push(`  → id=${u.id}, email=${u.email}, metadata=${JSON.stringify(u.user_metadata)}`);
+        }
+
+        if (matchedUsers.length === 1 && matchedUsers[0].email) {
+          const foundEmail = matchedUsers[0].email;
+          log.push(`[fix2] Will update client_accounts.email to "${foundEmail}"`);
+          if (!dryRun) {
+            const { error } = await supabaseAdmin
+              .from('client_accounts')
+              .update({ email: foundEmail })
+              .eq('id', incanaRow.id);
+            if (error) errors.push(`[fix2] UPDATE failed: ${error.message} (${error.code})`);
+            else log.push(`[fix2] ✓ Updated email for Henrica Incana`);
+          }
+        } else if (matchedUsers.length === 0) {
+          log.push('[fix2] No auth.users match found — email must be set manually');
+        } else {
+          log.push('[fix2] Multiple matches — resolve manually:');
+          for (const u of matchedUsers) log.push(`  - ${u.email} (id=${u.id})`);
+        }
       }
     }
   }
