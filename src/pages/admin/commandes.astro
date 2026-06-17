@@ -32,13 +32,14 @@ if (Astro.request.method === 'POST') {
         0
       );
 
+      console.log('[commandes] status change detected — sending email to', current.email, '| status:', new_status);
       sendOrderStatusEmail({
         to: current.email,
         orderId: order_id,
         status: new_status,
         items: (statusItems ?? []).map(it => ({ name: it.product_name, quantity: it.quantity, unit: it.unit })),
         totalHt,
-      }).catch(() => {});
+      }).catch(err => console.error('[commandes] sendOrderStatusEmail threw:', err));
     }
 
     // Decrement stock only on first transition to confirmee
