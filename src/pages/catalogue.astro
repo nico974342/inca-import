@@ -212,7 +212,15 @@ const productsMetaJSON = JSON.stringify(
                       data-price={priceMap[p.id] ?? 0}
                     >
                       <button type="button" class="qty-btn qty-btn--dec" aria-label={`Retirer ${p.name} du panier`}>−</button>
-                      <span class="qty-val" data-empty={!cartMap[p.id]}>{cartMap[p.id] ?? 0}</span>
+                      <input
+                        class="qty-val"
+                        type="text"
+                        inputmode="numeric"
+                        pattern="[0-9]*"
+                        value={String(cartMap[p.id] ?? 0)}
+                        data-empty={!cartMap[p.id]}
+                        aria-label={`Quantité de ${p.name}`}
+                      />
                       <button type="button" class="qty-btn qty-btn--inc" aria-label={`Ajouter ${p.name} au panier`}>+</button>
                     </div>
                   ) : !isClient ? (
@@ -728,11 +736,11 @@ const productsMetaJSON = JSON.stringify(
     function syncCardControl(productId: string) {
       const ctrl = document.querySelector<HTMLElement>(`.cart-controls[data-product-id="${productId}"]`);
       if (!ctrl) return;
-      const valSpan = ctrl.querySelector<HTMLElement>('.qty-val');
+      const valInput = ctrl.querySelector<HTMLInputElement>('.qty-val');
       const qty = cartState[productId] ?? 0;
-      if (valSpan) {
-        valSpan.textContent   = String(qty);
-        valSpan.dataset.empty = qty === 0 ? 'true' : 'false';
+      if (valInput) {
+        valInput.value        = String(qty);
+        valInput.dataset.empty = qty === 0 ? 'true' : 'false';
       }
     }
 
@@ -821,13 +829,13 @@ const productsMetaJSON = JSON.stringify(
       const initQty   = parseInt(ctrl.dataset.initialQty ?? '0', 10);
       if (initQty > 0) cartState[productId] = initQty;
 
-      const valSpan = ctrl.querySelector<HTMLElement>('.qty-val')!;
-      const decBtn  = ctrl.querySelector<HTMLButtonElement>('.qty-btn--dec')!;
-      const incBtn  = ctrl.querySelector<HTMLButtonElement>('.qty-btn--inc')!;
+      const valInput = ctrl.querySelector<HTMLInputElement>('.qty-val')!;
+      const decBtn   = ctrl.querySelector<HTMLButtonElement>('.qty-btn--dec')!;
+      const incBtn   = ctrl.querySelector<HTMLButtonElement>('.qty-btn--inc')!;
 
       function refreshCard(qty: number) {
-        valSpan.textContent   = String(qty);
-        valSpan.dataset.empty = qty === 0 ? 'true' : 'false';
+        valInput.value        = String(qty);
+        valInput.dataset.empty = qty === 0 ? 'true' : 'false';
       }
       refreshCard(initQty);
 
@@ -847,6 +855,22 @@ const productsMetaJSON = JSON.stringify(
         flyToCart(incBtn, productId);
         cartState[productId] = newQty;
         refreshCard(newQty);
+        renderCart();
+        await sendCartUpdate(productId, newQty);
+      });
+
+      // Direct keyboard input on qty field
+      valInput.addEventListener('focus', () => { valInput.select(); });
+      valInput.addEventListener('keydown', (e: KeyboardEvent) => {
+        if (e.key === 'Enter') { e.preventDefault(); valInput.blur(); }
+      });
+      valInput.addEventListener('blur', async () => {
+        const raw = parseInt(valInput.value, 10);
+        const newQty = isNaN(raw) || raw < 0 ? 0 : raw;
+        const prev = cartState[productId] ?? 0;
+        refreshCard(newQty);
+        if (newQty === prev) return;
+        cartState[productId] = newQty;
         renderCart();
         await sendCartUpdate(productId, newQty);
       });
@@ -1301,7 +1325,19 @@ const productsMetaJSON = JSON.stringify(
   color: var(--color-ink);
   min-width: 1.5rem;
   transition: color var(--dur-fast);
+  /* Input resets so it looks like plain text */
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  outline: none;
+  cursor: text;
+  font-family: inherit;
+  -moz-appearance: textfield;
 }
+.qty-val::-webkit-inner-spin-button,
+.qty-val::-webkit-outer-spin-button { -webkit-appearance: none; }
+.qty-val:focus { color: var(--color-primary); }
 .qty-val[data-empty="true"] { color: var(--color-muted); font-weight: 400; }
 
 /* ── Empty / no results ───────────────────────────── */
@@ -1706,8 +1742,8 @@ const productsMetaJSON = JSON.stringify(
 /* ── Cart toggle button ───────────────────────────── */
 .cart-toggle {
   position: fixed;
-  bottom: clamp(var(--space-5), 3vw, var(--space-8));
-  right: clamp(var(--space-4), 3vw, var(--space-7));
+  bottom: calc(clamp(var(--space-5), 3vw, var(--space-8)) + env(safe-area-inset-bottom, 0px));
+  right: calc(clamp(var(--space-4), 3vw, var(--space-7)) + env(safe-area-inset-right, 0px));
   z-index: var(--z-toast);
   width: 56px;
   height: 56px;

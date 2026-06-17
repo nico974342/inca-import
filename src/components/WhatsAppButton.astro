@@ -20,8 +20,8 @@ const href = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
 <style>
 .whatsapp-fab {
   position: fixed;
-  left: var(--space-5);
-  bottom: var(--space-5);
+  left: calc(var(--space-5) + env(safe-area-inset-left, 0px));
+  bottom: calc(var(--space-5) + env(safe-area-inset-bottom, 0px));
   z-index: var(--z-tooltip, 60);
   display: flex;
   align-items: center;
@@ -70,7 +70,12 @@ const href = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
 }
 
 @media (max-width: 480px) {
-  .whatsapp-fab { width: 52px; height: 52px; left: var(--space-4); bottom: var(--space-4); }
+  .whatsapp-fab {
+    width: 52px;
+    height: 52px;
+    left: calc(var(--space-4) + env(safe-area-inset-left, 0px));
+    bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+  }
 }
 </style>
 
