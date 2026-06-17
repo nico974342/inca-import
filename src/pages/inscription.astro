@@ -40,8 +40,11 @@ if (Astro.request.method === 'POST') {
     return Astro.redirect(`/inscription?error=${code}`);
   }
 
-  // Link or create the client_accounts row so admin sees this registration
+  // Link or create the client_accounts row so admin sees this registration.
+  // userId can be null when Supabase returns a ghost response for an existing
+  // unconfirmed email — we still create the row without user_id in that case.
   const userId = authData.user?.id ?? null;
+
   const { data: existingAccount } = await supabaseAdmin
     .from('client_accounts')
     .select('id')
@@ -49,17 +52,33 @@ if (Astro.request.method === 'POST') {
     .maybeSingle();
 
   if (existingAccount) {
-    await supabaseAdmin
+    const { error: updateErr } = await supabaseAdmin
       .from('client_accounts')
-      .update({ user_id: userId })
+      .update({ ...(userId ? { user_id: userId } : {}) })
       .eq('id', existingAccount.id);
+    if (updateErr) console.error('[inscription] client_accounts update failed:', updateErr.message, updateErr.code);
   } else {
-    await supabaseAdmin.from('client_accounts').insert({
+    const payload: Record<string, unknown> = {
       nom, societe, telephone, email,
       points_de_vente: pointsDeVente || null,
       status: 'actif',
-      user_id: userId,
-    });
+    };
+    if (userId) payload.user_id = userId;
+
+    const { error: insertErr } = await supabaseAdmin
+      .from('client_accounts')
+      .insert(payload);
+
+    if (insertErr) {
+      console.error('[inscription] client_accounts insert failed:', insertErr.message, insertErr.code);
+      // FK constraint on user_id (23503): retry without user_id
+      if (insertErr.code === '23503' && userId) {
+        const { error: retryErr } = await supabaseAdmin
+          .from('client_accounts')
+          .insert({ nom, societe, telephone, email, points_de_vente: pointsDeVente || null, status: 'actif' });
+        if (retryErr) console.error('[inscription] client_accounts insert retry failed:', retryErr.message, retryErr.code);
+      }
+    }
   }
 
   sendClientRegisteredWebhook({
