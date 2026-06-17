@@ -24,7 +24,7 @@ const FIXED_PDVS = [
 const [{ data: clients }, { data: productsRaw }] = await Promise.all([
   supabaseAdmin
     .from('client_accounts')
-    .select('id, user_id, nom, societe, points_de_vente')
+    .select('id, email, nom, societe, points_de_vente')
     .not('points_de_vente', 'is', null)
     .neq('points_de_vente', '')
     .order('nom'),
@@ -42,10 +42,10 @@ const clientPDVs = (clients ?? []).map(c => ({
   clientLabel: c.nom + (c.societe ? ` · ${c.societe}` : ''),
 }));
 
-const userIdToClientKey = new Map(
+const emailToClientKey = new Map(
   (clients ?? [])
-    .filter(c => c.user_id)
-    .map(c => [c.user_id as string, `client_${c.id}`])
+    .filter(c => c.email)
+    .map(c => [(c.email as string).toLowerCase(), `client_${c.id}`])
 );
 
 const allPDVs = [...FIXED_PDVS, ...clientPDVs];
@@ -157,7 +157,7 @@ const categories = Object.keys(productsByCategory).sort();
 // ── Confirmed orders pending delivery ──────────────────────────────────────
 const { data: confirmedOrders } = await supabaseAdmin
   .from('orders')
-  .select('id, user_id')
+  .select('id, email')
   .eq('status', 'confirmee');
 
 const confirmedOrderIds = (confirmedOrders ?? []).map(o => o.id);
@@ -172,7 +172,7 @@ const { data: confirmedItems } = confirmedOrderIds.length > 0
 
 const orderToPdvKey = new Map<string, string>();
 for (const order of confirmedOrders ?? []) {
-  const key = order.user_id ? userIdToClientKey.get(order.user_id) : undefined;
+  const key = order.email ? emailToClientKey.get(order.email.toLowerCase()) : undefined;
   if (key) orderToPdvKey.set(order.id, key);
 }
 
