@@ -2,15 +2,12 @@ import type { APIRoute } from 'astro';
 import { supabaseAdmin } from '../../../lib/supabase';
 
 // One-shot data fix — call once then delete this file.
-// GET  → dry run: shows what would be changed
-// POST → applies the changes
+// GET           → dry run: shows what would be changed
+// GET ?apply=1  → applies the changes
 
-export const GET: APIRoute = async () => {
-  return runFix(true);
-};
-
-export const POST: APIRoute = async () => {
-  return runFix(false);
+export const GET: APIRoute = async ({ url }) => {
+  const dryRun = url.searchParams.get('apply') !== '1';
+  return runFix(dryRun);
 };
 
 async function runFix(dryRun: boolean) {
