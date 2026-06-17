@@ -1,8 +1,19 @@
----
+﻿---
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
-import { generateDeliveryPDF } from '../../lib/pdf';
+import { generateDeliverySummaryPDF, generatePDVDeliveryPDF } from '../../lib/pdf';
 import { Resend } from 'resend';
+
+const FROM = import.meta.env.RESEND_FROM ?? 'onboarding@resend.dev';
+
+function slugPDV(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
 
 const FIXED_PDVS = [
   { key: 'fixed_ola-tamarins',    name: 'OLA Tamarins',    clientLabel: null as string | null },
@@ -13,7 +24,7 @@ const FIXED_PDVS = [
 const [{ data: clients }, { data: productsRaw }] = await Promise.all([
   supabaseAdmin
     .from('client_accounts')
-    .select('id, nom, societe, points_de_vente')
+    .select('id, user_id, nom, societe, points_de_vente')
     .not('points_de_vente', 'is', null)
     .neq('points_de_vente', '')
     .order('nom'),
@@ -30,6 +41,12 @@ const clientPDVs = (clients ?? []).map(c => ({
   name: c.points_de_vente as string,
   clientLabel: c.nom + (c.societe ? ` · ${c.societe}` : ''),
 }));
+
+const userIdToClientKey = new Map(
+  (clients ?? [])
+    .filter(c => c.user_id)
+    .map(c => [c.user_id as string, `client_${c.id}`])
+);
 
 const allPDVs = [...FIXED_PDVS, ...clientPDVs];
 const products = productsRaw ?? [];
@@ -49,6 +66,8 @@ if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
   const transporterEmail = (form.get('transporter_email') as string)?.trim();
   const notes = (form.get('notes') as string)?.trim() || null;
+  const loadedOrderIds = ((form.get('loaded_order_ids') as string) ?? '')
+    .split(',').map(s => s.trim()).filter(Boolean);
 
   if (!transporterEmail) {
     errorMessage = "L'email du transporteur est requis.";
@@ -73,33 +92,57 @@ if (Astro.request.method === 'POST') {
       errorMessage = 'Sélectionnez au moins un point de vente avec des produits.';
     } else {
       try {
-        const pdfBuffer = await generateDeliveryPDF({
+        const deliveryData = {
           id: deliveryId,
           date: dateStr,
           transporter_email: transporterEmail,
           pdvs: deliveryPDVs,
           notes,
-        });
+        };
+
+        const [summaryBuffer, ...pdvBuffers] = await Promise.all([
+          generateDeliverySummaryPDF(deliveryData),
+          ...deliveryPDVs.map(pdv => generatePDVDeliveryPDF(pdv, deliveryId, dateStr)),
+        ]);
+
+        const attachments = [
+          { filename: `recapitulatif-${deliveryId}.pdf`, content: summaryBuffer },
+          ...deliveryPDVs.map((pdv, i) => ({
+            filename: `livraison-${slugPDV(pdv.name)}-${deliveryId}.pdf`,
+            content: pdvBuffers[i],
+          })),
+        ];
+
+        const pdvListHtml = deliveryPDVs.map(p => `&bull; ${p.name}`).join('<br/>');
+        const attachListHtml = [
+          `&bull; <strong>R&eacute;capitulatif</strong> &mdash; bilan consolid&eacute; pour le chargement`,
+          ...deliveryPDVs.map(p => `&bull; <strong>${p.name}</strong> &mdash; bon de livraison individuel`),
+        ].join('<br/>');
 
         const resend = new Resend(import.meta.env.RESEND_API_KEY);
         const { error: sendError } = await resend.emails.send({
-          from: 'onboarding@resend.dev',
-          to: ['inca-import@hotmail.com'],
-          subject: `Bon de livraison ${deliveryId} — à transférer à Coursier OI`,
+          from: FROM,
+          to: ['inca-import@hotmail.com', transporterEmail],
+          subject: `Livraison ${deliveryId} — ${deliveryPDVs.length} PDV · ${dateStr}`,
           html: `<p>Bonjour,</p>
-<p>Le bon de livraison <strong>${deliveryId}</strong> du ${dateStr} est prêt.</p>
-<p><strong>À transférer au transporteur :</strong><br/>
-Coursier OI — <a href="mailto:${transporterEmail}">${transporterEmail}</a></p>
-<p>Le bon de livraison est joint en pièce attachée.</p>
+<p>Le bon de livraison <strong>${deliveryId}</strong> du ${dateStr} est pr&ecirc;t (${deliveryPDVs.length} point${deliveryPDVs.length > 1 ? 's' : ''} de vente).</p>
+<p><strong>Points de vente :</strong><br/>${pdvListHtml}</p>
+<p><strong>Pi&egrave;ces jointes (${attachments.length}) :</strong><br/>${attachListHtml}</p>
 <p>Cordialement,<br/>Inca Import</p>`,
-          attachments: [{ filename: `bon-livraison-${deliveryId}.pdf`, content: pdfBuffer }],
+          attachments,
         });
 
         if (sendError) {
           console.error('[livraison] Resend error:', sendError);
-          errorMessage = `PDF généré mais l'envoi a échoué : ${sendError.message}`;
+          errorMessage = `PDF générés mais l'envoi a échoué : ${sendError.message}`;
         } else {
-          successMessage = `Bon de livraison ${deliveryId} envoyé à inca-import@hotmail.com — à transférer à ${transporterEmail}.`;
+          successMessage = `${attachments.length} PDF envoyés pour ${deliveryId} → ${transporterEmail} + inca-import@hotmail.com`;
+          if (loadedOrderIds.length > 0) {
+            await supabaseAdmin
+              .from('orders')
+              .update({ status: 'en_preparation' })
+              .in('id', loadedOrderIds);
+          }
         }
       } catch (e) {
         console.error(e);
@@ -110,6 +153,43 @@ Coursier OI — <a href="mailto:${transporterEmail}">${transporterEmail}</a></p>
 }
 
 const categories = Object.keys(productsByCategory).sort();
+
+// ── Confirmed orders pending delivery ──────────────────────────────────────
+const { data: confirmedOrders } = await supabaseAdmin
+  .from('orders')
+  .select('id, user_id')
+  .eq('status', 'confirmee');
+
+const confirmedOrderIds = (confirmedOrders ?? []).map(o => o.id);
+
+const { data: confirmedItems } = confirmedOrderIds.length > 0
+  ? await supabaseAdmin
+      .from('order_items')
+      .select('order_id, product_id, quantity')
+      .in('order_id', confirmedOrderIds)
+      .not('product_id', 'is', null)
+  : { data: [] as { order_id: string; product_id: string; quantity: number }[] };
+
+const orderToPdvKey = new Map<string, string>();
+for (const order of confirmedOrders ?? []) {
+  const key = order.user_id ? userIdToClientKey.get(order.user_id) : undefined;
+  if (key) orderToPdvKey.set(order.id, key);
+}
+
+const pendingQtys: Record<string, Record<string, number>> = {};
+for (const item of confirmedItems ?? []) {
+  if (!item.product_id) continue;
+  const pdvKey = orderToPdvKey.get(item.order_id);
+  if (!pdvKey) continue;
+  if (!pendingQtys[pdvKey]) pendingQtys[pdvKey] = {};
+  pendingQtys[pdvKey][item.product_id] = (pendingQtys[pdvKey][item.product_id] ?? 0) + item.quantity;
+}
+
+const loadableOrderIds = (confirmedOrders ?? []).filter(o => orderToPdvKey.has(o.id)).map(o => o.id);
+const pendingCount = confirmedOrderIds.length;
+const pendingPDVNames = Object.keys(pendingQtys)
+  .map(key => allPDVs.find(p => p.key === key)?.name)
+  .filter((n): n is string => !!n);
 ---
 
 <AdminLayout title="Bon de livraison" activeNav="livraison">
@@ -133,7 +213,44 @@ const categories = Object.keys(productsByCategory).sort();
     </div>
   )}
 
+  {pendingCount > 0 && (
+    <div class="pending-banner">
+      <div class="pending-banner-left">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <circle cx="9" cy="9" r="8" stroke="oklch(0.45 0.14 80)" stroke-width="1.3"/>
+          <path d="M9 5.5v4M9 12h.01" stroke="oklch(0.45 0.14 80)" stroke-width="1.3" stroke-linecap="round"/>
+        </svg>
+        <div class="pending-banner-text">
+          <span class="pending-banner-title">
+            {pendingCount} commande{pendingCount > 1 ? 's' : ''} confirmée{pendingCount > 1 ? 's' : ''} en attente de livraison
+          </span>
+          {pendingPDVNames.length > 0 && (
+            <span class="pending-banner-sub">
+              PDV concernés : {pendingPDVNames.join(' · ')}
+            </span>
+          )}
+          {loadableOrderIds.length < pendingCount && (
+            <span class="pending-banner-warn">
+              {pendingCount - loadableOrderIds.length} commande{pendingCount - loadableOrderIds.length > 1 ? 's' : ''} sans PDV associé — à traiter manuellement.
+            </span>
+          )}
+        </div>
+      </div>
+      {loadableOrderIds.length > 0 && (
+        <button type="button" id="loadPendingBtn" class="btn-load-pending">
+          Charger dans le formulaire
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
+            <path d="M2 6.5h9M7.5 3l4 3.5-4 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      )}
+    </div>
+  )}
+
+  <script id="pendingData" type="application/json" set:html={JSON.stringify({ qtys: pendingQtys, orderIds: loadableOrderIds })}></script>
+
   <form method="POST" class="liv-form" id="livForm">
+    <input type="hidden" name="loaded_order_ids" id="loadedOrderIds" value="" />
 
     <!-- Transporter -->
     <section class="liv-section">
@@ -278,9 +395,110 @@ const categories = Object.keys(productsByCategory).sort();
     const el = document.getElementById('totalQty');
     if (el) el.textContent = String(total);
   }
+
+  // ── Load pending confirmed orders into form ────────────────────────────────
+  const pendingDataEl = document.getElementById('pendingData');
+  const loadPendingBtn = document.getElementById('loadPendingBtn') as HTMLButtonElement | null;
+  const loadedOrderIdsInput = document.getElementById('loadedOrderIds') as HTMLInputElement | null;
+
+  if (pendingDataEl && loadPendingBtn) {
+    const pending = JSON.parse(pendingDataEl.textContent || '{}') as {
+      qtys: Record<string, Record<string, number>>;
+      orderIds: string[];
+    };
+
+    loadPendingBtn.addEventListener('click', () => {
+      for (const [pdvKey, products] of Object.entries(pending.qtys ?? {})) {
+        const checkbox = document.querySelector<HTMLInputElement>(`input[name="included_${pdvKey}"]`);
+        if (checkbox && !checkbox.checked) {
+          checkbox.checked = true;
+          checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        for (const [productId, qty] of Object.entries(products)) {
+          const input = document.querySelector<HTMLInputElement>(`input[name="qty_${pdvKey}_${productId}"]`);
+          if (input) {
+            const existing = parseInt(input.value || '0', 10);
+            input.value = String(existing + qty);
+          }
+        }
+      }
+      if (loadedOrderIdsInput) loadedOrderIdsInput.value = (pending.orderIds ?? []).join(',');
+      updateTotal();
+
+      loadPendingBtn.textContent = '✓ Chargé';
+      loadPendingBtn.classList.add('btn-load-pending--done');
+      loadPendingBtn.disabled = true;
+
+      document.getElementById('livForm')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
 </script>
 
 <style>
+/* ── Pending orders banner ───────────────────────── */
+.pending-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding: var(--space-4) var(--space-5);
+  margin-bottom: var(--space-5);
+  background: oklch(0.96 0.06 80);
+  border: 1.5px solid oklch(0.87 0.10 80);
+  border-radius: var(--radius-md);
+}
+
+.pending-banner-left {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  flex: 1;
+  min-width: 0;
+}
+.pending-banner-left svg { flex-shrink: 0; margin-top: 2px; }
+
+.pending-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.pending-banner-title {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: oklch(0.38 0.14 80);
+}
+.pending-banner-sub {
+  font-size: var(--text-xs);
+  color: oklch(0.50 0.10 80);
+}
+.pending-banner-warn {
+  font-size: var(--text-xs);
+  color: oklch(0.46 0.18 25);
+  margin-top: 2px;
+}
+
+.btn-load-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: white;
+  background: oklch(0.52 0.14 80);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-4);
+  height: 38px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity var(--dur-fast), background var(--dur-fast);
+  flex-shrink: 0;
+}
+.btn-load-pending:hover { opacity: 0.88; }
+.btn-load-pending--done { background: oklch(0.45 0.13 150); cursor: default; }
+
 /* ── Alerts ──────────────────────────────────────── */
 .alert {
   display: flex;
