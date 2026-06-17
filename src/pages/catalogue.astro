@@ -320,6 +320,7 @@ const productsMetaJSON = JSON.stringify(
       <button
         class="cart-toggle"
         id="cartToggle"
+        style="position:fixed; bottom:calc(1.5rem + env(safe-area-inset-bottom,0px)); right:calc(1.5rem + env(safe-area-inset-right,0px)); left:auto;"
         aria-label={`Ouvrir le panier — ${totalCartQty} article${totalCartQty !== 1 ? 's' : ''}`}
         aria-expanded="false"
         aria-controls="cartDrawer"
@@ -1743,7 +1744,7 @@ const productsMetaJSON = JSON.stringify(
 .cart-toggle {
   position: fixed;
   bottom: calc(clamp(var(--space-5), 3vw, var(--space-8)) + env(safe-area-inset-bottom, 0px));
-  right: calc(clamp(var(--space-4), 3vw, var(--space-7)) + env(safe-area-inset-right, 0px));
+  right: calc(clamp(var(--space-4), 3vw, var(--space-8)) + env(safe-area-inset-right, 0px));
   z-index: var(--z-toast);
   width: 56px;
   height: 56px;
