@@ -292,6 +292,25 @@ const pendingPDVNames = Object.keys(pendingQtys)
             </label>
 
             <div class="pdv-body" id={`pdv-body-${pdv.key}`} hidden>
+              <div class="pdv-body-controls">
+                <div class="pdv-search-wrap">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                    <circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.25"/>
+                    <path d="M10 10l2.5 2.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>
+                  </svg>
+                  <input
+                    type="text"
+                    class="pdv-search"
+                    placeholder="Rechercher un produit…"
+                    autocomplete="off"
+                    aria-label="Rechercher un produit"
+                  />
+                </div>
+                <button type="button" class="pdv-show-all-btn" hidden>
+                  Voir tous les produits
+                </button>
+              </div>
+
               {categories.length === 0 ? (
                 <p class="pdv-empty">Aucun produit en stock.</p>
               ) : (
@@ -300,7 +319,7 @@ const pendingPDVNames = Object.keys(pendingQtys)
                     <p class="pdv-cat-name">{cat}</p>
                     <div class="pdv-products">
                       {productsByCategory[cat].map(p => (
-                        <div class="pdv-product-row">
+                        <div class="pdv-product-row" data-product-id={p.id} data-product-name={p.name.toLowerCase()}>
                           <span class="pdv-product-name">{p.name}</span>
                           {p.unit && <span class="pdv-product-unit">{p.unit}</span>}
                           <div class="stepper">
@@ -351,7 +370,50 @@ const pendingPDVNames = Object.keys(pendingQtys)
 </AdminLayout>
 
 <script>
-  // Toggle PDV body on checkbox change
+  // ── PDV body visibility helpers ───────────────────────────────────────────
+  function refreshBodyVisibility(body: HTMLElement) {
+    const searchEl = body.querySelector<HTMLInputElement>('.pdv-search');
+    const searchTerm = (searchEl?.value ?? '').toLowerCase().trim();
+    const showAll = body.dataset.showAll === 'true';
+    let hiddenZeroCount = 0;
+
+    body.querySelectorAll<HTMLElement>('.pdv-product-row').forEach(row => {
+      const isOrderedZero = row.dataset.orderedZero === 'true';
+      const name = row.dataset.productName ?? '';
+
+      let hide: boolean;
+      if (searchTerm) {
+        hide = !name.includes(searchTerm);
+      } else {
+        hide = isOrderedZero && !showAll;
+        if (hide) hiddenZeroCount++;
+      }
+      row.hidden = hide;
+    });
+
+    // Hide empty category headers
+    body.querySelectorAll<HTMLElement>('.pdv-cat').forEach(cat => {
+      const anyVisible = [...cat.querySelectorAll<HTMLElement>('.pdv-product-row')].some(r => !r.hidden);
+      cat.hidden = !anyVisible;
+    });
+
+    // Update show-all toggle
+    const showAllBtn = body.querySelector<HTMLButtonElement>('.pdv-show-all-btn');
+    if (showAllBtn) {
+      const hasOrderedZeros = [...body.querySelectorAll<HTMLElement>('.pdv-product-row')]
+        .some(r => r.dataset.orderedZero === 'true');
+      if (hasOrderedZeros && !searchTerm) {
+        showAllBtn.hidden = false;
+        showAllBtn.textContent = showAll
+          ? 'Masquer les produits non commandés'
+          : `Voir tous les produits (+${hiddenZeroCount} non commandés)`;
+      } else {
+        showAllBtn.hidden = true;
+      }
+    }
+  }
+
+  // ── Toggle PDV body on checkbox change ───────────────────────────────────
   document.querySelectorAll<HTMLInputElement>('.pdv-checkbox').forEach(cb => {
     const targetId = cb.dataset.target!;
     const body = document.getElementById(targetId);
@@ -361,14 +423,42 @@ const pendingPDVNames = Object.keys(pendingQtys)
       if (body) body.hidden = !cb.checked;
       card?.classList.toggle('pdv-card--open', cb.checked);
       if (!cb.checked && body) {
-        // Reset quantities when unchecked
         body.querySelectorAll<HTMLInputElement>('.step-input').forEach(i => { i.value = '0'; });
+        // Reset ordered-zero markers and clear search when unchecked
+        body.querySelectorAll<HTMLElement>('.pdv-product-row').forEach(r => {
+          delete r.dataset.orderedZero;
+          r.hidden = false;
+        });
+        body.querySelectorAll<HTMLElement>('.pdv-cat').forEach(c => { c.hidden = false; });
+        const search = body.querySelector<HTMLInputElement>('.pdv-search');
+        if (search) search.value = '';
+        delete body.dataset.showAll;
+        const btn = body.querySelector<HTMLButtonElement>('.pdv-show-all-btn');
+        if (btn) btn.hidden = true;
       }
       updateTotal();
     });
   });
 
-  // Stepper buttons
+  // ── Search inputs ─────────────────────────────────────────────────────────
+  document.querySelectorAll<HTMLInputElement>('.pdv-search').forEach(input => {
+    input.addEventListener('input', () => {
+      const body = input.closest<HTMLElement>('.pdv-body');
+      if (body) refreshBodyVisibility(body);
+    });
+  });
+
+  // ── Show-all toggles ──────────────────────────────────────────────────────
+  document.querySelectorAll<HTMLButtonElement>('.pdv-show-all-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const body = btn.closest<HTMLElement>('.pdv-body');
+      if (!body) return;
+      body.dataset.showAll = body.dataset.showAll === 'true' ? 'false' : 'true';
+      refreshBodyVisibility(body);
+    });
+  });
+
+  // ── Stepper buttons ───────────────────────────────────────────────────────
   document.querySelectorAll<HTMLElement>('.pdv-body').forEach(body => {
     body.addEventListener('click', e => {
       const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.step-btn');
@@ -396,7 +486,7 @@ const pendingPDVNames = Object.keys(pendingQtys)
     if (el) el.textContent = String(total);
   }
 
-  // ── Load pending confirmed orders into form ────────────────────────────────
+  // ── Load pending confirmed orders into form ───────────────────────────────
   const pendingDataEl = document.getElementById('pendingData');
   const loadPendingBtn = document.getElementById('loadPendingBtn') as HTMLButtonElement | null;
   const loadedOrderIdsInput = document.getElementById('loadedOrderIds') as HTMLInputElement | null;
@@ -408,20 +498,35 @@ const pendingPDVNames = Object.keys(pendingQtys)
     };
 
     loadPendingBtn.addEventListener('click', () => {
-      for (const [pdvKey, products] of Object.entries(pending.qtys ?? {})) {
+      for (const [pdvKey, orderedProducts] of Object.entries(pending.qtys ?? {})) {
+        // Open the PDV if not already open
         const checkbox = document.querySelector<HTMLInputElement>(`input[name="included_${pdvKey}"]`);
         if (checkbox && !checkbox.checked) {
           checkbox.checked = true;
           checkbox.dispatchEvent(new Event('change', { bubbles: true }));
         }
-        for (const [productId, qty] of Object.entries(products)) {
+
+        // Set quantities
+        for (const [productId, qty] of Object.entries(orderedProducts)) {
           const input = document.querySelector<HTMLInputElement>(`input[name="qty_${pdvKey}_${productId}"]`);
           if (input) {
             const existing = parseInt(input.value || '0', 10);
-            input.value = String(existing + qty);
+            input.value = String(existing + (qty as number));
           }
         }
+
+        // Mark ordered-zero rows so they can be hidden
+        const body = document.getElementById(`pdv-body-${pdvKey}`);
+        if (body) {
+          body.querySelectorAll<HTMLElement>('.pdv-product-row').forEach(row => {
+            const pid = row.dataset.productId!;
+            const qty = (orderedProducts[pid] as number | undefined) ?? 0;
+            row.dataset.orderedZero = qty > 0 ? 'false' : 'true';
+          });
+          refreshBodyVisibility(body);
+        }
       }
+
       if (loadedOrderIdsInput) loadedOrderIdsInput.value = (pending.orderIds ?? []).join(',');
       updateTotal();
 
@@ -637,6 +742,68 @@ input::placeholder { color: var(--color-muted); }
   gap: var(--space-4);
 }
 .pdv-body[hidden] { display: none; }
+
+/* ── Body controls (search + show-all) ──────────── */
+.pdv-body-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.pdv-search-wrap {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.pdv-search-wrap svg {
+  position: absolute;
+  left: 9px;
+  color: var(--color-muted);
+  pointer-events: none;
+  flex-shrink: 0;
+}
+.pdv-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.4375rem 0.75rem 0.4375rem 2rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  height: 36px;
+  min-height: unset;
+  outline: none;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+.pdv-search:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px oklch(0.568 0.149 45.9 / 0.15);
+}
+.pdv-search::placeholder { color: var(--color-muted); }
+
+.pdv-show-all-btn {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-primary);
+  background: none;
+  border: 1px solid oklch(0.568 0.149 45.9 / 0.35);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  padding: 0 var(--space-3);
+  height: 36px;
+  white-space: nowrap;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+  flex-shrink: 0;
+}
+.pdv-show-all-btn:hover {
+  background: oklch(0.568 0.149 45.9 / 0.06);
+  border-color: var(--color-primary);
+}
+.pdv-show-all-btn[hidden] { display: none; }
 
 .pdv-empty { font-size: var(--text-sm); color: var(--color-muted); padding: var(--space-2) 0; }
 
