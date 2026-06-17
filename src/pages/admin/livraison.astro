@@ -217,9 +217,8 @@ const pendingPDVNames = Object.keys(pendingQtys)
     <div class="pending-banner">
       <div class="pending-banner-left">
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-          <rect x="2" y="7" width="16" height="11" rx="2" stroke="oklch(0.568 0.149 45.9)" stroke-width="1.4"/>
-          <path d="M6 7V5.5a4 4 0 0 1 8 0V7" stroke="oklch(0.568 0.149 45.9)" stroke-width="1.4" stroke-linecap="round"/>
-          <circle cx="10" cy="12.5" r="1.5" fill="oklch(0.568 0.149 45.9)"/>
+          <circle cx="10" cy="10" r="8" stroke="oklch(0.52 0.17 145)" stroke-width="1.4"/>
+          <path d="M6.5 10.5l2.5 2.5 4.5-5" stroke="oklch(0.52 0.17 145)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
         <div class="pending-banner-text">
           <span class="pending-banner-title">
@@ -509,8 +508,8 @@ const pendingPDVNames = Object.keys(pendingQtys)
   flex-wrap: wrap;
   padding: var(--space-4) var(--space-5);
   margin-bottom: var(--space-5);
-  background: oklch(0.97 0.03 45.9);
-  border: 1.5px solid oklch(0.88 0.07 45.9);
+  background: oklch(0.96 0.05 145);
+  border: 1.5px solid oklch(0.85 0.08 145);
   border-radius: var(--radius-md);
 }
 
@@ -531,11 +530,11 @@ const pendingPDVNames = Object.keys(pendingQtys)
 .pending-banner-title {
   font-size: var(--text-sm);
   font-weight: 700;
-  color: oklch(0.42 0.13 45.9);
+  color: oklch(0.35 0.14 145);
 }
 .pending-banner-sub {
   font-size: var(--text-xs);
-  color: oklch(0.55 0.09 45.9);
+  color: oklch(0.48 0.10 145);
 }
 .pending-banner-warn {
   font-size: var(--text-xs);
