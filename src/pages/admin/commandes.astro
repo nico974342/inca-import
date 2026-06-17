@@ -39,6 +39,7 @@ if (Astro.request.method === 'POST') {
         status: new_status,
         items: (statusItems ?? []).map(it => ({ name: it.product_name, quantity: it.quantity, unit: it.unit })),
         totalHt,
+        orderDate: current.created_at,
       }).catch(err => console.error('[commandes] sendOrderStatusEmail threw:', err));
     }
 
