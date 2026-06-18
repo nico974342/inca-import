@@ -24,9 +24,9 @@ if (Astro.request.method === 'POST') {
   const unit             = (data.get('unit')             as string)?.trim() || 'carton';
   const units_per_carton = data.get('units_per_carton')  ? parseInt(data.get('units_per_carton') as string, 10) || null : null;
   const image_url        = (data.get('image_url')        as string)?.trim() || null;
-  const in_stock       = data.get('in_stock') === 'true';
   const position       = data.get('position') ? parseInt(data.get('position') as string) : 0;
   const stock_quantity = data.get('stock_quantity') ? parseInt(data.get('stock_quantity') as string, 10) : 0;
+  const in_stock       = stock_quantity > 0;
 
   if (!name || !slug || !category) {
     formError = 'Le nom, le slug et la catégorie sont requis.';
@@ -109,11 +109,13 @@ if (Astro.request.method === 'POST') {
             <input type="number" id="stock_quantity" name="stock_quantity" min="0" value={product.stock_quantity ?? 0} />
           </div>
           <div class="field">
-            <label for="in_stock">Disponibilité</label>
-            <select id="in_stock" name="in_stock">
-              <option value="true"  selected={product.in_stock}>En stock</option>
-              <option value="false" selected={!product.in_stock}>Rupture</option>
-            </select>
+            <label>Disponibilité</label>
+            <div class="status-display" id="stockStatus">
+              {(product.stock_quantity ?? 0) > 0
+                ? <span class="status-badge status-badge--ok">En stock</span>
+                : <span class="status-badge status-badge--out">Rupture de stock</span>
+              }
+            </div>
           </div>
           <div class="field">
             <label for="position">Position</label>
@@ -213,4 +215,34 @@ input:focus, select:focus, textarea:focus {
   .field-group,
   .field-group--3 { grid-template-columns: 1fr; }
 }
+
+.status-display {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+.status-badge--ok  { background: oklch(0.92 0.08 145); color: oklch(0.32 0.14 145); }
+.status-badge--out { background: oklch(0.95 0.04 25);  color: oklch(0.46 0.18 25); }
 </style>
+
+<script>
+const qtyInput  = document.getElementById('stock_quantity') as HTMLInputElement | null;
+const statusEl  = document.getElementById('stockStatus');
+if (qtyInput && statusEl) {
+  qtyInput.addEventListener('input', () => {
+    const qty = parseInt(qtyInput.value) || 0;
+    statusEl.innerHTML = qty > 0
+      ? '<span class="status-badge status-badge--ok">En stock</span>'
+      : '<span class="status-badge status-badge--out">Rupture de stock</span>';
+  });
+}
+</script>

@@ -6,7 +6,7 @@ import { supabaseAdmin, createAuthClient } from '../lib/supabase';
 
 const { data: products } = await supabaseAdmin
   .from('products')
-  .select('id, name, slug, category, description, image_url, in_stock, unit, units_per_carton, price_ht, stock_quantity')
+  .select('id, name, slug, category, description, image_url, unit, units_per_carton, price_ht, stock_quantity')
   .order('position', { ascending: true })
   .order('name', { ascending: true });
 
@@ -35,7 +35,7 @@ const totalCartHT = Object.entries(cartMap).reduce(
 );
 
 const total   = products?.length ?? 0;
-const inStock = products?.filter(p => p.in_stock).length ?? 0;
+const inStock = products?.filter(p => (p.stock_quantity ?? 0) > 0).length ?? 0;
 
 const CAT_LABEL: Record<string, string> = {
   boissons:    'Boissons',
@@ -148,7 +148,7 @@ const productsMetaJSON = JSON.stringify(
                 : null;
               return (
               <article
-                class={`product-card${!p.in_stock ? ' product-card--oos' : ''}`}
+                class={`product-card${(p.stock_quantity ?? 0) === 0 ? ' product-card--oos' : ''}`}
                 data-cat={p.category}
                 data-search={`${p.name} ${p.description ?? ''}`.toLowerCase()}
               >
@@ -161,7 +161,7 @@ const productsMetaJSON = JSON.stringify(
                   ) : (
                     <span class="img-letter" aria-hidden="true">{p.name[0].toUpperCase()}</span>
                   )}
-                  {!p.in_stock && (
+                  {(p.stock_quantity ?? 0) === 0 && (
                     <span class="oos-badge" aria-label="Rupture de stock">Rupture de stock</span>
                   )}
                 </div>
@@ -204,7 +204,7 @@ const productsMetaJSON = JSON.stringify(
 
                   {p.description && <p class="product-desc">{p.description}</p>}
 
-                  {isClient && p.in_stock ? (
+                  {isClient && (p.stock_quantity ?? 0) > 0 ? (
                     <div
                       class="cart-controls"
                       data-product-id={p.id}
