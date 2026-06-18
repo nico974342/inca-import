@@ -5,7 +5,7 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
   const { data: { user } } = await supabase.auth.getUser();
 
-  if (!user || user.user_metadata?.role !== 'admin') {
+  if (!user || user.user_metadata?.role === 'client') {
     return new Response('Non autorisé', { status: 401 });
   }
 
