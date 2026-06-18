@@ -16,10 +16,21 @@ if (!client) return Astro.redirect('/admin/clients');
 
 if (Astro.request.method === 'POST') {
   const data       = await Astro.request.formData();
+  const nom        = sanitizeText(data.get('nom') as string, 120);
+  const societe    = sanitizeText(data.get('societe') as string, 120);
   const email      = sanitizeEmail(data.get('email') as string);
   const telephone  = sanitizeText(data.get('telephone') as string, 40);
   const status     = data.get('status') as string;
   const notes      = sanitizeText(data.get('notes') as string, 500);
+  const points_de_vente   = sanitizeText(data.get('points_de_vente') as string, 200);
+  const adresse_pdv       = sanitizeText(data.get('adresse_pdv') as string, 200);
+  const livraison_rue     = sanitizeText(data.get('livraison_rue') as string, 200);
+  const livraison_cp      = sanitizeText(data.get('livraison_code_postal') as string, 20);
+  const livraison_ville   = sanitizeText(data.get('livraison_ville') as string, 100);
+  const facturation_same  = data.get('facturation_same') === '1';
+  const facturation_rue   = sanitizeText(data.get('facturation_rue') as string, 200);
+  const facturation_cp    = sanitizeText(data.get('facturation_code_postal') as string, 20);
+  const facturation_ville = sanitizeText(data.get('facturation_ville') as string, 100);
 
   const remiseRaw = (data.get('remise') as string)?.trim();
   const remise    = remiseRaw ? parseFloat(remiseRaw) : null;
@@ -32,7 +43,9 @@ if (Astro.request.method === 'POST') {
 
   const VALID_STATUS = ['en_attente', 'actif', 'suspendu'];
 
-  if (!email) {
+  if (!nom) {
+    formError = 'Le nom est obligatoire.';
+  } else if (!email) {
     formError = 'Email invalide.';
   } else if (!VALID_STATUS.includes(status)) {
     formError = 'Statut invalide.';
@@ -44,10 +57,21 @@ if (Astro.request.method === 'POST') {
     const { error } = await supabaseAdmin
       .from('client_accounts')
       .update({
+        nom,
+        societe: societe || null,
         email,
         telephone: telephone || null,
         status,
         notes: notes || null,
+        points_de_vente: points_de_vente || null,
+        adresse_pdv: adresse_pdv || null,
+        livraison_rue: livraison_rue || null,
+        livraison_code_postal: livraison_cp || null,
+        livraison_ville: livraison_ville || null,
+        facturation_same,
+        facturation_rue: facturation_same ? null : (facturation_rue || null),
+        facturation_code_postal: facturation_same ? null : (facturation_cp || null),
+        facturation_ville: facturation_same ? null : (facturation_ville || null),
         remise,
         conditions_paiement,
         plafond_credit,
@@ -142,6 +166,12 @@ const livraisonAddr = [client.livraison_rue, client.livraison_code_postal, clien
 const facturationAddr = client.facturation_same
   ? 'Identique à la livraison'
   : ([client.facturation_rue, client.facturation_code_postal, client.facturation_ville].filter(Boolean).join(', ') || '—');
+
+const { data: deliveryNotes } = await supabaseAdmin
+  .from('delivery_notes')
+  .select('id, delivery_id, pdv_name, created_at')
+  .eq('client_id', id)
+  .order('created_at', { ascending: false });
 ---
 <AdminLayout title={`Client — ${client.nom}`} activeNav="clients">
   <a href="/admin/clients" class="back-link">← Retour aux clients</a>
@@ -187,6 +217,17 @@ const facturationAddr = client.facturation_same
     <form method="post" class="edit-form" novalidate>
       <input type="hidden" name="action" value="update_client" />
 
+      <h3 class="subsection-title">Identité</h3>
+      <div class="field-group">
+        <div class="field">
+          <label for="nom">Nom <span class="required">*</span></label>
+          <input type="text" id="nom" name="nom" required value={client.nom ?? ''} />
+        </div>
+        <div class="field">
+          <label for="societe">Société</label>
+          <input type="text" id="societe" name="societe" value={client.societe ?? ''} />
+        </div>
+      </div>
       <div class="field-group">
         <div class="field">
           <label for="email">Email <span class="required">*</span></label>
@@ -195,6 +236,56 @@ const facturationAddr = client.facturation_same
         <div class="field">
           <label for="telephone">Téléphone</label>
           <input type="text" id="telephone" name="telephone" value={client.telephone ?? ''} />
+        </div>
+      </div>
+
+      <h3 class="subsection-title">Point de vente</h3>
+      <div class="field-group">
+        <div class="field">
+          <label for="points_de_vente">Nom du point de vente</label>
+          <input type="text" id="points_de_vente" name="points_de_vente" value={client.points_de_vente ?? ''} />
+        </div>
+        <div class="field">
+          <label for="adresse_pdv">Adresse PDV</label>
+          <input type="text" id="adresse_pdv" name="adresse_pdv" value={client.adresse_pdv ?? ''} />
+        </div>
+      </div>
+
+      <h3 class="subsection-title">Adresse de livraison</h3>
+      <div class="field-group field-group--3">
+        <div class="field">
+          <label for="livraison_rue">Rue</label>
+          <input type="text" id="livraison_rue" name="livraison_rue" value={client.livraison_rue ?? ''} />
+        </div>
+        <div class="field">
+          <label for="livraison_code_postal">Code postal</label>
+          <input type="text" id="livraison_code_postal" name="livraison_code_postal" value={client.livraison_code_postal ?? ''} />
+        </div>
+        <div class="field">
+          <label for="livraison_ville">Ville</label>
+          <input type="text" id="livraison_ville" name="livraison_ville" value={client.livraison_ville ?? ''} />
+        </div>
+      </div>
+
+      <h3 class="subsection-title">Adresse de facturation</h3>
+      <div class="field">
+        <label class="checkbox-inline">
+          <input type="checkbox" id="facturation_same" name="facturation_same" value="1" checked={!!client.facturation_same} />
+          Identique à l'adresse de livraison
+        </label>
+      </div>
+      <div id="facturationAddr" class="field-group field-group--3">
+        <div class="field">
+          <label for="facturation_rue">Rue</label>
+          <input type="text" id="facturation_rue" name="facturation_rue" value={client.facturation_rue ?? ''} />
+        </div>
+        <div class="field">
+          <label for="facturation_code_postal">Code postal</label>
+          <input type="text" id="facturation_code_postal" name="facturation_code_postal" value={client.facturation_code_postal ?? ''} />
+        </div>
+        <div class="field">
+          <label for="facturation_ville">Ville</label>
+          <input type="text" id="facturation_ville" name="facturation_ville" value={client.facturation_ville ?? ''} />
         </div>
       </div>
 
@@ -262,6 +353,47 @@ const facturationAddr = client.facturation_same
                 <td class="td-mono">#{shortId(o.id)}</td>
                 <td class="td-r">{o.total != null ? o.total.toFixed(2).replace('.', ',') + ' €' : '—'}</td>
                 <td><span class={`badge badge--${ORDER_STATUS_COLOR[o.status] ?? 'muted'}`}>{ORDER_STATUS_LABEL[o.status] ?? o.status}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </div>
+
+  <div class="card">
+    <h2 class="card-title">Bons de livraison</h2>
+    {!deliveryNotes?.length ? (
+      <p class="empty-orders">Aucun bon de livraison pour ce client.</p>
+    ) : (
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Livraison</th>
+              <th>Point de vente</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {(deliveryNotes ?? []).map(note => (
+              <tr>
+                <td class="td-muted">{formatDate(note.created_at)}</td>
+                <td class="td-mono">{note.delivery_id}</td>
+                <td>{note.pdv_name}</td>
+                <td class="td-r">
+                  <a
+                    href={`/api/delivery-notes/${note.id}/download`}
+                    class="btn-dl"
+                    aria-label={`Télécharger ${note.delivery_id}`}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                      <path d="M7 1v8M4 6l3 3 3-3M2 10v1a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    PDF
+                  </a>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -416,6 +548,23 @@ input:focus, select:focus, textarea:focus {
 
 .empty-orders { font-size: var(--text-sm); color: var(--color-muted); }
 
+.btn-dl {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-primary-deep);
+  text-decoration: none;
+  padding: 3px 8px;
+  border: 1px solid oklch(0.82 0.08 45.9);
+  border-radius: var(--radius-sm);
+  background: oklch(0.98 0.02 45.9);
+  white-space: nowrap;
+  transition: background var(--dur-fast);
+}
+.btn-dl:hover { background: oklch(0.95 0.04 45.9); }
+
 .table-wrap { overflow-x: auto; }
 .data-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
 .data-table thead th {
@@ -459,6 +608,16 @@ input:focus, select:focus, textarea:focus {
 @media (max-width: 768px) {
   .grid-2col { grid-template-columns: 1fr; }
 }
+.checkbox-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+  cursor: pointer;
+}
+
 @media (max-width: 560px) {
   .field-group,
   .field-group--3 { grid-template-columns: 1fr; }
@@ -466,3 +625,15 @@ input:focus, select:focus, textarea:focus {
   .info-row dd { text-align: left; }
 }
 </style>
+
+<script>
+  const sameCheck = document.getElementById('facturation_same') as HTMLInputElement | null;
+  const factAddrDiv = document.getElementById('facturationAddr') as HTMLElement | null;
+  if (sameCheck && factAddrDiv) {
+    function toggleFactAddr() {
+      factAddrDiv!.hidden = sameCheck!.checked;
+    }
+    sameCheck.addEventListener('change', toggleFactAddr);
+    toggleFactAddr();
+  }
+</script>

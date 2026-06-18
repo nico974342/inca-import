@@ -38,12 +38,16 @@ export interface PdfDeliveryData {
   notes?: string | null;
 }
 
-const PRIMARY = '#C96334';
-const INK     = '#1E1A16';
-const MUTED   = '#706B65';
-const SURFACE = '#F6F3EF';
-const BORDER  = '#E7E2DC';
-const WHITE   = '#FFFFFF';
+const PRIMARY  = '#C96334';
+const INK      = '#1E1A16';
+const MUTED    = '#706B65';
+const SURFACE  = '#F6F3EF';
+const ROW_ALT  = '#F2EFE9';   // subtle alternating row tint
+const BORDER   = '#E7E2DC';
+const WHITE    = '#FFFFFF';
+
+const FOOTER_L1 = 'Inca Import · 29 Route des Premiers Français · 97460 Saint-Paul · SIRET 945 112 753';
+const FOOTER_L2 = 'contact@inca-import.re · 0692 47 89 41 · TVA non applicable, art. 293 B du CGI';
 
 export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -269,25 +273,28 @@ export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
 function drawHeader(doc: InstanceType<typeof PDFDocument>, opts: {
   id: string; date: string; title: string; withAddress?: boolean;
 }) {
-  doc.fontSize(22).font('Helvetica-Bold').fillColor(PRIMARY).text('Inca Import', 50, 50);
-  if (opts.withAddress) {
-    doc.fontSize(9).font('Helvetica').fillColor(MUTED)
-      .text('Grossiste B2B · La Réunion', 50, 78)
-      .text('29 Route des Premiers Français — 97460 Saint-Paul', 50, 92)
-      .text('SIRET 945 112 753', 50, 106);
-    doc.moveTo(50, 124).lineTo(545, 124).lineWidth(0.5).strokeColor(BORDER).stroke();
-  } else {
-    doc.fontSize(9).font('Helvetica').fillColor(MUTED).text('Grossiste B2B · La Réunion, 974', 50, 78);
-    doc.moveTo(50, 98).lineTo(545, 98).lineWidth(0.5).strokeColor(BORDER).stroke();
-  }
-  const rightTop = 50;
-  doc.fontSize(8).font('Helvetica').fillColor(MUTED)
-    .text(`Réf. : ${opts.id}`, 350, rightTop, { width: 195, align: 'right' })
-    .text(`Date : ${opts.date}`, 350, rightTop + 13, { width: 195, align: 'right' });
+  // Brand name — larger and bolder
+  doc.fontSize(26).font('Helvetica-Bold').fillColor(PRIMARY).text('Inca Import', 50, 44);
+  // Coral accent line under brand name
+  doc.moveTo(50, 80).lineTo(168, 80).lineWidth(2.5).strokeColor(PRIMARY).stroke();
 
-  const titleY = opts.withAddress ? 140 : 114;
-  doc.fontSize(14).font('Helvetica-Bold').fillColor(INK).text(opts.title, 50, titleY);
-  return titleY + 30;
+  doc.fontSize(8).font('Helvetica').fillColor(MUTED)
+    .text(`Réf. : ${opts.id}`, 350, 44, { width: 195, align: 'right' })
+    .text(`Date : ${opts.date}`, 350, 57, { width: 195, align: 'right' });
+
+  if (opts.withAddress) {
+    doc.fontSize(8.5).font('Helvetica').fillColor(MUTED)
+      .text('29 Route des Premiers Français — 97460 Saint-Paul', 50, 90)
+      .text('SIRET 945 112 753', 50, 103);
+    doc.moveTo(50, 120).lineTo(545, 120).lineWidth(0.5).strokeColor(BORDER).stroke();
+    doc.fontSize(15).font('Helvetica-Bold').fillColor(INK).text(opts.title, 50, 134);
+    return 134 + 32;
+  } else {
+    doc.fontSize(8.5).font('Helvetica').fillColor(MUTED).text('Grossiste B2B · La Réunion', 50, 90);
+    doc.moveTo(50, 106).lineTo(545, 106).lineWidth(0.5).strokeColor(BORDER).stroke();
+    doc.fontSize(15).font('Helvetica-Bold').fillColor(INK).text(opts.title, 50, 120);
+    return 120 + 32;
+  }
 }
 
 function drawProductTable(
@@ -298,50 +305,71 @@ function drawProductTable(
   let y = startY;
   const cols = { px: 65, ux: 380, qx: 480 };
 
-  doc.rect(50, y, 495, 20).fillColor(SURFACE).fill();
+  // Header row
+  doc.rect(50, y, 495, 22).fillColor(SURFACE).fill();
+  doc.moveTo(50, y + 22).lineTo(545, y + 22).lineWidth(0.5).strokeColor(BORDER).stroke();
   doc.fontSize(7).font('Helvetica-Bold').fillColor(MUTED)
-    .text('PRODUIT', cols.px, y + 6)
-    .text('UNITÉ', cols.ux, y + 6)
-    .text('QTÉ', cols.qx, y + 6, { width: 55, align: 'right' });
-  y += 20;
+    .text('PRODUIT', cols.px, y + 8)
+    .text('UNITÉ',   cols.ux, y + 8)
+    .text('QTÉ',     cols.qx, y + 8, { width: 55, align: 'right' });
+  y += 22;
 
+  doc.fontSize(9).font('Helvetica');
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
-    if (y > 755) { doc.addPage(); y = 50; }
-    doc.rect(50, y, 495, 22).fillColor(i % 2 === 0 ? WHITE : SURFACE).fill();
-    doc.rect(50, y, 495, 22).lineWidth(0.3).strokeColor(BORDER).stroke();
-    doc.fontSize(9).font('Helvetica').fillColor(INK)
-      .text(item.product_name, cols.px, y + 7, { width: 305, ellipsis: true })
-      .text(item.unit ?? '—', cols.ux, y + 7)
-      .text(String(item.quantity), cols.qx, y + 7, { width: 55, align: 'right' });
-    y += 22;
+    // Dynamic row height: measure wrapped product name
+    const nameH = doc.heightOfString(item.product_name, { width: 305 });
+    const rowH  = Math.max(22, Math.ceil(nameH) + 10);
+    if (y + rowH > 755) { doc.addPage(); y = 50; }
+    if (i % 2 === 1) {
+      doc.rect(50, y, 495, rowH).fillColor(ROW_ALT).fill();
+    }
+    doc.moveTo(50, y + rowH).lineTo(545, y + rowH).lineWidth(0.3).strokeColor(BORDER).stroke();
+    doc.fillColor(INK)
+      .text(item.product_name, cols.px, y + 5, { width: 305 })
+      .text(item.unit ?? '—',  cols.ux, y + 5)
+      .text(String(item.quantity), cols.qx, y + 5, { width: 55, align: 'right' });
+    y += rowH;
   }
   return y;
 }
 
 function drawTotalCartons(doc: InstanceType<typeof PDFDocument>, total: number, y: number): number {
-  y += 6;
-  doc.rect(350, y, 195, 28).fillColor(SURFACE).fill();
-  doc.rect(350, y, 195, 28).lineWidth(0.5).strokeColor(BORDER).stroke();
-  doc.fontSize(8).font('Helvetica').fillColor(MUTED).text('Total cartons', 362, y + 9);
-  doc.fontSize(11).font('Helvetica-Bold').fillColor(INK)
-    .text(String(total), 450, y + 8, { width: 85, align: 'right' });
-  return y + 28;
+  y += 8;
+  doc.rect(50, y, 495, 32).fillColor(PRIMARY).fill();
+  doc.fontSize(8.5).font('Helvetica-Bold').fillColor(WHITE).text('TOTAL CARTONS', 65, y + 11);
+  doc.fontSize(14).font('Helvetica-Bold').fillColor(WHITE)
+    .text(String(total), 350, y + 9, { width: 180, align: 'right' });
+  return y + 32;
 }
 
-function drawFooter(doc: InstanceType<typeof PDFDocument>) {
-  doc.fontSize(7).font('Helvetica').fillColor(MUTED)
-    .text(
-      'Inca Import · SIRET 945 112 753 · 29 Route des Premiers Français, 97460 Saint-Paul, La Réunion · inca-import@hotmail.com · 0692 47 89 41',
-      50, 800, { width: 495, align: 'center' }
-    );
+function finalizeDoc(doc: InstanceType<typeof PDFDocument>): void {
+  const totalPages = doc.bufferedPageRange().count;
+
+  for (let i = 0; i < totalPages; i++) {
+    doc.switchToPage(i);
+    // Page numbers on every page when multi-page
+    if (totalPages > 1) {
+      doc.fontSize(7).font('Helvetica').fillColor(MUTED)
+        .text(`Page ${i + 1} / ${totalPages}`, 400, 822, { width: 145, align: 'right' });
+    }
+    // Footer (two lines) on last page
+    if (i === totalPages - 1) {
+      doc.fontSize(7).font('Helvetica').fillColor(MUTED)
+        .text(FOOTER_L1, 50, 792, { width: 495, align: 'center' });
+      doc.fontSize(7).font('Helvetica').fillColor(MUTED)
+        .text(FOOTER_L2, 50, 804, { width: 495, align: 'center' });
+    }
+  }
+
+  doc.flushPages();
 }
 
 // ── Summary PDF: all PDVs + consolidated products ─────────────────────────
 
 export function generateDeliverySummaryPDF(delivery: PdfDeliveryData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 50, size: 'A4', info: { Title: `Récapitulatif ${delivery.id}`, Author: 'Inca Import' } });
+    const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true, info: { Title: `Récapitulatif ${delivery.id}`, Author: 'Inca Import' } });
     const chunks: Buffer[] = [];
     doc.on('data', (c: Buffer) => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -416,7 +444,7 @@ export function generateDeliverySummaryPDF(delivery: PdfDeliveryData): Promise<B
       doc.fontSize(9).font('Helvetica').fillColor(INK).text(delivery.notes, 50, y + 14, { width: 495 });
     }
 
-    drawFooter(doc);
+    finalizeDoc(doc);
     doc.end();
   });
 }
@@ -427,7 +455,7 @@ export function generatePDVDeliveryPDF(
   pdv: DeliveryPDV, deliveryId: string, date: string
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 50, size: 'A4', info: { Title: `Livraison ${pdv.name} — ${deliveryId}`, Author: 'Inca Import' } });
+    const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true, info: { Title: `Livraison ${pdv.name} — ${deliveryId}`, Author: 'Inca Import' } });
     const chunks: Buffer[] = [];
     doc.on('data', (c: Buffer) => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -459,7 +487,7 @@ export function generatePDVDeliveryPDF(
     y = drawProductTable(doc, pdv.items, y);
     y = drawTotalCartons(doc, pdvTotal, y);
 
-    drawFooter(doc);
+    finalizeDoc(doc);
     doc.end();
   });
 }

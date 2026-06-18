@@ -22,6 +22,18 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
 
   if (!order) return new Response('Non trouvé', { status: 404 });
 
+  if (order.invoice_path) {
+    const { data: signedUrlData, error: signedUrlError } = await supabaseAdmin.storage
+      .from('invoices')
+      .createSignedUrl(order.invoice_path, 3600);
+
+    if (signedUrlError || !signedUrlData?.signedUrl) {
+      console.error('[invoice] signed URL error', signedUrlError);
+    } else {
+      return Response.redirect(signedUrlData.signedUrl, 302);
+    }
+  }
+
   const { data: items } = await supabaseAdmin
     .from('order_items')
     .select('product_name, quantity, unit, products(price_ht)')

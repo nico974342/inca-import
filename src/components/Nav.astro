@@ -44,6 +44,7 @@ const isAdmin = !!user && !isClient;
           <div class="nav-user-menu">
             <a href="/mon-compte">Mon compte</a>
             <a href="/mes-commandes">Mes commandes</a>
+            <a href="/mes-livraisons">Mes livraisons</a>
             <form action="/api/auth/client-logout" method="POST" class="nav-logout-form">
               <button type="submit" class="nav-logout-btn">Déconnexion</button>
             </form>
@@ -78,6 +79,7 @@ const isAdmin = !!user && !isClient;
           ) : isClient ? (
             <>
               <a href="/mes-commandes">Mes commandes</a>
+              <a href="/mes-livraisons">Mes livraisons</a>
               <a href="/mon-compte" class="mobile-user">{user?.user_metadata?.nom ?? user?.email}</a>
               <form action="/api/auth/client-logout" method="POST" class="mobile-logout-form">
                 <button type="submit" class="mobile-logout-btn">Déconnexion</button>

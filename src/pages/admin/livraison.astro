@@ -21,7 +21,7 @@ const FIXED_PDVS = [
   { key: 'fixed_total-tamarins',  name: 'TOTAL Tamarins',  clientLabel: null as string | null },
 ];
 
-const [{ data: clients }, { data: productsRaw }] = await Promise.all([
+const [{ data: clients }, { data: productsRaw }, { data: transporters }] = await Promise.all([
   supabaseAdmin
     .from('client_accounts')
     .select('id, email, nom, societe, points_de_vente')
@@ -34,6 +34,10 @@ const [{ data: clients }, { data: productsRaw }] = await Promise.all([
     .eq('in_stock', true)
     .order('category', { ascending: true })
     .order('name', { ascending: true }),
+  supabaseAdmin
+    .from('transporters')
+    .select('id, name, email')
+    .order('name'),
 ]);
 
 const clientPDVs = (clients ?? []).map(c => ({
@@ -67,10 +71,26 @@ let errorMessage = '';
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  const transporterEmail = (form.get('transporter_email') as string)?.trim();
   const notes = (form.get('notes') as string)?.trim() || null;
   const loadedOrderIds = ((form.get('loaded_order_ids') as string) ?? '')
     .split(',').map(s => s.trim()).filter(Boolean);
+
+  // Resolve transporter from select or manual entry
+  const transporterId = (form.get('transporter_id') as string)?.trim() ?? '';
+  let transporterEmail = '';
+  let transporterLabel = '';
+  if (transporterId && transporterId !== 'manual') {
+    const found = (transporters ?? []).find(t => t.id === transporterId);
+    transporterEmail = found?.email ?? '';
+    transporterLabel = found?.name ?? '';
+  } else {
+    transporterEmail = (form.get('transporter_email_manual') as string)?.trim() ?? '';
+    transporterLabel = (form.get('transporter_name_manual') as string)?.trim() || transporterEmail;
+    if (form.get('save_transporter') === '1' && transporterEmail && transporterLabel) {
+      await supabaseAdmin.from('transporters')
+        .upsert({ name: transporterLabel, email: transporterEmail }, { onConflict: 'email' });
+    }
+  }
 
   if (!transporterEmail) {
     errorMessage = "L'email du transporteur est requis.";
@@ -80,6 +100,8 @@ if (Astro.request.method === 'POST') {
     const compact = now.toISOString().slice(0, 10).replace(/-/g, '');
     const deliveryId = `LIV-${compact}-${String(Math.floor(Math.random() * 9000) + 1000)}`;
 
+    // pdvMeta tracks key + client_id alongside deliveryPDVs for storage upload
+    const pdvMeta: { key: string; name: string; clientId: string | null }[] = [];
     const deliveryPDVs: { name: string; items: { product_name: string; quantity: number; unit?: string | null }[] }[] = [];
     for (const pdv of allPDVs) {
       if (form.get(`included_${pdv.key}`) !== 'on') continue;
@@ -88,7 +110,14 @@ if (Astro.request.method === 'POST') {
         const qty = parseInt((form.get(`qty_${pdv.key}_${p.id}`) as string) || '0', 10);
         if (qty > 0) items.push({ product_name: p.name, quantity: qty, unit: p.unit });
       }
-      if (items.length > 0) deliveryPDVs.push({ name: pdv.name, items });
+      if (items.length > 0) {
+        deliveryPDVs.push({ name: pdv.name, items });
+        pdvMeta.push({
+          key: pdv.key,
+          name: pdv.name,
+          clientId: pdv.key.startsWith('client_') ? pdv.key.slice('client_'.length) : null,
+        });
+      }
     }
 
     if (deliveryPDVs.length === 0) {
@@ -145,6 +174,56 @@ if (Astro.request.method === 'POST') {
               .from('orders')
               .update({ status: 'en_preparation' })
               .in('id', loadedOrderIds);
+          }
+          // Upload PDFs to Storage + persist delivery_notes (best-effort)
+          try {
+            await Promise.all(
+              pdvMeta.map(async (meta, i) => {
+                const storagePath = `${deliveryId}/${meta.key}.pdf`;
+                const { error: upErr } = await supabaseAdmin.storage
+                  .from('delivery-notes')
+                  .upload(storagePath, pdvBuffers[i], { contentType: 'application/pdf', upsert: false });
+                if (upErr) { console.error('[livraison] upload error', meta.key, upErr.message); return; }
+                const { error: dbErr } = await supabaseAdmin.from('delivery_notes').insert({
+                  delivery_id: deliveryId,
+                  client_id: meta.clientId,
+                  pdv_key: meta.key,
+                  pdv_name: meta.name,
+                  storage_path: storagePath,
+                });
+                if (dbErr) console.error('[livraison] delivery_notes insert error:', dbErr.message);
+              })
+            );
+          } catch (e) {
+            console.error('[livraison] delivery_notes save failed:', e);
+          }
+          // Send individual emails to client-PDV recipients
+          try {
+            const clientMap = new Map(
+              (clients ?? []).filter(c => c.email)
+                .map(c => [c.id, { email: c.email as string, nom: c.nom as string }])
+            );
+            await Promise.all(
+              pdvMeta
+                .filter(meta => !!meta.clientId)
+                .map((meta, _, arr) => {
+                  const client = clientMap.get(meta.clientId!);
+                  if (!client) return Promise.resolve();
+                  const idx = pdvMeta.indexOf(meta);
+                  return resend.emails.send({
+                    from: FROM,
+                    to: [client.email],
+                    subject: `Bon de livraison ${deliveryId} — ${dateStr}`,
+                    html: `<p>Bonjour ${client.nom},</p>\n<p>Votre bon de livraison <strong>${deliveryId}</strong> du ${dateStr} est disponible en pièce jointe.</p>\n<p>Cordialement,<br/>Inca Import</p>`,
+                    attachments: [{
+                      filename: `livraison-${slugPDV(meta.name)}-${deliveryId}.pdf`,
+                      content: pdvBuffers[idx],
+                    }],
+                  }).catch(err => console.error('[livraison] client email error', meta.clientId, err));
+                })
+            );
+          } catch (e) {
+            console.error('[livraison] client emails failed:', e);
           }
         }
       } catch (e) {
@@ -278,12 +357,29 @@ const unmatchedOrders = (confirmedOrders ?? []).filter(o => !orderToPdvKey.has(o
       <h2 class="liv-section-title">Transporteur</h2>
       <div class="field-group">
         <div class="field">
-          <label for="transporter_name">Nom</label>
-          <input type="text" id="transporter_name" value="Coursier OI" disabled class="input-readonly" />
+          <label for="transporterSel">Transporteur <span class="req" aria-hidden="true">*</span></label>
+          <select id="transporterSel" name="transporter_id">
+            {(transporters ?? []).map(t => (
+              <option value={t.id}>{t.name} — {t.email}</option>
+            ))}
+            <option value="manual">— Saisir manuellement —</option>
+          </select>
+        </div>
+      </div>
+      <div id="manualTransporterFields" class="field-group field-group--manual" hidden>
+        <div class="field">
+          <label for="transporter_name_manual">Nom du transporteur</label>
+          <input type="text" id="transporter_name_manual" name="transporter_name_manual" placeholder="Coursier XYZ" />
         </div>
         <div class="field">
-          <label for="transporter_email">Email du transporteur <span class="req" aria-hidden="true">*</span></label>
-          <input type="email" id="transporter_email" name="transporter_email" required placeholder="coursier@exemple.re" autocomplete="off" />
+          <label for="transporter_email_manual">Email <span class="req" aria-hidden="true">*</span></label>
+          <input type="email" id="transporter_email_manual" name="transporter_email_manual" placeholder="coursier@exemple.re" autocomplete="off" />
+        </div>
+        <div class="field field--checkbox">
+          <label class="checkbox-label">
+            <input type="checkbox" name="save_transporter" value="1" />
+            Enregistrer ce transporteur
+          </label>
         </div>
       </div>
     </section>
@@ -448,6 +544,20 @@ const unmatchedOrders = (confirmedOrders ?? []).filter(o => !orderToPdvKey.has(o
 </AdminLayout>
 
 <script>
+  // ── Transporter select toggle ─────────────────────────────────────────────
+  const transporterSel = document.getElementById('transporterSel') as HTMLSelectElement | null;
+  const manualFields = document.getElementById('manualTransporterFields') as HTMLElement | null;
+  if (transporterSel && manualFields) {
+    const emailInput = manualFields.querySelector<HTMLInputElement>('input[type="email"]');
+    function updateManual() {
+      const isManual = transporterSel!.value === 'manual';
+      manualFields!.hidden = !isManual;
+      if (emailInput) emailInput.required = isManual;
+    }
+    transporterSel.addEventListener('change', updateManual);
+    updateManual();
+  }
+
   // ── PDV body visibility ───────────────────────────────────────────────────
   function refreshBodyVisibility(body: HTMLElement) {
     const searchEl = body.querySelector<HTMLInputElement>('.pdv-search');
@@ -728,6 +838,9 @@ const unmatchedOrders = (confirmedOrders ?? []).filter(o => !orderToPdvKey.has(o
   grid-template-columns: 1fr 1fr;
   gap: var(--space-4);
 }
+.field-group--manual { margin-top: var(--space-3); grid-template-columns: 1fr 1fr auto; }
+.field--checkbox { justify-content: flex-end; }
+.checkbox-label { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); cursor: pointer; }
 .field { display: flex; flex-direction: column; gap: var(--space-2); }
 
 label {
@@ -737,6 +850,7 @@ label {
 }
 .req { color: var(--color-primary); }
 
+select,
 input[type="email"],
 input[type="text"] {
   width: 100%;
@@ -752,6 +866,7 @@ input[type="text"] {
   box-sizing: border-box;
   transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
 }
+select:focus,
 input[type="email"]:focus,
 input[type="text"]:focus {
   border-color: var(--color-primary);

@@ -1,0 +1,257 @@
+---
+import Base from '../layouts/Base.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import { supabaseAdmin, createAuthClient } from '../lib/supabase';
+
+const supabase = createAuthClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+
+if (!user || user.user_metadata?.role !== 'client') {
+  return Astro.redirect('/connexion?from=/mes-livraisons');
+}
+
+const { data: clientAccount } = await supabaseAdmin
+  .from('client_accounts')
+  .select('id')
+  .eq('email', (user.email ?? '').toLowerCase())
+  .maybeSingle();
+
+const { data: notes } = clientAccount
+  ? await supabaseAdmin
+      .from('delivery_notes')
+      .select('id, delivery_id, pdv_name, created_at')
+      .eq('client_id', clientAccount.id)
+      .order('created_at', { ascending: false })
+  : { data: [] as { id: string; delivery_id: string; pdv_name: string; created_at: string }[] };
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('fr-FR', {
+    day: '2-digit', month: 'long', year: 'numeric',
+  });
+}
+---
+<Base
+  title="Mes livraisons — Inca Import"
+  description="Historique de vos bons de livraison Inca Import."
+>
+  <Nav user={user} />
+  <main class="liv-main">
+    <div class="container">
+
+      <header class="liv-header">
+        <div>
+          <h1 class="liv-title">Mes livraisons</h1>
+          <p class="liv-sub">
+            {notes?.length
+              ? `${notes.length} bon${notes.length > 1 ? 's' : ''} de livraison`
+              : 'Aucun bon de livraison pour le moment'}
+          </p>
+        </div>
+        <a href="/mes-commandes" class="btn btn-ghost">Mes commandes</a>
+      </header>
+
+      {!notes?.length ? (
+        <div class="liv-empty">
+          <svg class="empty-icon" width="48" height="48" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+            <rect x="8" y="10" width="32" height="32" rx="3" stroke="currentColor" stroke-width="1.75"/>
+            <path d="M16 10V8a4 4 0 0 1 8 0v2" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+            <path d="M16 24h16M16 30h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M32 36l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <p class="empty-title">Aucun bon de livraison disponible.</p>
+          <p class="empty-body">Les bons de livraison apparaîtront ici dès qu'une livraison sera préparée pour votre compte.</p>
+        </div>
+      ) : (
+        <ul class="liv-list" aria-label="Bons de livraison">
+          {(notes ?? []).map(note => (
+            <li class="liv-card">
+              <div class="liv-card-left">
+                <svg class="doc-icon" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                  <rect x="4" y="2" width="12" height="16" rx="2" stroke="currentColor" stroke-width="1.4"/>
+                  <path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                </svg>
+                <div class="liv-card-info">
+                  <span class="liv-card-pdv">{note.pdv_name}</span>
+                  <span class="liv-card-meta">
+                    {formatDate(note.created_at)}
+                    <span class="liv-card-ref">{note.delivery_id}</span>
+                  </span>
+                </div>
+              </div>
+              <a
+                href={`/api/delivery-notes/${note.id}/download`}
+                class="btn-download"
+                aria-label={`Télécharger le bon de livraison ${note.delivery_id}`}
+              >
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                  <path d="M7 1v8M4 6l3 3 3-3M2 10v1a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                Télécharger PDF
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+
+    </div>
+  </main>
+  <Footer />
+</Base>
+
+<style>
+.liv-main {
+  padding: clamp(var(--space-10), 5vw, var(--space-16)) 0
+           clamp(var(--space-16), 8vw, var(--space-24));
+}
+
+.liv-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-6);
+  flex-wrap: wrap;
+  margin-bottom: clamp(var(--space-8), 4vw, var(--space-12));
+  padding-bottom: var(--space-6);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.liv-title {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--color-ink);
+  line-height: 1.08;
+  margin-bottom: var(--space-2);
+}
+
+.liv-sub {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+
+/* Empty state */
+.liv-empty {
+  padding: clamp(var(--space-16), 8vw, var(--space-24)) 0;
+  text-align: center;
+  max-width: 400px;
+  margin: 0 auto;
+}
+
+.empty-icon {
+  color: var(--color-border-strong);
+  margin-bottom: var(--space-4);
+}
+
+.empty-title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--color-ink);
+  margin-bottom: var(--space-2);
+}
+
+.empty-body {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  line-height: 1.6;
+}
+
+/* List */
+.liv-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.liv-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+
+.liv-card:hover {
+  border-color: var(--color-border-strong);
+  box-shadow: 0 2px 8px oklch(0.148 0.020 45.9 / 0.06);
+}
+
+.liv-card-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.doc-icon {
+  flex-shrink: 0;
+  color: var(--color-primary);
+}
+
+.liv-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.liv-card-pdv {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.liv-card-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
+
+.liv-card-ref {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+}
+
+.btn-download {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-primary-deep);
+  text-decoration: none;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid oklch(0.82 0.08 45.9);
+  border-radius: var(--radius-sm);
+  background: oklch(0.98 0.02 45.9);
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+  white-space: nowrap;
+}
+
+.btn-download:hover {
+  background: oklch(0.95 0.04 45.9);
+  border-color: var(--color-primary-light);
+}
+
+@media (max-width: 480px) {
+  .liv-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .btn-download { align-self: flex-end; }
+}
+</style>
