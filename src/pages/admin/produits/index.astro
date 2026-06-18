@@ -60,15 +60,17 @@ function formatPrice(p: number | null) {
               </td>
               <td class="td-muted">{p.position}</td>
               <td class="td-actions">
-                <a href={`/admin/produits/${p.id}/edit`} class="action-link">Modifier</a>
-                <form
-                  action={`/api/produits/${p.id}/delete`}
-                  method="post"
-                  class="delete-form"
-                  onsubmit="return confirm('Supprimer ce produit ?')"
-                >
-                  <button type="submit" class="action-link action-link--danger">Supprimer</button>
-                </form>
+                <div class="actions-inner">
+                  <a href={`/admin/produits/${p.id}/edit`} class="action-link">Modifier</a>
+                  <form
+                    action={`/api/produits/${p.id}/delete`}
+                    method="post"
+                    class="delete-form"
+                    onsubmit="return confirm('Supprimer ce produit ?')"
+                  >
+                    <button type="submit" class="action-link action-link--danger">Supprimer</button>
+                  </form>
+                </div>
               </td>
             </tr>
           ))}
@@ -127,11 +129,11 @@ function formatPrice(p: number | null) {
 .td-strong { font-weight: 500; color: var(--color-ink); }
 .td-muted  { color: var(--color-muted); }
 .td-mono   { font-family: var(--font-mono); color: var(--color-ink); }
-.td-actions {
+.td-actions { white-space: nowrap; }
+.actions-inner {
   display: flex;
   gap: var(--space-4);
   align-items: center;
-  white-space: nowrap;
 }
 
 .badge {
