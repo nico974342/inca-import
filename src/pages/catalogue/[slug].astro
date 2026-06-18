@@ -504,7 +504,10 @@ const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
 /* Note: Astro scoped styles cannot reach ::backdrop (pseudo-element lives in
    the top layer and never gets the data-astro-cid attribute).
    The overlay is applied directly to the dialog element instead. */
-.lightbox {
+/* dialog[open] — only applies once showModal() sets the open attribute.
+   Without this guard, display:flex overrides the UA display:none on the
+   closed dialog and the overlay covers the page on every load. */
+.lightbox[open] {
   position: fixed;
   inset: 0;
   width: 100%;
