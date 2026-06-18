@@ -46,7 +46,10 @@ export function createAuthClient(request: Request, cookies: AstroCookies) {
           return parseCookieHeader(request.headers.get('cookie') ?? '');
         },
         setAll(toSet) {
-          toSet.forEach(({ name, value, options }) => cookies.set(name, value, options));
+          // 30-day maxAge ensures cookies survive PWA/browser restarts on iPhone
+          toSet.forEach(({ name, value, options }) =>
+            cookies.set(name, value, { maxAge: 30 * 24 * 60 * 60, ...options })
+          );
         },
       },
     }
