@@ -152,19 +152,22 @@ const productsMetaJSON = JSON.stringify(
                 data-cat={p.category}
                 data-search={`${p.name} ${p.description ?? ''}`.toLowerCase()}
               >
-                <div
+                <a
+                  href={p.slug ? `/catalogue/${p.slug}` : undefined}
                   class="product-img"
                   style={!p.image_url ? `background:${CAT_BG[p.category] ?? 'oklch(0.82 0 0)'}` : ''}
+                  aria-hidden="true"
+                  tabindex="-1"
                 >
                   {p.image_url ? (
-                    <img src={p.image_url} alt={p.name} loading="lazy" decoding="async" />
+                    <img src={p.image_url} alt="" loading="lazy" decoding="async" />
                   ) : (
                     <span class="img-letter" aria-hidden="true">{p.name[0].toUpperCase()}</span>
                   )}
                   {(p.stock_quantity ?? 0) === 0 && (
                     <span class="oos-badge" aria-label="Rupture de stock">Rupture de stock</span>
                   )}
-                </div>
+                </a>
 
                 <div class="product-body">
                   <div class="badge-row">

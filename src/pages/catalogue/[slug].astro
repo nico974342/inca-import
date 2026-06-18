@@ -81,7 +81,22 @@ const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
               {product.name[0].toUpperCase()}
             </span>
           )}
-          {!product.in_stock && (
+          {product.image_url && (
+            <button
+              type="button"
+              class="img-zoom-btn"
+              id="imgZoomBtn"
+              aria-haspopup="dialog"
+              aria-label={`Agrandir l'image de ${product.name}`}
+            >
+              <span class="img-zoom-icon" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M10 2h4v4M14 2l-5.5 5.5M6 14H2v-4M2 14l5.5-5.5" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </span>
+            </button>
+          )}
+          {isClient && !product.in_stock && (
             <div class="oos-banner" role="status">Rupture de stock</div>
           )}
         </div>
@@ -94,11 +109,11 @@ const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
             <span class={`cat-badge cat-badge--${product.category}`}>
               {CAT_LABEL[product.category] ?? product.category}
             </span>
-            {product.in_stock ? (
+            {isClient && (product.in_stock ? (
               <span class="stock-dot stock-dot--in">En stock</span>
             ) : (
               <span class="stock-dot stock-dot--out">Rupture de stock</span>
-            )}
+            ))}
           </div>
 
           <h1 class="product-name">{product.name}</h1>
@@ -159,6 +174,17 @@ const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
       </div>
     </div>
 
+    {product.image_url && (
+      <dialog id="lightbox" class="lightbox" aria-label={`Image agrandie de ${product.name}`}>
+        <button type="button" id="lbClose" class="lb-close" aria-label="Fermer">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M4 4l12 12M16 4L4 16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <img src={product.image_url} alt={product.name} class="lb-img" />
+      </dialog>
+    )}
+
   </main>
   <Footer />
 </Base>
@@ -193,6 +219,16 @@ const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
 
     decBtn.addEventListener('click', () => { if (qty > 0) sync(qty - 1); });
     incBtn.addEventListener('click', () => sync(qty + 1));
+  }
+
+  // Lightbox
+  const lb      = document.getElementById('lightbox')   as HTMLDialogElement | null;
+  const lbClose = document.getElementById('lbClose')    as HTMLButtonElement | null;
+  const zoomBtn = document.getElementById('imgZoomBtn') as HTMLButtonElement | null;
+  if (lb && zoomBtn) {
+    zoomBtn.addEventListener('click', () => lb.showModal());
+    lbClose?.addEventListener('click', () => lb.close());
+    lb.addEventListener('click', (e) => { if (e.target === lb) lb.close(); });
   }
 </script>
 
@@ -429,6 +465,96 @@ const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
   display: inline-block;
 }
 .back-link:hover { color: var(--color-ink); }
+
+/* ── Image zoom button ──────────────────────────────── */
+.img-zoom-btn {
+  position: absolute;
+  inset: 0;
+  border: none;
+  background: transparent;
+  cursor: zoom-in;
+  padding: var(--space-3);
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+}
+.img-zoom-btn:focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: -3px;
+  border-radius: var(--radius-lg);
+}
+.img-zoom-icon {
+  width: 32px;
+  height: 32px;
+  background: oklch(0.12 0.02 45 / 0.72);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.18s var(--ease-out-quart);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+.img-zoom-btn:hover .img-zoom-icon,
+.img-zoom-btn:focus-visible .img-zoom-icon { opacity: 1; }
+
+/* ── Lightbox ───────────────────────────────────────── */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  border: none;
+  padding: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lightbox::backdrop {
+  background: oklch(0.05 0 0 / 0.88);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.lb-close {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-5);
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full);
+  border: 1.5px solid oklch(1 0 0 / 0.25);
+  background: oklch(0.20 0.01 45 / 0.88);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--dur-fast), transform var(--dur-fast);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 1;
+}
+.lb-close:hover { background: oklch(0.32 0.02 45 / 0.95); transform: scale(1.08); }
+.lb-close:focus-visible { outline: 2px solid white; outline-offset: 2px; }
+.lb-img {
+  display: block;
+  max-width: min(90vw, 1200px);
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 80px oklch(0 0 0 / 0.60);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .img-zoom-icon { transition: none; }
+  .lb-close      { transition: none; }
+  .lb-close:hover { transform: none; }
+}
 
 /* ── Responsive ─────────────────────────────────────── */
 @media (max-width: 768px) {
