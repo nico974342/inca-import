@@ -501,6 +501,9 @@ const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
 .img-zoom-btn:focus-visible .img-zoom-icon { opacity: 1; }
 
 /* ── Lightbox ───────────────────────────────────────── */
+/* Note: Astro scoped styles cannot reach ::backdrop (pseudo-element lives in
+   the top layer and never gets the data-astro-cid attribute).
+   The overlay is applied directly to the dialog element instead. */
 .lightbox {
   position: fixed;
   inset: 0;
@@ -510,15 +513,12 @@ const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
   max-height: 100%;
   border: none;
   padding: 0;
-  background: transparent;
+  background: oklch(0.05 0 0 / 0.92);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   display: flex;
   align-items: center;
   justify-content: center;
-}
-.lightbox::backdrop {
-  background: oklch(0.05 0 0 / 0.88);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 .lb-close {
   position: absolute;
