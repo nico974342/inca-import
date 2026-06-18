@@ -12,7 +12,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
       return context.redirect('/admin/login');
     }
 
-    const ADMIN_TIMEOUT_MS = 8 * 60 * 60 * 1000;
+    const ADMIN_TIMEOUT_MS = 30 * 24 * 60 * 60 * 1000;
     const lastActivityRaw = context.cookies.get('admin_last_activity')?.value;
     const lastActivity = lastActivityRaw ? Number(lastActivityRaw) : null;
     const now = Date.now();
