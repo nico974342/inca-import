@@ -185,14 +185,14 @@ const clients = [
 
 const { data: productsRaw } = await supabaseAdmin
   .from('products')
-  .select('id, name, category, unit, price_ht, image_url, in_stock, stock_quantity')
+  .select('id, name, category, unit, price_ht, image_url, stock_quantity')
   .order('category', { ascending: true })
   .order('name', { ascending: true });
 
 const products = (productsRaw ?? []).map(p => ({
   id: p.id, name: p.name, category: p.category, unit: p.unit ?? '',
   price: Number(p.price_ht ?? 0), image: p.image_url ?? '',
-  inStock: p.in_stock ?? false, stock: p.stock_quantity ?? 0,
+  stock: p.stock_quantity ?? 0,
 }));
 
 const CAT_LABEL: Record<string, string> = {
@@ -497,7 +497,7 @@ const PRODUCTS_JSON = JSON.stringify(products);
             '<span style="font-size:17px;font-weight:700;color:var(--color-primary-deep);">' + p.price.toFixed(2).replace('.', ',') + ' €</span>' +
             (p.unit ? '<span style="font-size:13px;color:var(--color-muted);">' + escapeHtml(p.unit) + '</span>' : '') +
           '</div>' +
-          (!p.inStock ? '<span style="font-size:12px;font-weight:600;color:oklch(0.50 0.19 25);background:oklch(0.96 0.04 25);padding:2px 8px;border-radius:20px;width:fit-content;">Rupture de stock</span>' : '') +
+          (p.stock === 0 ? '<span style="font-size:12px;font-weight:600;color:oklch(0.50 0.19 25);background:oklch(0.96 0.04 25);padding:2px 8px;border-radius:20px;width:fit-content;">Rupture de stock</span>' : '') +
           '<div class="stepper-row" style="display:none;align-items:center;gap:10px;margin-top:6px;">' +
             '<button type="button" class="step-dec" style="width:44px;height:44px;border-radius:10px;border:1.5px solid var(--color-border-strong);background:var(--color-bg);font-size:20px;font-weight:700;color:var(--color-ink);touch-action:manipulation;-webkit-tap-highlight-color:transparent;">−</button>' +
             '<span class="step-val" style="min-width:32px;text-align:center;font-size:18px;font-weight:700;color:var(--color-ink);">0</span>' +
