@@ -831,6 +831,7 @@ details[open] .chevron { transform: rotate(180deg); }
 }
 
 .inv-file-label {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -841,11 +842,12 @@ details[open] .chevron { transform: rotate(180deg); }
 }
 
 .inv-file-label input[type="file"] {
-  width: 0;
-  height: 0;
   position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   opacity: 0;
-  pointer-events: none;
+  cursor: pointer;
 }
 
 .inv-file-label span {
@@ -882,6 +884,17 @@ details[open] .chevron { transform: rotate(180deg); }
 </style>
 
 <script>
+// Show selected filename in upload label
+document.querySelectorAll<HTMLInputElement>('.inv-file-label input[type="file"]').forEach(input => {
+  const span = input.closest('.inv-file-label')?.querySelector('span');
+  if (!span) return;
+  const defaultText = span.textContent ?? '';
+  input.addEventListener('change', () => {
+    const name = input.files?.[0]?.name;
+    span.textContent = name ? name : defaultText;
+  });
+});
+
 document.addEventListener('click', (e) => {
   const btn = (e.target as HTMLElement)?.closest('.pennylane-copy-btn') as HTMLButtonElement | null;
   if (!btn) return;
