@@ -27,12 +27,19 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
     return new Response('Fichier manquant', { status: 400 });
   }
 
-  if (file.type !== 'application/pdf') {
-    return new Response('Le fichier doit être un PDF', { status: 400 });
+  const MAX_SIZE = 10 * 1024 * 1024; // 10 MB
+  if (file.size > MAX_SIZE) {
+    return new Response('Fichier trop volumineux (max 10 Mo)', { status: 413 });
   }
 
   const arrayBuffer = await file.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
+
+  // Verify PDF magic bytes (%PDF-) — cannot be spoofed unlike Content-Type
+  if (buffer.length < 5 || buffer[0] !== 0x25 || buffer[1] !== 0x50 ||
+      buffer[2] !== 0x44 || buffer[3] !== 0x46 || buffer[4] !== 0x2D) {
+    return new Response('Le fichier doit être un PDF valide', { status: 400 });
+  }
   const storagePath = `${id}/facture.pdf`;
 
   const { error: uploadError } = await supabaseAdmin.storage

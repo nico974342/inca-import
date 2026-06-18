@@ -1,12 +1,7 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../lib/supabase';
 
-// Auth: admin browser session OR ?key=SERVICE_ROLE_KEY for CLI use
 async function isAuthorized(request: Request, cookies: any): Promise<boolean> {
-  const url = new URL(request.url);
-  const key = url.searchParams.get('key');
-  if (key && key === import.meta.env.SUPABASE_SERVICE_ROLE_KEY) return true;
-
   const supabase = createAuthClient(request, cookies);
   const { data: { user } } = await supabase.auth.getUser();
   return !!user && user.user_metadata?.role !== 'client';

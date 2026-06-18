@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { Resend } from 'resend';
+import { createAuthClient } from '../../../lib/supabase';
 
 /**
  * Diagnostic endpoint — GET /api/admin/test-email
@@ -12,7 +13,13 @@ import { Resend } from 'resend';
  *
  * Example: /api/admin/test-email?send_to=incana.gerald@orange.fr
  */
-export const GET: APIRoute = async ({ url }) => {
+export const GET: APIRoute = async ({ url, request, cookies }) => {
+  const supabase = createAuthClient(request, cookies);
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user || user.user_metadata?.role === 'client') {
+    return new Response('Non autorisé', { status: 401 });
+  }
+
   const API_KEY  = import.meta.env.RESEND_API_KEY as string | undefined;
   const FROM_ENV = import.meta.env.RESEND_FROM   as string | undefined;
   const FROM     = FROM_ENV ?? 'Inca Import <noreply@inca-import.re>';

@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { supabaseAdmin } from '../../../lib/supabase';
+import { createAuthClient, supabaseAdmin } from '../../../lib/supabase';
 
 // stock_updated_at only exists once schema_v9.sql has been run — fall back
 // gracefully so the page still works (without timestamps) before that migration runs.
@@ -63,14 +63,26 @@ async function zeroAllStock() {
   if (error) console.error('zeroAllStock error:', error);
 }
 
-export const GET: APIRoute = async () => {
+export const GET: APIRoute = async ({ request, cookies }) => {
+  const supabase = createAuthClient(request, cookies);
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user || user.user_metadata?.role === 'client') {
+    return new Response('Non autorisé', { status: 401 });
+  }
+
   const products = await listProducts();
   return new Response(JSON.stringify({ products }), {
     headers: { 'Content-Type': 'application/json' },
   });
 };
 
-export const POST: APIRoute = async ({ request }) => {
+export const POST: APIRoute = async ({ request, cookies }) => {
+  const supabase = createAuthClient(request, cookies);
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user || user.user_metadata?.role === 'client') {
+    return new Response('Non autorisé', { status: 401 });
+  }
+
   const body = (await request.json().catch(() => null)) as
     | { action?: string; id?: string; delta?: number; value?: number }
     | null;
