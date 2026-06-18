@@ -8,3 +8,9 @@ node_modules/
 .astro/
 impeccable/
 .impeccable/hook.cache.json
+
+.vercel
+
+# Playwright
+test-results/
+playwright-report/

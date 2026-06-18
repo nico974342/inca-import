@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "preview": "astro preview"
+    "preview": "astro preview",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:report": "playwright show-report"
   },
   "dependencies": {
     "@astrojs/vercel": "^10.0.8",
@@ -16,6 +19,8 @@
     "resend": "^6.12.4"
   },
   "devDependencies": {
-    "@types/pdfkit": "^0.17.6"
+    "@playwright/test": "^1.61.0",
+    "@types/pdfkit": "^0.17.6",
+    "dotenv": "^17.4.2"
   }
 }
