@@ -182,12 +182,21 @@ function formatDate(iso: string) {
                   <button type="submit" class="notes-save" aria-label="Enregistrer">✓</button>
                 </form>
               </td>
-              <td>
+              <td class="td-actions">
                 {r.kind === 'contact' && r.status !== 'converti' && (
                   <form method="post">
                     <input type="hidden" name="action"     value="convert" />
                     <input type="hidden" name="contact_id" value={r.id} />
                     <button type="submit" class="convert-btn">Convertir en client</button>
+                  </form>
+                )}
+                {r.kind === 'client' && (
+                  <form
+                    method="post"
+                    action={`/api/admin/clients/${r.id}/delete`}
+                    onsubmit={`return confirm('Supprimer ${r.nom.replace(/'/g, "\\'")} ?\\nSes commandes, bons de livraison et compte seront définitivement supprimés.')`}
+                  >
+                    <button type="submit" class="delete-btn">Supprimer</button>
                   </form>
                 )}
               </td>
@@ -332,6 +341,22 @@ function formatDate(iso: string) {
   transition: color var(--dur-fast), background var(--dur-fast);
 }
 .convert-btn:hover { background: oklch(0.568 0.149 45.9 / 0.1); }
+
+.delete-btn {
+  padding: 4px 10px;
+  background: none;
+  border: 1px solid oklch(0.88 0.07 25);
+  border-radius: var(--radius-sm);
+  color: oklch(0.50 0.19 25);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  white-space: nowrap;
+  min-height: 30px;
+  font-family: inherit;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.delete-btn:hover { background: oklch(0.97 0.04 25); }
 
 .empty-state {
   background: var(--color-bg);

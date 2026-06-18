@@ -383,6 +383,15 @@ function shortId(id: string) {
                     <button type="submit" class="btn-inv-upload">Envoyer</button>
                   </form>
                 </div>
+
+                <form
+                  method="post"
+                  action={`/api/admin/orders/${order.id}/delete`}
+                  class="order-delete-form"
+                  onsubmit={`return confirm('Supprimer la commande #${shortId(order.id)} ?\\nCette action est irréversible.')`}
+                >
+                  <button type="submit" class="btn-delete-order">Supprimer cette commande</button>
+                </form>
               </div>
             </details>
           </li>
@@ -873,6 +882,30 @@ details[open] .chevron { transform: rotate(180deg); }
   transition: opacity var(--dur-fast);
 }
 .btn-inv-upload:hover { opacity: 0.88; }
+
+/* ── Order delete ────────────────────────────── */
+.order-delete-form {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+  margin-top: var(--space-4);
+}
+
+.btn-delete-order {
+  padding: 5px 12px;
+  background: none;
+  border: 1px solid oklch(0.88 0.07 25);
+  border-radius: var(--radius-sm);
+  color: oklch(0.50 0.19 25);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  font-family: inherit;
+  white-space: nowrap;
+  transition: background var(--dur-fast);
+}
+.btn-delete-order:hover { background: oklch(0.97 0.04 25); }
 
 /* ── Responsive ──────────────────────────────── */
 @media (max-width: 640px) {
