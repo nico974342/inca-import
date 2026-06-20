@@ -1,17 +1,18 @@
 ---
 const brands = [
-  { name: 'Monster Energy', domain: 'monsterenergy.com', color: '#1AB549' },
-  { name: 'Red Bull',       domain: 'redbull.com',        color: '#002776' },
-  { name: 'Coca-Cola',      domain: 'coca-cola.com',       color: '#F40009' },
-  { name: 'Schweppes',      domain: 'schweppes.com',       color: '#C9A646' },
-  { name: 'Lipton',         domain: 'lipton.com',          color: '#D9A400' },
-  { name: 'Haribo',         domain: 'haribo.com',          color: '#E2231A' },
+  { name: 'LIIFE',          domain: 'liife-energy.com',   color: '#0055CC' },
+  { name: 'QNT',            domain: 'qnt.eu',              color: '#E84A0C' },
+  { name: 'SAMBO Tropical', domain: 'sambo-tropical.re',   color: '#00853E' },
+  { name: 'Kick Drink',     domain: 'kick-energy.com',     color: '#C8102E' },
+  { name: 'FitSpo',         domain: 'fitspo-energy.com',   color: '#7B2FBE' },
+  { name: 'RiceUP!',        domain: 'riceup.eu',           color: '#3A7D44' },
+  { name: 'Metapure',       domain: 'metapure.com',        color: '#1B3D6E' },
 ];
 ---
 
 <section class="brands" aria-labelledby="brands-heading">
   <div class="container">
-    <p class="brands-label" id="brands-heading">Marques distribuées</p>
+    <h2 class="brands-label" id="brands-heading">Nos marques actuelles</h2>
   </div>
 
   <!-- Screen-reader list -->
@@ -54,6 +55,7 @@ const brands = [
   color: var(--color-muted);
   letter-spacing: 0.01em;
   margin-bottom: var(--space-8);
+  line-height: inherit;
 }
 
 /* Marquee */
