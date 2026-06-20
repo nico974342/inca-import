@@ -136,6 +136,7 @@ const faqs = [
               </svg>
             </button>
           </div>
+          <p class="form-error" id="cta-form-error" role="alert" hidden></p>
           <p class="form-alt">
             Ou <a href="/inscription" class="form-alt-link">inscrivez-vous directement →</a>
           </p>
@@ -325,6 +326,14 @@ const faqs = [
 }
 .form-alt-link:hover { color: var(--color-primary); }
 
+.form-error {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-danger);
+  margin-top: calc(-1 * var(--space-2));
+}
+
 .form-success {
   font-family: var(--font-body);
   font-size: var(--text-lg);
@@ -408,14 +417,31 @@ const faqs = [
 </script>
 
 <script>
-  const form = document.querySelector('.cta-form') as HTMLFormElement | null;
-  const btn  = form?.querySelector('.cta-submit') as HTMLButtonElement | null;
+  const form    = document.querySelector('.cta-form') as HTMLFormElement | null;
+  const btn     = form?.querySelector('.cta-submit') as HTMLButtonElement | null;
+  const errorEl = document.getElementById('cta-form-error') as HTMLElement | null;
+
+  function showError(msg: string) {
+    if (!errorEl) return;
+    errorEl.textContent = msg;
+    errorEl.removeAttribute('hidden');
+  }
+
+  function clearError() {
+    if (!errorEl) return;
+    errorEl.textContent = '';
+    errorEl.setAttribute('hidden', '');
+  }
 
   form?.addEventListener('submit', async e => {
     e.preventDefault();
+    clearError();
     if (!form.checkValidity()) {
       form.querySelectorAll('input').forEach(input => {
-        if (!input.validity.valid) input.classList.add('input-error');
+        if (!input.validity.valid) {
+          input.classList.add('input-error');
+          input.setAttribute('aria-invalid', 'true');
+        }
       });
       return;
     }
@@ -433,16 +459,19 @@ const faqs = [
         `;
       } else {
         if (btn) { btn.disabled = false; btn.textContent = 'Envoyer ma demande'; }
-        alert('Une erreur est survenue. Veuillez réessayer.');
+        showError('Une erreur est survenue. Veuillez réessayer.');
       }
     } catch {
       if (btn) { btn.disabled = false; btn.textContent = 'Envoyer ma demande'; }
-      alert('Une erreur réseau est survenue. Veuillez réessayer.');
+      showError('Une erreur réseau est survenue. Veuillez réessayer.');
     }
   });
 
   form?.querySelectorAll('input').forEach(input => {
-    input.addEventListener('input', () => input.classList.remove('input-error'));
+    input.addEventListener('input', () => {
+      input.classList.remove('input-error');
+      input.removeAttribute('aria-invalid');
+    });
   });
 </script>
 
