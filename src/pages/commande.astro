@@ -23,10 +23,17 @@ if (Astro.request.method === 'POST') {
 
   const { data: items } = await supabaseAdmin
     .from('cart_items')
-    .select('quantity, products(id, name, category, unit, units_per_carton, price_ht)')
+    .select('quantity, products(id, name, category, unit, units_per_carton, price_ht, stock_quantity)')
     .eq('user_id', user.id);
 
   if (!items?.length) return Astro.redirect('/catalogue');
+
+  // Block if any item exceeds available stock (race-condition guard)
+  const stockViolations = items.filter(item => {
+    const p = item.products as any;
+    return typeof p?.stock_quantity === 'number' && item.quantity > p.stock_quantity;
+  });
+  if (stockViolations.length > 0) return Astro.redirect('/commande?error=stock');
 
   // Create order record
   const { data: order, error: orderError } = await supabaseAdmin
@@ -136,9 +143,11 @@ if (Astro.request.method === 'POST') {
 }
 
 // ── GET: show cart ─────────────────────────────────────────────
-const success  = !!Astro.url.searchParams.get('success');
-const hasError = !!Astro.url.searchParams.get('error');
-const orderId  = Astro.url.searchParams.get('order');
+const success    = !!Astro.url.searchParams.get('success');
+const errorParam = Astro.url.searchParams.get('error');
+const hasError   = !!errorParam && errorParam !== 'stock';
+const stockError = errorParam === 'stock';
+const orderId    = Astro.url.searchParams.get('order');
 
 type SuccessItem = { product_name: string; quantity: number; unit: string | null };
 let successItems: SuccessItem[] = [];
@@ -162,14 +171,14 @@ if (success && orderId) {
 
 type CartItem = {
   quantity: number;
-  products: { id: string; name: string; category: string; unit: string | null; units_per_carton: number | null; price_ht: number | null } | null;
+  products: { id: string; name: string; category: string; unit: string | null; units_per_carton: number | null; price_ht: number | null; stock_quantity: number | null } | null;
 };
 
 let cartItems: CartItem[] = [];
 if (!success) {
   const { data } = await supabaseAdmin
     .from('cart_items')
-    .select('quantity, products(id, name, category, unit, units_per_carton, price_ht)')
+    .select('quantity, products(id, name, category, unit, units_per_carton, price_ht, stock_quantity)')
     .eq('user_id', user.id)
     .order('updated_at', { ascending: true });
 
@@ -254,6 +263,11 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
           Une erreur est survenue lors de la validation. Veuillez réessayer.
         </p>
       )}
+      {stockError && !success && (
+        <p class="order-error" role="alert">
+          Certains articles dépassent le stock disponible. Ajustez les quantités ci-dessous avant de confirmer.
+        </p>
+      )}
 
       {/* ── Cart recap + confirm ──────────────────── */}
       {!success && (
@@ -278,24 +292,53 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
                       const unit       = p?.unit ?? 'carton';
                       const upc        = p?.units_per_carton;
                       const totalUnits = upc ? item.quantity * upc : null;
+                      const stockQty   = p?.stock_quantity;
+                      const pid        = p?.id ?? '';
                       return (
-                        <tr>
-                          <td class="col-product product-name-cell">{p?.name ?? '—'}</td>
-                          <td class="col-cat">
-                            {p?.category && (
-                              <span class={`cat-badge cat-badge--${p.category}`}>
-                                {CAT_LABEL[p.category] ?? p.category}
+                        <>
+                          <tr
+                            class="order-row"
+                            data-product-id={pid}
+                            data-qty={String(item.quantity)}
+                            data-unit={unit}
+                            data-stock={stockQty !== null && stockQty !== undefined ? String(stockQty) : ''}
+                          >
+                            <td class="col-product product-name-cell">{p?.name ?? '—'}</td>
+                            <td class="col-cat">
+                              {p?.category && (
+                                <span class={`cat-badge cat-badge--${p.category}`}>
+                                  {CAT_LABEL[p.category] ?? p.category}
+                                </span>
+                              )}
+                            </td>
+                            <td class="col-qty qty-cell">
+                              <span class="qty-primary">{item.quantity} {item.quantity === 1 ? unit : `${unit}s`}</span>
+                              {totalUnits && (
+                                <span class="qty-units">= {totalUnits} unités</span>
+                              )}
+                            </td>
+                            <td class="col-price price-cell">{fmtHT(lineHT)}</td>
+                          </tr>
+                          <tr class="stock-alert-row" id={`stock-row-${pid}`} hidden>
+                            <td colspan="4" class="stock-alert-cell">
+                              <span class="stock-icon" aria-hidden="true">
+                                <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                                  <path d="M7 1.5L12.5 12H1.5L7 1.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                                  <line x1="7" y1="6" x2="7" y2="8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                  <circle cx="7" cy="10.25" r="0.6" fill="currentColor"/>
+                                </svg>
                               </span>
-                            )}
-                          </td>
-                          <td class="col-qty qty-cell">
-                            <span class="qty-primary">{item.quantity} {item.quantity === 1 ? unit : `${unit}s`}</span>
-                            {totalUnits && (
-                              <span class="qty-units">= {totalUnits} unités</span>
-                            )}
-                          </td>
-                          <td class="col-price price-cell">{fmtHT(lineHT)}</td>
-                        </tr>
+                              <span class="stock-alert-text" id={`stock-text-${pid}`}></span>
+                              <button
+                                type="button"
+                                class="btn-adjust"
+                                data-product-id={pid}
+                                data-adjust-to="0"
+                                data-action="adjust"
+                              >Ajuster</button>
+                            </td>
+                          </tr>
+                        </>
                       );
                     })}
                   </tbody>
@@ -362,6 +405,10 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
               <p class="confirm-info">
                 En confirmant, vous envoyez votre commande à l'équipe Inca Import.
                 Aucun paiement en ligne — un devis vous sera transmis.
+              </p>
+
+              <p id="stock-block-msg" class="stock-block-msg" role="alert" hidden>
+                Ajustez les quantités ci-dessus avant de confirmer.
               </p>
 
               <form method="POST">
@@ -505,6 +552,64 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
   border-radius: var(--radius-sm);
   padding: var(--space-3) var(--space-4);
   margin-bottom: var(--space-6);
+}
+
+/* ── Stock alerts ───────────────────────────────── */
+.order-row.row--stock-error td {
+  background: oklch(0.99 0.01 25);
+  border-bottom: none;
+}
+
+.order-table .stock-alert-row:not([hidden]) td {
+  background: oklch(0.99 0.01 25);
+  padding: 0 0 var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.stock-alert-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.stock-icon {
+  color: var(--color-danger);
+  display: flex;
+  flex-shrink: 0;
+}
+
+.stock-alert-text {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-danger);
+}
+
+.btn-adjust {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 3px 10px;
+  background: oklch(0.97 0.03 25);
+  color: var(--color-danger);
+  border: 1px solid oklch(0.88 0.07 25);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-fast);
+  min-height: 28px;
+}
+.btn-adjust:hover    { background: oklch(0.93 0.05 25); }
+.btn-adjust:disabled { opacity: 0.5; cursor: default; }
+
+.stock-block-msg {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-danger);
+  background: oklch(0.97 0.03 25);
+  border: 1px solid oklch(0.88 0.07 25);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
 }
 
 /* ── Layout ─────────────────────────────────────── */
@@ -817,3 +922,109 @@ textarea:focus {
   .confirm-card { padding: var(--space-5); }
 }
 </style>
+
+<script>
+  const rows       = document.querySelectorAll<HTMLTableRowElement>('.order-row[data-product-id]');
+  const confirmBtn = document.querySelector<HTMLButtonElement>('.confirm-btn');
+  const blockMsg   = document.getElementById('stock-block-msg');
+
+  function checkStock(): boolean {
+    let blocked = false;
+
+    rows.forEach(row => {
+      const pid       = row.dataset.productId ?? '';
+      const qty       = Number(row.dataset.qty);
+      const stockAttr = row.dataset.stock;
+      const unit      = row.dataset.unit ?? 'carton';
+      const alertRow  = document.getElementById(`stock-row-${pid}`);
+      const alertText = document.getElementById(`stock-text-${pid}`);
+      const adjustBtn = alertRow?.querySelector<HTMLButtonElement>('.btn-adjust');
+
+      // Empty string = no stock data = no limit
+      if (!pid || stockAttr === '' || stockAttr === undefined) {
+        alertRow?.setAttribute('hidden', '');
+        row.classList.remove('row--stock-error');
+        return;
+      }
+
+      const stock = Number(stockAttr);
+
+      if (stock < qty) {
+        blocked = true;
+        row.classList.add('row--stock-error');
+        alertRow?.removeAttribute('hidden');
+
+        if (stock === 0) {
+          if (alertText) alertText.textContent = 'Rupture de stock — article non disponible';
+          if (adjustBtn) {
+            adjustBtn.textContent      = 'Retirer du panier';
+            adjustBtn.dataset.action   = 'remove';
+            adjustBtn.dataset.adjustTo = '0';
+          }
+        } else {
+          const plural = stock > 1 ? 's' : '';
+          if (alertText)
+            alertText.textContent = `Stock insuffisant — ${stock} ${unit}${plural} disponible${plural}`;
+          if (adjustBtn) {
+            adjustBtn.innerHTML        = `Ajuster à <strong>${stock}</strong> ${unit}${plural}`;
+            adjustBtn.dataset.action   = 'adjust';
+            adjustBtn.dataset.adjustTo = String(stock);
+          }
+        }
+      } else {
+        row.classList.remove('row--stock-error');
+        alertRow?.setAttribute('hidden', '');
+      }
+    });
+
+    if (confirmBtn) confirmBtn.disabled = blocked;
+    if (blocked) blockMsg?.removeAttribute('hidden');
+    else blockMsg?.setAttribute('hidden', '');
+
+    return blocked;
+  }
+
+  // Run immediately on page load
+  checkStock();
+
+  // Re-check on submit — extra safety if JS state drifted
+  document.querySelector<HTMLFormElement>('.confirm-card form')
+    ?.addEventListener('submit', e => {
+      if (checkStock()) e.preventDefault();
+    });
+
+  // Adjust / remove button handler
+  document.addEventListener('click', async e => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.btn-adjust');
+    if (!btn || btn.disabled) return;
+
+    const pid      = btn.dataset.productId ?? '';
+    const action   = btn.dataset.action ?? 'adjust';
+    const adjustTo = Number(btn.dataset.adjustTo ?? 0);
+    if (!pid) return;
+
+    const original    = btn.innerHTML;
+    btn.disabled      = true;
+    btn.textContent   = '…';
+
+    try {
+      if (action === 'remove') {
+        await fetch('/api/cart/remove', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ productId: pid }),
+        });
+      } else {
+        await fetch('/api/cart/add', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ productId: pid, qty: adjustTo }),
+        });
+      }
+      window.location.reload();
+    } catch {
+      btn.disabled  = false;
+      btn.innerHTML = original;
+    }
+  });
+</script>
