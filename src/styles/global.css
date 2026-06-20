@@ -16,6 +16,7 @@
   --color-muted:         oklch(0.440 0.010 45.9);
   --color-border:        oklch(0.920 0.004 45.9);
   --color-border-strong: oklch(0.860 0.006 45.9);
+  --color-danger:        oklch(0.50 0.19 25);
 
   /* ── Typography ──────────────────────────────── */
   --font-display: 'Barlow Semi Condensed', system-ui, sans-serif;
@@ -85,8 +86,11 @@
 
 html {
   font-size: 100%;
-  scroll-behavior: smooth;
   -webkit-text-size-adjust: 100%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html { scroll-behavior: smooth; }
 }
 
 body {

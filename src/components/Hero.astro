@@ -196,8 +196,15 @@
   if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
     const parallax = document.querySelector<HTMLElement>('.hero-parallax');
     if (parallax) {
+      let ticking = false;
       window.addEventListener('scroll', () => {
-        parallax.style.transform = `translateY(${window.scrollY * 0.28}px)`;
+        if (!ticking) {
+          requestAnimationFrame(() => {
+            parallax.style.transform = `translateY(${window.scrollY * 0.28}px)`;
+            ticking = false;
+          });
+          ticking = true;
+        }
       }, { passive: true });
     }
   }

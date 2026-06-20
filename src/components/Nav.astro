@@ -59,7 +59,7 @@ const isAdmin = !!user && !isClient;
     </div>
 
     <details class="nav-details">
-      <summary class="nav-toggle" aria-label="Ouvrir le menu">
+      <summary class="nav-toggle" aria-label="Ouvrir le menu" aria-expanded="false">
         <span></span>
         <span></span>
         <span></span>
@@ -103,6 +103,17 @@ const isAdmin = !!user && !isClient;
   const onScroll = () => header.classList.toggle('scrolled', window.scrollY > 8);
   window.addEventListener('scroll', onScroll, { passive: true });
   onScroll();
+
+  // Sync hamburger aria-label + aria-expanded with the native <details> open state
+  const navDetails = document.querySelector<HTMLDetailsElement>('.nav-details');
+  const navToggle  = navDetails?.querySelector<HTMLElement>('.nav-toggle');
+  if (navDetails && navToggle) {
+    navDetails.addEventListener('toggle', () => {
+      const isOpen = navDetails.open;
+      navToggle.setAttribute('aria-label',    isOpen ? 'Fermer le menu' : 'Ouvrir le menu');
+      navToggle.setAttribute('aria-expanded', String(isOpen));
+    });
+  }
 
   // Close the user dropdown on outside click or Escape (native <details> only toggles on summary click)
   const userDropdown = document.querySelector<HTMLDetailsElement>('.nav-user-dropdown');
@@ -267,13 +278,13 @@ const isAdmin = !!user && !isClient;
   border: none;
   border-radius: var(--radius-sm);
   padding: var(--space-2) var(--space-3);
-  min-height: 40px;
+  min-height: 44px;
   cursor: pointer;
   transition: background var(--dur-fast), color var(--dur-fast);
 }
 .nav-user-menu a:hover,
 .nav-logout-btn:hover { background: var(--color-surface-2); }
-.nav-logout-btn:hover { color: oklch(0.50 0.19 25); }
+.nav-logout-btn:hover { color: var(--color-danger); }
 .nav-logout-form { display: contents; }
 
 .nav-ghost {
@@ -388,7 +399,7 @@ a.mobile-user:hover { color: var(--color-primary); }
   font-family: var(--font-body);
   font-size: 1.125rem;
   font-weight: 500;
-  color: oklch(0.50 0.19 25);
+  color: var(--color-danger);
   padding: var(--space-4) 0;
   cursor: pointer;
   display: block;
