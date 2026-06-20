@@ -67,6 +67,13 @@ const productsMetaJSON = JSON.stringify(
   title="Catalogue — Inca Import"
   description="Découvrez notre catalogue de boissons, snacks et confiseries disponibles pour les gérants de stations-service et supérettes à La Réunion."
 >
+  <link
+    slot="head"
+    rel="preload"
+    as="image"
+    fetchpriority="high"
+    href="https://images.unsplash.com/photo-1553413077-190dd305871c?q=80&w=1600&auto=format&fit=crop"
+  />
   <Nav user={user} />
   <main>
 

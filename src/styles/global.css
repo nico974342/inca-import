@@ -226,4 +226,5 @@ a { color: inherit; }
   [data-h="2"] { animation: heroFadeUp var(--dur-slow) var(--ease-out-expo) 0.18s both; }
   [data-h="3"] { animation: heroFadeUp var(--dur-slow) var(--ease-out-expo) 0.32s both; }
   [data-h="4"] { animation: heroFadeUp var(--dur-slow) var(--ease-out-expo) 0.46s both; }
+  [data-h="5"] { animation: heroFadeUp var(--dur-slow) var(--ease-out-expo) 0.60s both; }
 }

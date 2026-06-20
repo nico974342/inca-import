@@ -33,10 +33,20 @@ const {
   <meta name="apple-mobile-web-app-title" content="Inca Import" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <!-- Non-blocking font load: preload triggers early fetch; onload swaps rel to stylesheet once downloaded -->
   <link
+    rel="preload"
+    as="style"
     href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;600;700&family=Figtree:wght@400;500;600&display=swap"
-    rel="stylesheet"
+    onload="this.onload=null;this.rel='stylesheet'"
   />
+  <noscript>
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;600;700&family=Figtree:wght@400;500;600&display=swap"
+    />
+  </noscript>
+  <slot name="head" />
   <script is:inline>
     (function () {
       var standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
