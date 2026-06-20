@@ -203,6 +203,22 @@ a { color: inherit; }
 .btn-ghost:hover { color: var(--color-ink); background: var(--color-surface); }
 
 /* ── Accessibility ───────────────────────────────── */
+
+/* Global keyboard focus ring — applies to everything not already handled
+   by component-specific :focus-visible rules */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* .btn already sets outline-offset: 3px; inputs use box-shadow instead */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none; /* inputs use border + box-shadow on focus */
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

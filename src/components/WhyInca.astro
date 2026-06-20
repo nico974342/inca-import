@@ -6,12 +6,13 @@ const points = [
 ];
 ---
 
-<section class="why-inca" aria-label="Pourquoi Inca Import">
+<section class="why-inca" aria-labelledby="why-heading">
+  <h2 class="sr-only" id="why-heading">Pourquoi Inca Import</h2>
   <div class="container">
     <div class="why-grid">
       {points.map(p => (
         <div class="why-col">
-          <p class="why-word">{p.word}</p>
+          <h3 class="why-word">{p.word}</h3>
           <p class="why-sub">{p.sub}</p>
         </div>
       ))}
