@@ -252,6 +252,104 @@ export async function sendOrderStatusEmail(params: {
   }
 }
 
+export async function sendClientActivationEmail(params: {
+  to: string;
+  nom: string;
+}): Promise<void> {
+  if (!API_KEY) {
+    console.warn('[email] RESEND_API_KEY not set — client activation email not sent');
+    return;
+  }
+  const { to, nom } = params;
+  const firstName = nom.split(' ')[0] || nom;
+  const resend = new Resend(API_KEY);
+
+  const html = `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Votre compte Inca Import est activé</title>
+</head>
+<body style="margin:0;padding:0;background:#EDE9E4;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
+  <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background:#EDE9E4;padding:48px 20px;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" role="presentation" style="max-width:560px;width:100%;background:#FFFFFF;border-radius:20px;overflow:hidden;box-shadow:0 4px 48px rgba(28,25,23,0.09),0 0 0 1px rgba(28,25,23,0.05);">
+        <tr>
+          <td style="background:#E55A2B;padding:22px 44px;">
+            <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
+              <tr>
+                <td><span style="font-size:19px;font-weight:700;color:#FFFFFF;letter-spacing:-0.5px;line-height:1;">Inca<span style="font-weight:300;opacity:0.85;"> Import</span></span></td>
+                <td align="right"><span style="font-size:11px;color:rgba(255,255,255,0.6);font-weight:500;letter-spacing:0.05em;">Grossiste B2B&nbsp;·&nbsp;La&nbsp;Réunion</span></td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="background:#F0FDF4;padding:44px 44px 36px;text-align:center;border-bottom:1px solid #EAE6E1;">
+            <p style="margin:0 0 18px;font-size:52px;line-height:1;">✅</p>
+            <p style="margin:0 0 8px;font-size:24px;font-weight:700;color:#1C1917;letter-spacing:-0.5px;line-height:1.2;">Compte activé !</p>
+            <p style="margin:0;font-size:14px;color:#9CA3AF;font-weight:500;">Bienvenue chez Inca Import, ${firstName}</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:32px 48px 28px;">
+            <p style="margin:0 0 16px;font-size:15px;color:#57534E;line-height:1.75;">Bonjour <strong style="color:#1C1917;">${nom}</strong>,</p>
+            <p style="margin:0 0 16px;font-size:15px;color:#57534E;line-height:1.75;">
+              Votre compte client Inca Import vient d'être activé par notre équipe. Vous pouvez désormais consulter nos tarifs professionnels et passer commande directement en ligne.
+            </p>
+            <p style="margin:0;font-size:15px;color:#57534E;line-height:1.75;">Livraison sous 48h partout à La Réunion.</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:0 44px 48px;text-align:center;">
+            <a href="${SITE_URL}/catalogue" style="display:inline-block;background:#E55A2B;color:#FFFFFF;font-size:14px;font-weight:600;text-decoration:none;padding:14px 32px;border-radius:10px;letter-spacing:0.01em;line-height:1;">
+              Consulter le catalogue &rarr;
+            </a>
+          </td>
+        </tr>
+        <tr><td style="padding:0 44px;"><div style="height:1px;background:#EAE6E1;"></div></td></tr>
+        <tr>
+          <td style="padding:28px 44px 36px;background:#FAFAF9;">
+            <p style="margin:0 0 14px;font-size:13px;font-weight:600;color:#1C1917;">Une question ? Contactez-nous :</p>
+            <table cellpadding="0" cellspacing="0" role="presentation">
+              <tr>
+                <td style="padding-right:28px;padding-bottom:4px;">
+                  <span style="font-size:13px;color:#78716C;">📞</span>&nbsp;
+                  <a href="tel:+262692478941" style="font-size:13px;color:#E55A2B;text-decoration:none;font-weight:500;">0692&nbsp;47&nbsp;89&nbsp;41</a>
+                </td>
+                <td style="padding-bottom:4px;">
+                  <span style="font-size:13px;color:#78716C;">✉️</span>&nbsp;
+                  <a href="mailto:inca-import@hotmail.com" style="font-size:13px;color:#E55A2B;text-decoration:none;font-weight:500;">inca-import@hotmail.com</a>
+                </td>
+              </tr>
+            </table>
+            <p style="margin:18px 0 0;font-size:11px;color:#C4BAB1;line-height:1.8;">
+              Inca Import · 29 Route des Premiers Français · 97460 Saint-Paul, La Réunion<br>
+              SIRET&nbsp;945&nbsp;112&nbsp;753 · Disponible 7j/7
+            </p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  try {
+    await resend.emails.send({
+      from: FROM,
+      to: [to],
+      subject: '✅ Votre compte Inca Import est activé — consultez nos tarifs',
+      html,
+    });
+    console.log('[email] sendClientActivationEmail sent OK to', to);
+  } catch (err) {
+    console.error('[email] sendClientActivationEmail error:', err);
+    throw err;
+  }
+}
+
 export async function sendLowStockAlert(productName: string, stock: number): Promise<void> {
   if (!API_KEY) {
     console.warn('[email] RESEND_API_KEY not set — low stock alert not sent');

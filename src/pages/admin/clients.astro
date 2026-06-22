@@ -2,6 +2,7 @@
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { sanitizeText } from '../../lib/sanitize';
+import { sendClientActivationEmail } from '../../lib/email';
 
 if (Astro.request.method === 'POST') {
   const data   = await Astro.request.formData();
@@ -35,6 +36,26 @@ if (Astro.request.method === 'POST') {
     if (id && status) {
       await supabaseAdmin.from('client_accounts').update({ status, notes: notes || null }).eq('id', id);
     }
+  } else if (action === 'activate_client') {
+    const id = data.get('id') as string;
+    if (id) {
+      const { data: client } = await supabaseAdmin
+        .from('client_accounts')
+        .select('email, nom')
+        .eq('id', id)
+        .single();
+      await supabaseAdmin
+        .from('client_accounts')
+        .update({ status: 'actif' })
+        .eq('id', id);
+      if (client?.email) {
+        try {
+          await sendClientActivationEmail({ to: client.email, nom: client.nom ?? client.email });
+        } catch (e) {
+          console.error('[admin/clients] activation email failed:', e);
+        }
+      }
+    }
   } else if (action === 'update_contact_notes') {
     const id    = data.get('id') as string;
     const notes = sanitizeText(data.get('notes') as string, 500);
@@ -51,6 +72,7 @@ const { data: contactsRaw } = await supabaseAdmin.from('contact_requests').selec
 const clients  = clientsRaw  ?? [];
 const contacts = contactsRaw ?? [];
 
+const pendingCount = clients.filter(c => c.status === 'en_attente').length;
 const convertedContactIds = new Set(clients.map(c => c.contact_request_id).filter(Boolean));
 
 const CLIENT_STATUS_LABELS: Record<string, string> = {
@@ -109,6 +131,15 @@ function formatDate(iso: string) {
 }
 ---
 <AdminLayout title="Clients" activeNav="clients">
+  {pendingCount > 0 && (
+    <div class="pending-alert">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M8 4.5v3.5l1.5 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <strong>{pendingCount}</strong>&nbsp;client{pendingCount > 1 ? 's' : ''} en attente de validation — activez leur compte pour qu'ils puissent consulter les tarifs et passer commande.
+    </div>
+  )}
   {rows.length > 0 ? (
     <div class="table-wrap">
       <table class="data-table">
@@ -127,7 +158,11 @@ function formatDate(iso: string) {
         </thead>
         <tbody>
           {rows.map(r => (
-            <tr class={r.kind === 'client' ? 'client-row' : ''} data-href={r.kind === 'client' ? `/admin/clients/${r.id}` : undefined}>
+            <tr
+              class={r.kind === 'client' ? 'client-row' : ''}
+              data-href={r.kind === 'client' ? `/admin/clients/${r.id}` : undefined}
+              data-pending={r.kind === 'client' && r.status === 'en_attente' ? 'true' : undefined}
+            >
               <td class="td-strong">
                 {r.kind === 'client' ? (
                   <a
@@ -190,6 +225,13 @@ function formatDate(iso: string) {
                     <button type="submit" class="convert-btn">Convertir en client</button>
                   </form>
                 )}
+                {r.kind === 'client' && r.status === 'en_attente' && (
+                  <form method="post" style="margin-bottom: var(--space-2);">
+                    <input type="hidden" name="action" value="activate_client" />
+                    <input type="hidden" name="id"     value={r.id} />
+                    <button type="submit" class="activate-btn">Activer</button>
+                  </form>
+                )}
                 {r.kind === 'client' && (
                   <form
                     method="post"
@@ -225,6 +267,43 @@ function formatDate(iso: string) {
 </script>
 
 <style>
+.pending-alert {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: oklch(0.96 0.04 75);
+  border: 1px solid oklch(0.88 0.09 75);
+  border-radius: var(--radius-md);
+  color: oklch(0.35 0.12 75);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-5);
+}
+.pending-alert svg { flex-shrink: 0; }
+
+tr[data-pending="true"] td {
+  background: oklch(0.98 0.02 75);
+}
+tr[data-pending="true"]:hover td {
+  background: oklch(0.95 0.04 75) !important;
+}
+
+.activate-btn {
+  padding: 4px 10px;
+  background: oklch(0.36 0.13 150);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: white;
+  cursor: pointer;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  min-height: 30px;
+  font-family: inherit;
+  transition: background var(--dur-fast);
+}
+.activate-btn:hover { background: oklch(0.30 0.12 150); }
+
 .table-wrap {
   background: var(--color-bg);
   border: 1px solid var(--color-border);

@@ -10,6 +10,7 @@ const [
   { count: commandesEnAttente },
   { count: totalClients },
   { count: livraisonsEnAttente },
+  { count: clientsEnAttente },
   { data: recentOrders },
   { data: recentContacts },
   { data: lowStockItems },
@@ -19,6 +20,7 @@ const [
   supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }).eq('status', 'en_attente'),
   supabaseAdmin.from('client_accounts').select('*', { count: 'exact', head: true }).eq('status', 'actif'),
   supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }).in('status', ['confirmee', 'en_preparation', 'expediee']),
+  supabaseAdmin.from('client_accounts').select('*', { count: 'exact', head: true }).eq('status', 'en_attente'),
   supabaseAdmin.from('orders').select('id, nom, societe, status, created_at').order('created_at', { ascending: false }).limit(5),
   supabaseAdmin.from('contact_requests').select('id, nom, societe, status, created_at').order('created_at', { ascending: false }).limit(5),
   supabaseAdmin.from('products').select('id, name, stock_quantity').lt('stock_quantity', 5).order('stock_quantity', { ascending: true }).limit(6),
@@ -75,8 +77,9 @@ const CONTACT_COLOR: Record<string, string> = {
   rejete:   'muted',
 };
 
-const hasLowStock        = (lowStockItems ?? []).length > 0;
-const hasPendingDelivery = (livraisonsEnAttente ?? 0) > 0;
+const hasLowStock          = (lowStockItems ?? []).length > 0;
+const hasPendingDelivery   = (livraisonsEnAttente ?? 0) > 0;
+const hasPendingClients    = (clientsEnAttente ?? 0) > 0;
 ---
 <AdminLayout title="Tableau de bord" activeNav="dashboard">
 
@@ -136,8 +139,21 @@ const hasPendingDelivery = (livraisonsEnAttente ?? 0) > 0;
   </div>
 
   <!-- ── Alerts ─────────────────────────────────────── -->
-  {(hasLowStock || hasPendingDelivery) && (
+  {(hasLowStock || hasPendingDelivery || hasPendingClients) && (
     <div class="alerts-row">
+      {hasPendingClients && (
+        <a href="/admin/clients" class="alert-card alert-card--clients">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="7" cy="5" r="2.5" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M2 13c0-2.5 2.24-4.5 5-4.5s5 2 5 4.5M12 3.5a2 2 0 0 1 0 4M14 12c.9.3 1.5 1 1.5 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span>
+            <strong>{clientsEnAttente}</strong>
+            {(clientsEnAttente ?? 0) > 1 ? ' clients en attente de validation' : ' client en attente de validation'}
+          </span>
+          <span class="alert-cta">Valider →</span>
+        </a>
+      )}
       {hasPendingDelivery && (
         <a href="/admin/livraison" class="alert-card alert-card--delivery">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -374,6 +390,15 @@ a.stat-card--urgent:hover { border-color: var(--color-primary); }
   text-decoration: none;
   flex-wrap: wrap;
 }
+
+.alert-card--clients {
+  background: oklch(0.96 0.04 75);
+  border: 1px solid oklch(0.88 0.09 75);
+  color: oklch(0.35 0.12 75);
+  transition: background var(--dur-fast);
+}
+.alert-card--clients:hover { background: oklch(0.92 0.07 75); }
+.alert-card--clients svg { flex-shrink: 0; }
 
 .alert-card--delivery {
   background: oklch(0.95 0.04 220);

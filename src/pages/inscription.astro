@@ -55,7 +55,7 @@ if (Astro.request.method === 'POST') {
       .insert({
         nom, societe, telephone, email,
         points_de_vente: pointsDeVente || null,
-        status: 'actif',
+        status: 'en_attente',
       });
     if (insertErr) console.error('[inscription] client_accounts insert failed:', insertErr.message, insertErr.code);
   }
@@ -70,10 +70,7 @@ if (Astro.request.method === 'POST') {
     date_inscription: new Date().toISOString(),
   });
 
-  if (authData.session) {
-    return Astro.redirect('/catalogue');
-  }
-  // Supabase email confirmation is enabled — ask user to check inbox
+  // Always show the pending confirmation message (account now requires admin approval)
   return Astro.redirect('/inscription?confirmer=1');
 }
 
@@ -118,7 +115,7 @@ const ERRORS: Record<string, string> = {
           </svg>
           <div>
             <p class="success-title">Inscription enregistrée !</p>
-            <p class="success-body">Vérifiez votre boîte email pour confirmer votre adresse, puis <a href="/connexion/client">connectez-vous</a>.</p>
+            <p class="success-body">Vérifiez votre boîte email pour confirmer votre adresse. Une fois confirmé, notre équipe examinera votre dossier et vous serez notifié par email dès l'activation de votre compte.</p>
           </div>
         </div>
       ) : (
