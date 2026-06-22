@@ -135,10 +135,16 @@ const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
                 <dd>{product.sku}</dd>
               </div>
             )}
-            {product.price_ht != null && (
+            {isClient && product.price_ht != null && (
               <div class="attr-row attr-row--price">
                 <dt>Prix HT</dt>
                 <dd class="price-value">{fmtHT(Number(product.price_ht))}</dd>
+              </div>
+            )}
+            {!isClient && (
+              <div class="attr-row attr-row--price">
+                <dt>Prix HT</dt>
+                <dd><a href="/connexion/client" class="price-login-cta">Connectez-vous pour voir le prix →</a></dd>
               </div>
             )}
           </dl>
@@ -415,6 +421,14 @@ const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
 .attr-row dd { color: var(--color-ink); }
 
 .attr-row--price dt { font-weight: 600; color: var(--color-ink); }
+.price-login-cta {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-primary-deep);
+  text-decoration: none;
+  transition: color var(--dur-fast);
+}
+.price-login-cta:hover { color: var(--color-primary); }
 .price-value {
   font-family: var(--font-display);
   font-size: 1.375rem;
