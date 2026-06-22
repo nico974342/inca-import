@@ -350,6 +350,80 @@ export async function sendClientActivationEmail(params: {
   }
 }
 
+export async function sendAdminNewClientEmail(params: {
+  nom: string;
+  societe?: string | null;
+  email: string;
+  telephone?: string | null;
+}): Promise<void> {
+  if (!API_KEY) {
+    console.warn('[email] RESEND_API_KEY not set — admin new-client email not sent');
+    return;
+  }
+  const { nom, societe, email, telephone } = params;
+  const resend = new Resend(API_KEY);
+
+  const rows = [
+    { label: 'Nom',      value: nom },
+    societe   ? { label: 'Société',   value: societe }   : null,
+    { label: 'Email',    value: email },
+    telephone ? { label: 'Téléphone', value: telephone } : null,
+  ].filter(Boolean) as { label: string; value: string }[];
+
+  const rowsHtml = rows.map(r => `
+    <tr>
+      <td style="padding:8px 16px;font-size:13px;color:#6B7280;white-space:nowrap;vertical-align:top;">${r.label}</td>
+      <td style="padding:8px 16px;font-size:13px;color:#1C1917;font-weight:500;">${r.value}</td>
+    </tr>`).join('');
+
+  const html = `<!DOCTYPE html>
+<html lang="fr">
+<head><meta charset="UTF-8"/></head>
+<body style="margin:0;padding:0;background:#EDE9E4;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#EDE9E4;padding:48px 20px;">
+    <tr><td align="center">
+      <table width="520" cellpadding="0" cellspacing="0" style="max-width:520px;width:100%;background:#FFFFFF;border-radius:20px;overflow:hidden;box-shadow:0 4px 48px rgba(28,25,23,0.09),0 0 0 1px rgba(28,25,23,0.05);">
+        <tr><td style="background:#E55A2B;padding:20px 36px;">
+          <span style="font-size:17px;font-weight:700;color:#FFFFFF;letter-spacing:-0.5px;">Inca<span style="font-weight:300;opacity:0.85;"> Import</span></span>
+        </td></tr>
+        <tr><td style="padding:28px 36px 20px;">
+          <p style="margin:0 0 6px;font-size:20px;font-weight:700;color:#1C1917;letter-spacing:-0.3px;">Nouveau compte en attente</p>
+          <p style="margin:0;font-size:14px;color:#6B7280;">Un client vient de s'inscrire et attend votre validation.</p>
+        </td></tr>
+        <tr><td style="padding:0 36px 24px;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #E8E4DF;border-radius:10px;overflow:hidden;">
+            <tbody>${rowsHtml}</tbody>
+          </table>
+        </td></tr>
+        <tr><td style="padding:0 36px 32px;text-align:center;">
+          <a href="${SITE_URL}/admin/clients"
+             style="display:inline-block;background:#E55A2B;color:#FFFFFF;font-size:14px;font-weight:600;text-decoration:none;padding:12px 28px;border-radius:8px;letter-spacing:0.01em;line-height:1;">
+            Valider le compte &rarr;
+          </a>
+        </td></tr>
+        <tr><td style="padding:16px 36px 24px;background:#FAFAF9;border-top:1px solid #EAE6E1;">
+          <p style="margin:0;font-size:11px;color:#C4BAB1;">Inca Import &middot; Notification automatique</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  try {
+    await resend.emails.send({
+      from: FROM,
+      to: [ADMIN],
+      subject: `\u{1F464} Nouveau compte en attente — ${nom}${societe ? ` (${societe})` : ''}`,
+      html,
+    });
+    console.log('[email] sendAdminNewClientEmail sent OK');
+  } catch (err) {
+    console.error('[email] sendAdminNewClientEmail error:', err);
+    throw err;
+  }
+}
+
 export async function sendLowStockAlert(productName: string, stock: number): Promise<void> {
   if (!API_KEY) {
     console.warn('[email] RESEND_API_KEY not set — low stock alert not sent');

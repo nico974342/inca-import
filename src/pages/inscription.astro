@@ -3,6 +3,7 @@ import '../styles/global.css';
 import { createAuthClient, supabaseAdmin } from '../lib/supabase';
 import { sanitizeText, sanitizeEmail } from '../lib/sanitize';
 import { sendClientRegisteredWebhook } from '../lib/webhooks';
+import { sendAdminNewClientEmail } from '../lib/email';
 
 // Already logged-in clients go straight to catalogue
 const supabaseCheck = createAuthClient(Astro.request, Astro.cookies);
@@ -58,6 +59,12 @@ if (Astro.request.method === 'POST') {
         status: 'en_attente',
       });
     if (insertErr) console.error('[inscription] client_accounts insert failed:', insertErr.message, insertErr.code);
+
+    try {
+      await sendAdminNewClientEmail({ nom, societe: societe || null, email, telephone: telephone || null });
+    } catch (e) {
+      console.error('[inscription] admin notification email failed:', e);
+    }
   }
 
   sendClientRegisteredWebhook({
