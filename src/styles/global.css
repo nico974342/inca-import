@@ -59,7 +59,7 @@
 
   /* ── Layout ──────────────────────────────────── */
   --container-max:     1320px;
-  --container-padding: clamp(1.25rem, 5vw, 3rem);
+  --container-padding: clamp(1rem, 2vw, 1.25rem);
 
   /* ── Z-index ─────────────────────────────────── */
   --z-dropdown:       10;
