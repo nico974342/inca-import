@@ -58,7 +58,7 @@
   --radius-full: 9999px;
 
   /* ── Layout ──────────────────────────────────── */
-  --container-max:     1280px;
+  --container-max:     1320px;
   --container-padding: clamp(1.25rem, 5vw, 3rem);
 
   /* ── Z-index ─────────────────────────────────── */
@@ -85,7 +85,7 @@
 }
 
 html {
-  font-size: 110%;
+  font-size: 100%;
   -webkit-text-size-adjust: 100%;
 }
 
