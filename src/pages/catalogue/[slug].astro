@@ -97,7 +97,7 @@ const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
             </button>
           )}
           {isClient && !product.in_stock && (
-            <div class="oos-banner" role="status">Rupture de stock</div>
+            <div class="oos-banner" role="status">Disponible prochainement</div>
           )}
         </div>
 
@@ -112,7 +112,7 @@ const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
             {isClient && (product.in_stock ? (
               <span class="stock-dot stock-dot--in">En stock</span>
             ) : (
-              <span class="stock-dot stock-dot--out">Rupture de stock</span>
+              <span class="stock-dot stock-dot--out">Disponible prochainement</span>
             ))}
           </div>
 
