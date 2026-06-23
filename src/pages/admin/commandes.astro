@@ -350,6 +350,20 @@ function shortId(id: string) {
                   </div>
                 )}
 
+                <div class="accuse-row">
+                  <a
+                    href={`/api/admin/orders/${order.id}/accuse-reception`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="btn-accuse"
+                  >
+                    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
+                      <path d="M6.5 1v7M4 5.5l2.5 2.5 2.5-2.5M2 10v1a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1v-1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Accusé de réception
+                  </a>
+                </div>
+
                 <div class="invoice-upload-row">
                   <span class={`inv-status ${(order as any).invoice_path ? 'inv-status--ok' : 'inv-status--none'}`}>
                     {(order as any).invoice_path ? (
@@ -797,6 +811,33 @@ details[open] .chevron { transform: rotate(180deg); }
   word-break: break-word;
   max-height: 320px;
   overflow-y: auto;
+}
+
+/* ── Accusé de réception ──────────────────────── */
+.accuse-row {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.btn-accuse {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-primary);
+  background: oklch(0.97 0.02 250);
+  border: 1px solid oklch(0.88 0.04 250);
+  border-radius: var(--radius-md);
+  padding: 6px 14px;
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn-accuse:hover {
+  background: oklch(0.93 0.04 250);
+  border-color: oklch(0.80 0.07 250);
 }
 
 /* ── Invoice upload section ──────────────────── */
