@@ -158,6 +158,16 @@ export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
       rowColorIdx++;
     }
 
+    // QTÉ summary row
+    const totalQty = order.items.reduce((s, i) => s + i.quantity, 0);
+    if (ry + 22 > PAGE_BOTTOM) { doc.addPage(); ry = 50; }
+    doc.rect(50, ry, 495, 22).fillColor(SURFACE).fill();
+    doc.rect(50, ry, 495, 22).lineWidth(0.3).strokeColor(BORDER).stroke();
+    doc.fontSize(8).font('Helvetica-Bold').fillColor(MUTED)
+      .text('TOTAL', cols.px, ry + 7)
+      .text(String(totalQty), cols.qx, ry + 7, { width: 45, align: 'right' });
+    ry += 22;
+
     // Totals block — keep together, add page if needed
     const totalsH = 76;
     if (ry + 12 + totalsH > PAGE_BOTTOM) { doc.addPage(); ry = 50; }
@@ -301,6 +311,16 @@ export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
       ry += rowH;
       rowColorIdx++;
     }
+
+    // QTÉ summary row
+    const totalQtyInv = order.items.reduce((s, i) => s + i.quantity, 0);
+    if (ry + 22 > PAGE_BOTTOM) { doc.addPage(); ry = 50; }
+    doc.rect(50, ry, 495, 22).fillColor(SURFACE).fill();
+    doc.rect(50, ry, 495, 22).lineWidth(0.3).strokeColor(BORDER).stroke();
+    doc.fontSize(8).font('Helvetica-Bold').fillColor(MUTED)
+      .text('TOTAL', cols.px, ry + 7)
+      .text(String(totalQtyInv), cols.qx, ry + 7, { width: 45, align: 'right' });
+    ry += 22;
 
     // ── Totals block — keep together ──────────────────
     const totalsH = 76;
