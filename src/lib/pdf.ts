@@ -167,7 +167,7 @@ export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
 
 export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 50, size: 'A4', info: { Title: `Facture ${order.id.slice(0, 8).toUpperCase()}`, Author: 'Inca Import' } });
+    const doc = new PDFDocument({ margin: 50, size: 'A4', info: { Title: `Accuse de reception ${order.id.slice(0, 8).toUpperCase()}`, Author: 'Inca Import' } });
     const chunks: Buffer[] = [];
 
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -187,7 +187,7 @@ export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
 
     // Document title + ref (top right)
     doc.fontSize(16).font('Helvetica-Bold').fillColor(INK)
-      .text('FACTURE', 350, 50, { width: 195, align: 'right' });
+      .text('ACCUSE DE RECEPTION', 350, 50, { width: 195, align: 'right' });
     doc.fontSize(8).font('Helvetica').fillColor(MUTED)
       .text(`Réf. : ${order.id.slice(0, 8).toUpperCase()}`, 350, 74, { width: 195, align: 'right' })
       .text(`Date : ${order.date}`, 350, 88, { width: 195, align: 'right' });
