@@ -111,7 +111,7 @@ export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
       .text('QTE',      cols.qx, tTop + 7, { width: 45, align: 'right' })
       .text('PRIX HT',  cols.hx, tTop + 7, { width: 82, align: 'right' });
 
-    const PAGE_BOTTOM = 750;
+    const PAGE_BOTTOM = 740;
 
     const drawTableHeader = (y: number) => {
       doc.rect(50, y, 495, 22).fillColor(PRIMARY).fill();
@@ -187,7 +187,7 @@ export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
     for (let p = 0; p < totalPages; p++) {
       doc.switchToPage(p);
       doc.fontSize(7).font('Helvetica').fillColor(MUTED)
-        .text('Inca Import · inca-import@hotmail.com · 0692 47 89 41 · La Reunion, 974', 50, 800, { width: 495, align: 'center' });
+        .text('Inca Import · inca-import@hotmail.com · 0692 47 89 41 · La Reunion, 974', 50, 775, { width: 495, align: 'center', lineBreak: false });
     }
     doc.flushPages();
     doc.end();
@@ -250,7 +250,7 @@ export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
     const tTop = boxTop + boxH + 20;
     const cols = { px: 58, ux: 318, qx: 393, hx: 453 };
 
-    const PAGE_BOTTOM = 750;
+    const PAGE_BOTTOM = 740;
 
     const drawInvHeader = (y: number) => {
       doc.rect(50, y, 495, 22).fillColor(PRIMARY).fill();
@@ -326,8 +326,8 @@ export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
     for (let p = 0; p < totalPagesInv; p++) {
       doc.switchToPage(p);
       doc.fontSize(7).font('Helvetica').fillColor(MUTED)
-        .text('Inca Import · SIRET 945 112 753 · 29 Route des Premiers Français, 97400 Saint-Paul, La Réunion', 50, 790, { width: 495, align: 'center' })
-        .text('inca-import@hotmail.com · 0692 47 89 41', 50, 802, { width: 495, align: 'center' });
+        .text('Inca Import · SIRET 945 112 753 · 29 Route des Premiers Français, 97400 Saint-Paul, La Réunion', 50, 760, { width: 495, align: 'center', lineBreak: false })
+        .text('inca-import@hotmail.com · 0692 47 89 41', 50, 772, { width: 495, align: 'center', lineBreak: false });
     }
     doc.flushPages();
     doc.end();
