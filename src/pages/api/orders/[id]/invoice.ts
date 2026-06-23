@@ -17,7 +17,7 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
     .from('orders')
     .select('*')
     .eq('id', id)
-    .eq('user_id', user.id)
+    .or(`user_id.eq.${user.id},email.eq.${user.email}`)
     .single();
 
   if (!order) return new Response('Non trouvé', { status: 404 });
