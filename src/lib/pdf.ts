@@ -51,7 +51,7 @@ const FOOTER_L2 = 'contact@inca-import.re · 0692 47 89 41 · TVA non applicable
 
 export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 50, size: 'A4', info: { Title: `Commande ${order.id.slice(0, 8).toUpperCase()}`, Author: 'Inca Import' } });
+    const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true, info: { Title: `Commande ${order.id.slice(0, 8).toUpperCase()}`, Author: 'Inca Import' } });
     const chunks: Buffer[] = [];
 
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -111,14 +111,35 @@ export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
       .text('QTE',      cols.qx, tTop + 7, { width: 45, align: 'right' })
       .text('PRIX HT',  cols.hx, tTop + 7, { width: 82, align: 'right' });
 
-    let ry = tTop + 22;
+    const PAGE_BOTTOM = 750;
+
+    const drawTableHeader = (y: number) => {
+      doc.rect(50, y, 495, 22).fillColor(PRIMARY).fill();
+      doc.fontSize(8).font('Helvetica-Bold').fillColor(WHITE)
+        .text('PRODUIT', cols.px, y + 7)
+        .text('UNITE',   cols.ux, y + 7)
+        .text('QTE',     cols.qx, y + 7, { width: 45, align: 'right' })
+        .text('PRIX HT', cols.hx, y + 7, { width: 82, align: 'right' });
+      return y + 22;
+    };
+
+    let ry = drawTableHeader(tTop);
+    let rowColorIdx = 0;
+
     for (let i = 0; i < order.items.length; i++) {
-      const item = order.items[i];
-      const rowH = 24;
-      doc.rect(50, ry, 495, rowH).fillColor(i % 2 === 0 ? WHITE : SURFACE).fill();
+      const item  = order.items[i];
+      const rowH  = 24;
+
+      if (ry + rowH > PAGE_BOTTOM) {
+        doc.addPage();
+        ry = drawTableHeader(50);
+        rowColorIdx = 0;
+      }
+
+      doc.rect(50, ry, 495, rowH).fillColor(rowColorIdx % 2 === 0 ? WHITE : SURFACE).fill();
       doc.rect(50, ry, 495, rowH).lineWidth(0.3).strokeColor(BORDER).stroke();
 
-      const lineHT = item.quantity * Number(item.price_ht ?? 0);
+      const lineHT   = item.quantity * Number(item.price_ht ?? 0);
       const priceStr = item.price_ht != null ? `${lineHT.toFixed(2)} EUR` : '-';
 
       doc.fontSize(9).font('Helvetica').fillColor(INK)
@@ -128,16 +149,19 @@ export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
         .text(priceStr, cols.hx, ry + 8, { width: 82, align: 'right' });
 
       ry += rowH;
+      rowColorIdx++;
     }
 
-    // Totals block
-    ry += 12;
+    // Totals block — keep together, add page if needed
     const totalsH = 76;
+    if (ry + 12 + totalsH > PAGE_BOTTOM) { doc.addPage(); ry = 50; }
+    ry += 12;
+
     doc.rect(350, ry, 195, totalsH).fillColor(SURFACE).fill();
     doc.rect(350, ry, 195, totalsH).lineWidth(0.5).strokeColor(BORDER).stroke();
 
     doc.fontSize(8).font('Helvetica').fillColor(MUTED)
-      .text('Total HT', 360, ry + 12)
+      .text('Total HT',  360, ry + 12)
       .text(`${order.totalHT.toFixed(2)} EUR`, cols.hx, ry + 12, { width: 82, align: 'right' });
 
     doc.fontSize(8).font('Helvetica').fillColor(MUTED)
@@ -153,21 +177,26 @@ export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
     // Notes
     if (order.notes) {
       ry += totalsH + 20;
+      if (ry + 40 > PAGE_BOTTOM) { doc.addPage(); ry = 50; }
       doc.fontSize(7).font('Helvetica-Bold').fillColor(MUTED).text('NOTES', 50, ry);
       doc.fontSize(9).font('Helvetica').fillColor(INK).text(order.notes, 50, ry + 14, { width: 495 });
     }
 
-    // Footer
-    doc.fontSize(7).font('Helvetica').fillColor(MUTED)
-      .text('Inca Import · inca-import@hotmail.com · 0692 47 89 41 · La Reunion, 974', 50, 800, { width: 495, align: 'center' });
-
+    // Footer on every page
+    const totalPages = doc.bufferedPageRange().count;
+    for (let p = 0; p < totalPages; p++) {
+      doc.switchToPage(p);
+      doc.fontSize(7).font('Helvetica').fillColor(MUTED)
+        .text('Inca Import · inca-import@hotmail.com · 0692 47 89 41 · La Reunion, 974', 50, 800, { width: 495, align: 'center' });
+    }
+    doc.flushPages();
     doc.end();
   });
 }
 
 export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 50, size: 'A4', info: { Title: `Accuse de reception ${order.id.slice(0, 8).toUpperCase()}`, Author: 'Inca Import' } });
+    const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true, info: { Title: `Accuse de reception ${order.id.slice(0, 8).toUpperCase()}`, Author: 'Inca Import' } });
     const chunks: Buffer[] = [];
 
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -221,21 +250,35 @@ export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
     const tTop = boxTop + boxH + 20;
     const cols = { px: 58, ux: 318, qx: 393, hx: 453 };
 
-    doc.rect(50, tTop, 495, 22).fillColor(PRIMARY).fill();
-    doc.fontSize(8).font('Helvetica-Bold').fillColor(WHITE)
-      .text('PRODUIT',  cols.px, tTop + 7)
-      .text('UNITE',    cols.ux, tTop + 7)
-      .text('QTE',      cols.qx, tTop + 7, { width: 45, align: 'right' })
-      .text('TOTAL HT', cols.hx, tTop + 7, { width: 82, align: 'right' });
+    const PAGE_BOTTOM = 750;
 
-    let ry = tTop + 22;
+    const drawInvHeader = (y: number) => {
+      doc.rect(50, y, 495, 22).fillColor(PRIMARY).fill();
+      doc.fontSize(8).font('Helvetica-Bold').fillColor(WHITE)
+        .text('PRODUIT',  cols.px, y + 7)
+        .text('UNITE',    cols.ux, y + 7)
+        .text('QTE',      cols.qx, y + 7, { width: 45, align: 'right' })
+        .text('TOTAL HT', cols.hx, y + 7, { width: 82, align: 'right' });
+      return y + 22;
+    };
+
+    let ry = drawInvHeader(tTop);
+    let rowColorIdx = 0;
+
     for (let i = 0; i < order.items.length; i++) {
-      const item = order.items[i];
-      const rowH = 24;
-      doc.rect(50, ry, 495, rowH).fillColor(i % 2 === 0 ? WHITE : SURFACE).fill();
+      const item  = order.items[i];
+      const rowH  = 24;
+
+      if (ry + rowH > PAGE_BOTTOM) {
+        doc.addPage();
+        ry = drawInvHeader(50);
+        rowColorIdx = 0;
+      }
+
+      doc.rect(50, ry, 495, rowH).fillColor(rowColorIdx % 2 === 0 ? WHITE : SURFACE).fill();
       doc.rect(50, ry, 495, rowH).lineWidth(0.3).strokeColor(BORDER).stroke();
 
-      const lineHT = item.quantity * Number(item.price_ht ?? 0);
+      const lineHT   = item.quantity * Number(item.price_ht ?? 0);
       const priceStr = item.price_ht != null ? `${lineHT.toFixed(2)} EUR` : '-';
 
       doc.fontSize(9).font('Helvetica').fillColor(INK)
@@ -245,16 +288,19 @@ export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
         .text(priceStr, cols.hx, ry + 8, { width: 82, align: 'right' });
 
       ry += rowH;
+      rowColorIdx++;
     }
 
-    // ── Totals block ──────────────────────────────────
-    ry += 12;
+    // ── Totals block — keep together ──────────────────
     const totalsH = 76;
+    if (ry + 12 + totalsH > PAGE_BOTTOM) { doc.addPage(); ry = 50; }
+    ry += 12;
+
     doc.rect(350, ry, 195, totalsH).fillColor(SURFACE).fill();
     doc.rect(350, ry, 195, totalsH).lineWidth(0.5).strokeColor(BORDER).stroke();
 
     doc.fontSize(8).font('Helvetica').fillColor(MUTED)
-      .text('Total HT', 360, ry + 12)
+      .text('Total HT',  360, ry + 12)
       .text(`${order.totalHT.toFixed(2)} EUR`, cols.hx, ry + 12, { width: 82, align: 'right' });
 
     doc.fontSize(8).font('Helvetica').fillColor(MUTED)
@@ -270,15 +316,20 @@ export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
     // Notes
     if (order.notes) {
       ry += totalsH + 20;
+      if (ry + 40 > PAGE_BOTTOM) { doc.addPage(); ry = 50; }
       doc.fontSize(7).font('Helvetica-Bold').fillColor(MUTED).text('NOTES', 50, ry);
       doc.fontSize(9).font('Helvetica').fillColor(INK).text(order.notes, 50, ry + 14, { width: 495 });
     }
 
-    // Footer
-    doc.fontSize(7).font('Helvetica').fillColor(MUTED)
-      .text('Inca Import · SIRET 945 112 753 · 29 Route des Premiers Français, 97400 Saint-Paul, La Réunion', 50, 790, { width: 495, align: 'center' })
-      .text('inca-import@hotmail.com · 0692 47 89 41', 50, 802, { width: 495, align: 'center' });
-
+    // Footer on every page
+    const totalPagesInv = doc.bufferedPageRange().count;
+    for (let p = 0; p < totalPagesInv; p++) {
+      doc.switchToPage(p);
+      doc.fontSize(7).font('Helvetica').fillColor(MUTED)
+        .text('Inca Import · SIRET 945 112 753 · 29 Route des Premiers Français, 97400 Saint-Paul, La Réunion', 50, 790, { width: 495, align: 'center' })
+        .text('inca-import@hotmail.com · 0692 47 89 41', 50, 802, { width: 495, align: 'center' });
+    }
+    doc.flushPages();
     doc.end();
   });
 }
