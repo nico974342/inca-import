@@ -13,6 +13,7 @@ export interface PdfOrderData {
   societe?: string | null;
   email: string;
   telephone?: string | null;
+  points_de_vente?: string | null;
   notes?: string | null;
   items: PdfOrderItem[];
   totalHT: number;
@@ -79,7 +80,8 @@ export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
 
     // ── Client info box ───────────────────────────────
     const boxTop = 144;
-    const boxH = order.societe ? 88 : 75;
+    const extraLines = (order.societe ? 1 : 0) + (order.points_de_vente ? 1 : 0);
+    const boxH = 75 + extraLines * 14;
     doc.rect(50, boxTop, 495, boxH).fillColor(SURFACE).fill();
     doc.rect(50, boxTop, 495, boxH).lineWidth(0.5).strokeColor(BORDER).stroke();
 
@@ -92,6 +94,10 @@ export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
     let cy = boxTop + 44;
     if (order.societe) {
       doc.fontSize(9).font('Helvetica').fillColor(MUTED).text(order.societe, 65, cy);
+      cy += 14;
+    }
+    if (order.points_de_vente) {
+      doc.fontSize(9).font('Helvetica').fillColor(MUTED).text(`PDV : ${order.points_de_vente}`, 65, cy);
       cy += 14;
     }
     doc.fontSize(9).font('Helvetica').fillColor(MUTED).text(order.email, 65, cy);
@@ -226,7 +232,8 @@ export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
 
     // ── Client info box ───────────────────────────────
     const boxTop = 148;
-    const boxH = order.societe ? 88 : 75;
+    const extraLinesInv = (order.societe ? 1 : 0) + (order.points_de_vente ? 1 : 0);
+    const boxH = 75 + extraLinesInv * 14;
     doc.rect(50, boxTop, 495, boxH).fillColor(SURFACE).fill();
     doc.rect(50, boxTop, 495, boxH).lineWidth(0.5).strokeColor(BORDER).stroke();
 
@@ -239,6 +246,10 @@ export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
     let cy = boxTop + 44;
     if (order.societe) {
       doc.fontSize(9).font('Helvetica').fillColor(MUTED).text(order.societe, 65, cy);
+      cy += 14;
+    }
+    if (order.points_de_vente) {
+      doc.fontSize(9).font('Helvetica').fillColor(MUTED).text(`PDV : ${order.points_de_vente}`, 65, cy);
       cy += 14;
     }
     doc.fontSize(9).font('Helvetica').fillColor(MUTED).text(order.email, 65, cy);

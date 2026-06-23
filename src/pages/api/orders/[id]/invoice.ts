@@ -39,6 +39,12 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
     .select('product_name, quantity, unit, products(price_ht)')
     .eq('order_id', id);
 
+  const { data: clientAcc } = await supabaseAdmin
+    .from('client_accounts')
+    .select('points_de_vente')
+    .eq('email', user.email!)
+    .maybeSingle();
+
   let totalHT = 0;
   const pdfItems = (items ?? []).map(item => {
     const price_ht = (item.products as any)?.price_ht ?? null;
@@ -61,6 +67,7 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
     societe: order.societe ?? null,
     email: order.email,
     telephone: order.telephone ?? null,
+    points_de_vente: clientAcc?.points_de_vente ?? null,
     notes: order.notes ?? null,
     items: pdfItems,
     totalHT,

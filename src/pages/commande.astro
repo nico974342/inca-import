@@ -70,9 +70,10 @@ if (Astro.request.method === 'POST') {
   await supabaseAdmin.from('cart_items').delete().eq('user_id', user.id);
 
   // Build email/PDF data (use items captured before cart was cleared)
-  const nom     = user.user_metadata?.nom ?? user.email ?? '';
-  const societe = user.user_metadata?.societe ?? '';
-  const tel     = user.user_metadata?.telephone ?? '';
+  const nom            = user.user_metadata?.nom ?? user.email ?? '';
+  const societe        = user.user_metadata?.societe ?? '';
+  const tel            = user.user_metadata?.telephone ?? '';
+  const points_de_vente = user.user_metadata?.points_de_vente ?? null;
   const orderTotalHT = items.reduce(
     (s, item) => s + item.quantity * Number((item.products as any)?.price_ht ?? 0), 0
   );
@@ -86,6 +87,7 @@ if (Astro.request.method === 'POST') {
       societe,
       email: user.email ?? '',
       telephone: tel,
+      points_de_vente,
       notes,
       items: items.map(item => {
         const p = item.products as any;

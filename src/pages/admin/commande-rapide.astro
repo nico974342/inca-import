@@ -15,7 +15,7 @@ if (Astro.request.method === 'POST') {
 
   const [clientKind, clientId] = (clientIdRaw ?? '').split(':');
 
-  let client: { nom: string; societe: string | null; email: string | null; telephone: string | null } | null = null;
+  let client: { nom: string; societe: string | null; email: string | null; telephone: string | null; points_de_vente?: string | null } | null = null;
 
   if (clientKind === 'contact') {
     const { data } = await supabaseAdmin
@@ -27,7 +27,7 @@ if (Astro.request.method === 'POST') {
   } else if (clientKind === 'client') {
     const { data } = await supabaseAdmin
       .from('client_accounts')
-      .select('nom, societe, email, telephone')
+      .select('nom, societe, email, telephone, points_de_vente')
       .eq('id', clientId)
       .single();
     client = data;
@@ -100,6 +100,7 @@ if (Astro.request.method === 'POST') {
     pdfBuffer = await generateOrderPDF({
       id: order.id, nom: client.nom, societe: client.societe,
       email: client.email, telephone: client.telephone,
+      points_de_vente: client.points_de_vente ?? null,
       notes, items: orderItems, totalHT, date: today,
     });
   } catch (err) { console.error('[PDF] Error:', err); }
