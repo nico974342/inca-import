@@ -70,7 +70,7 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
   return new Response(buffer, {
     headers: {
       'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="facture-${order.id.slice(0, 8).toUpperCase()}.pdf"`,
+      'Content-Disposition': `attachment; filename="accuse-reception-${order.id.slice(0, 8).toUpperCase()}.pdf"`,
       'Content-Length': String(buffer.length),
     },
   });
