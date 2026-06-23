@@ -134,7 +134,9 @@ export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
 
     for (let i = 0; i < order.items.length; i++) {
       const item  = order.items[i];
-      const rowH  = 24;
+      doc.fontSize(9).font('Helvetica');
+      const nameH = doc.heightOfString(item.product_name, { width: 252 });
+      const rowH  = Math.max(24, Math.ceil(nameH) + 12);
 
       if (ry + rowH > PAGE_BOTTOM) {
         doc.addPage();
@@ -149,10 +151,10 @@ export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
       const priceStr = item.price_ht != null ? `${lineHT.toFixed(2)} EUR` : '-';
 
       doc.fontSize(9).font('Helvetica').fillColor(INK)
-        .text(item.product_name, cols.px, ry + 8, { width: 252, ellipsis: true })
-        .text(item.unit ?? '-',  cols.ux, ry + 8)
-        .text(String(item.quantity), cols.qx, ry + 8, { width: 45, align: 'right' })
-        .text(priceStr, cols.hx, ry + 8, { width: 82, align: 'right' });
+        .text(item.product_name, cols.px, ry + 6, { width: 252 })
+        .text(item.unit ?? '-',  cols.ux, ry + 6, { lineBreak: false })
+        .text(String(item.quantity), cols.qx, ry + 6, { width: 45, align: 'right', lineBreak: false })
+        .text(priceStr, cols.hx, ry + 6, { width: 82, align: 'right', lineBreak: false });
 
       ry += rowH;
       rowColorIdx++;
@@ -288,7 +290,9 @@ export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
 
     for (let i = 0; i < order.items.length; i++) {
       const item  = order.items[i];
-      const rowH  = 24;
+      doc.fontSize(9).font('Helvetica');
+      const nameH = doc.heightOfString(item.product_name, { width: 252 });
+      const rowH  = Math.max(24, Math.ceil(nameH) + 12);
 
       if (ry + rowH > PAGE_BOTTOM) {
         doc.addPage();
@@ -303,10 +307,10 @@ export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
       const priceStr = item.price_ht != null ? `${lineHT.toFixed(2)} EUR` : '-';
 
       doc.fontSize(9).font('Helvetica').fillColor(INK)
-        .text(item.product_name, cols.px, ry + 8, { width: 252, ellipsis: true })
-        .text(item.unit ?? '-',  cols.ux, ry + 8)
-        .text(String(item.quantity), cols.qx, ry + 8, { width: 45, align: 'right' })
-        .text(priceStr, cols.hx, ry + 8, { width: 82, align: 'right' });
+        .text(item.product_name, cols.px, ry + 6, { width: 252 })
+        .text(item.unit ?? '-',  cols.ux, ry + 6, { lineBreak: false })
+        .text(String(item.quantity), cols.qx, ry + 6, { width: 45, align: 'right', lineBreak: false })
+        .text(priceStr, cols.hx, ry + 6, { width: 82, align: 'right', lineBreak: false });
 
       ry += rowH;
       rowColorIdx++;
