@@ -58,6 +58,10 @@ export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
+    const TVA_RATE = 0.085;
+    const tva = order.totalHT * TVA_RATE;
+    const ttc = order.totalHT + tva;
+
     // ── Brand header ──────────────────────────────────
     doc.fontSize(22).font('Helvetica-Bold').fillColor(PRIMARY).text('Inca Import', 50, 50);
     doc.fontSize(9).font('Helvetica').fillColor(MUTED).text('Grossiste B2B · La Reunion, 974', 50, 78);
@@ -126,18 +130,29 @@ export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
       ry += rowH;
     }
 
-    // Total row
-    ry += 8;
-    doc.rect(350, ry, 195, 30).fillColor(SURFACE).fill();
-    doc.rect(350, ry, 195, 30).lineWidth(0.5).strokeColor(BORDER).stroke();
-    doc.fontSize(8).font('Helvetica-Bold').fillColor(MUTED)
-      .text('TOTAL HT', 360, ry + 10);
-    doc.fontSize(12).font('Helvetica-Bold').fillColor(INK)
-      .text(`${order.totalHT.toFixed(2)} EUR`, cols.hx, ry + 9, { width: 82, align: 'right' });
+    // Totals block
+    ry += 12;
+    const totalsH = 76;
+    doc.rect(350, ry, 195, totalsH).fillColor(SURFACE).fill();
+    doc.rect(350, ry, 195, totalsH).lineWidth(0.5).strokeColor(BORDER).stroke();
+
+    doc.fontSize(8).font('Helvetica').fillColor(MUTED)
+      .text('Total HT', 360, ry + 12)
+      .text(`${order.totalHT.toFixed(2)} EUR`, cols.hx, ry + 12, { width: 82, align: 'right' });
+
+    doc.fontSize(8).font('Helvetica').fillColor(MUTED)
+      .text('TVA 8,5 %', 360, ry + 30)
+      .text(`${tva.toFixed(2)} EUR`, cols.hx, ry + 30, { width: 82, align: 'right' });
+
+    doc.moveTo(360, ry + 46).lineTo(535, ry + 46).lineWidth(0.5).strokeColor(BORDER).stroke();
+
+    doc.fontSize(9).font('Helvetica-Bold').fillColor(INK)
+      .text('TOTAL TTC', 360, ry + 54)
+      .text(`${ttc.toFixed(2)} EUR`, cols.hx, ry + 54, { width: 82, align: 'right' });
 
     // Notes
     if (order.notes) {
-      ry += 50;
+      ry += totalsH + 20;
       doc.fontSize(7).font('Helvetica-Bold').fillColor(MUTED).text('NOTES', 50, ry);
       doc.fontSize(9).font('Helvetica').fillColor(INK).text(order.notes, 50, ry + 14, { width: 495 });
     }
