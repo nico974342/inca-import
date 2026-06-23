@@ -64,7 +64,7 @@ if (Astro.request.method === 'POST') {
   const { data: order, error: orderErr } = await supabaseAdmin
     .from('orders')
     .insert({
-      user_id:   adminUser.id,
+      user_id:   null,
       nom:       client.nom,
       societe:   client.societe ?? '',
       telephone: client.telephone ?? '',

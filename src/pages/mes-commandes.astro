@@ -15,7 +15,7 @@ if (!user || user.user_metadata?.role !== 'client') {
 const { data: orders } = await supabaseAdmin
   .from('orders')
   .select('id, status, created_at, notes')
-  .eq('user_id', user.id)
+  .or(`user_id.eq.${user.id},email.eq.${user.email}`)
   .order('created_at', { ascending: false });
 
 // Fetch all order items for those orders in one query
