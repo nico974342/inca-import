@@ -590,8 +590,7 @@ export function generatePDVDeliveryPDF(
     doc.fontSize(8).font('Helvetica').fillColor(MUTED)
       .text('29 Route des Premiers Français', 62, infoY + 37, { lineBreak: false })
       .text('97460 Saint-Paul, La Réunion', 62, infoY + 50, { lineBreak: false })
-      .text('SIRET : 945 112 753', 62, infoY + 63, { lineBreak: false })
-      .text('TVA non applicable, art. 293 B du CGI', 62, infoY + 76, { lineBreak: false });
+      .text('SIRET : 945 112 753', 62, infoY + 63, { lineBreak: false });
 
     // Destinataire (right)
     doc.rect(rightX, infoY, rightW, infoH).fillColor(SURFACE).fill();
