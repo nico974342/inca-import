@@ -1,4 +1,5 @@
 import { GENERIC_FONTS } from '../../shared/constants.mjs';
+import { checkSourceDesignSystem } from '../../design-system.mjs';
 import { isFullPage } from '../../shared/page.mjs';
 import { finding } from '../../findings.mjs';
 import { filterByProviders } from '../../registry/antipatterns.mjs';
@@ -110,9 +111,14 @@ const REGEX_MATCHERS = [
   { id: 'bounce-easing', regex: /\banimate-bounce\b/g,
     test: () => true,
     fmt: () => 'animate-bounce (Tailwind)' },
-  { id: 'bounce-easing', regex: /animation(?:-name)?\s*:\s*[^;]*\b(bounce|elastic|wobble|jiggle|spring)\b/gi,
+  { id: 'bounce-easing', regex: /animation(?:-name)?\s*:\s*([^;{}]*(?:bounce|elastic|wobble|jiggle|spring)[^;{}]*)/gi,
     test: () => true,
-    fmt: (m) => m[0] },
+    fmt: (m) => {
+      const token = m[1]
+        .split(/[,\s]+/)
+        .find((part) => /bounce|elastic|wobble|jiggle|spring/i.test(part));
+      return `animation: ${token || m[1].trim()}`;
+    } },
   { id: 'bounce-easing', regex: /cubic-bezier\(\s*([\d.-]+)\s*,\s*([\d.-]+)\s*,\s*([\d.-]+)\s*,\s*([\d.-]+)\s*\)/g,
     test: (m) => {
       const y1 = parseFloat(m[2]), y2 = parseFloat(m[4]);
@@ -496,6 +502,15 @@ function detectText(content, filePath, options = {}) {
       profile,
       phase: 'css-in-js',
     }));
+  }
+
+  if (options?.designSystem) {
+    findings.push(...profileFindings(profile, {
+      engine: 'regex',
+      phase: 'source',
+      ruleId: 'design-system',
+      target: filePath,
+    }, () => checkSourceDesignSystem(content, filePath, { designSystem: options.designSystem })));
   }
 
   // Deduplicate findings (same antipattern + similar snippet, within 2 lines)

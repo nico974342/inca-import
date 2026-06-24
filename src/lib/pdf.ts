@@ -24,17 +24,21 @@ export interface DeliveryItem {
   product_name: string;
   quantity: number;
   unit?: string | null;
+  sku?: string | null;
+  price_ht?: number | null;
 }
 
 export interface DeliveryPDV {
   name: string;
   items: DeliveryItem[];
+  client_nom?: string | null;
+  client_societe?: string | null;
+  client_address?: string | null;
 }
 
 export interface PdfDeliveryData {
   id: string;
   date: string;
-  transporter_email: string;
   pdvs: DeliveryPDV[];
   notes?: string | null;
 }
@@ -449,17 +453,15 @@ function finalizeDoc(doc: InstanceType<typeof PDFDocument>): void {
 
   for (let i = 0; i < totalPages; i++) {
     doc.switchToPage(i);
-    // Page numbers on every page when multi-page
     if (totalPages > 1) {
       doc.fontSize(7).font('Helvetica').fillColor(MUTED)
-        .text(`Page ${i + 1} / ${totalPages}`, 400, 822, { width: 145, align: 'right' });
+        .text(`Page ${i + 1} / ${totalPages}`, 400, 755, { width: 145, align: 'right', lineBreak: false });
     }
-    // Footer (two lines) on last page
     if (i === totalPages - 1) {
       doc.fontSize(7).font('Helvetica').fillColor(MUTED)
-        .text(FOOTER_L1, 50, 792, { width: 495, align: 'center' });
+        .text(FOOTER_L1, 50, 760, { width: 495, align: 'center', lineBreak: false });
       doc.fontSize(7).font('Helvetica').fillColor(MUTED)
-        .text(FOOTER_L2, 50, 804, { width: 495, align: 'center' });
+        .text(FOOTER_L2, 50, 772, { width: 495, align: 'center', lineBreak: false });
     }
   }
 
@@ -482,14 +484,7 @@ export function generateDeliverySummaryPDF(delivery: PdfDeliveryData): Promise<B
       withAddress: true,
     });
 
-    // ── Transporter box ───────────────────────────────
-    y += 4;
-    doc.rect(50, y, 495, 52).fillColor(SURFACE).fill();
-    doc.rect(50, y, 495, 52).lineWidth(0.5).strokeColor(BORDER).stroke();
-    doc.fontSize(7).font('Helvetica-Bold').fillColor(MUTED).text('TRANSPORTEUR', 65, y + 10);
-    doc.fontSize(11).font('Helvetica-Bold').fillColor(INK).text('Coursier OI', 65, y + 23);
-    doc.fontSize(9).font('Helvetica').fillColor(MUTED).text(delivery.transporter_email, 65, y + 38);
-    y += 52 + 20;
+    y += 16;
 
     // ── PDV list ──────────────────────────────────────
     const pdvCount = delivery.pdvs.length;
@@ -550,45 +545,187 @@ export function generateDeliverySummaryPDF(delivery: PdfDeliveryData): Promise<B
   });
 }
 
-// ── Per-PDV PDF: one stop ─────────────────────────────────────────────────
+// ── Per-PDV PDF: legal Bon de Livraison ──────────────────────────────────
 
 export function generatePDVDeliveryPDF(
-  pdv: DeliveryPDV, deliveryId: string, date: string
+  pdv: DeliveryPDV, blNumber: string, date: string
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true, info: { Title: `Livraison ${pdv.name} — ${deliveryId}`, Author: 'Inca Import' } });
+    const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true, info: { Title: `${blNumber} — ${pdv.name}`, Author: 'Inca Import' } });
     const chunks: Buffer[] = [];
     doc.on('data', (c: Buffer) => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-    let y = drawHeader(doc, {
-      id: deliveryId, date, title: 'BON DE LIVRAISON',
-    });
+    const TVA_RATE = 0.085;
+    const PAGE_BOTTOM = 730;
 
-    // PDV name as subtitle
-    y -= 10;
-    doc.fontSize(16).font('Helvetica-Bold').fillColor(PRIMARY)
-      .text(pdv.name.toUpperCase(), 50, y, { width: 495 });
-    y += doc.currentLineHeight() + 16;
+    // Column positions
+    const col = { desc: 58, descW: 210, qty: 272, qtyW: 40, unit: 316, unitW: 50, pu: 368, puW: 72, tot: 442, totW: 95 };
 
-    // Divider
-    doc.moveTo(50, y).lineTo(545, y).lineWidth(0.5).strokeColor(BORDER).stroke();
-    y += 16;
+    // ── Header ─────────────────────────────────────────────────────────────
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(PRIMARY)
+      .text('BON DE LIVRAISON', 50, 50, { lineBreak: false });
+    doc.fontSize(9).font('Helvetica-Bold').fillColor(INK)
+      .text(blNumber, 350, 50, { width: 195, align: 'right', lineBreak: false });
+    doc.fontSize(8).font('Helvetica').fillColor(MUTED)
+      .text(`Date : ${date}`, 350, 65, { width: 195, align: 'right', lineBreak: false });
 
-    const pdvTotal = pdv.items.reduce((s, i) => s + i.quantity, 0);
+    doc.moveTo(50, 84).lineTo(545, 84).lineWidth(0.5).strokeColor(BORDER).stroke();
 
-    // Product header bar
-    doc.rect(50, y, 495, 26).fillColor(INK).fill();
-    doc.fontSize(9).font('Helvetica-Bold').fillColor(WHITE)
-      .text(`${pdv.items.length} article${pdv.items.length > 1 ? 's' : ''}`, 65, y + 8)
-      .text(`${pdvTotal} carton${pdvTotal > 1 ? 's' : ''}`, 350, y + 8, { width: 180, align: 'right' });
-    y += 26;
+    // ── Two-column info block ──────────────────────────────────────────────
+    const infoY = 94;
+    const infoH = 90;
+    const halfW = 237;
+    const rightX = 50 + halfW + 8;
+    const rightW = 495 - halfW - 8;
 
-    y = drawProductTable(doc, pdv.items, y);
-    y = drawTotalCartons(doc, pdvTotal, y);
+    // Fournisseur (left)
+    doc.rect(50, infoY, halfW, infoH).fillColor(SURFACE).fill();
+    doc.rect(50, infoY, halfW, infoH).lineWidth(0.5).strokeColor(BORDER).stroke();
+    doc.fontSize(7).font('Helvetica-Bold').fillColor(MUTED)
+      .text('FOURNISSEUR', 62, infoY + 10, { lineBreak: false });
+    doc.fontSize(10).font('Helvetica-Bold').fillColor(INK)
+      .text('Inca Import', 62, infoY + 22, { lineBreak: false });
+    doc.fontSize(8).font('Helvetica').fillColor(MUTED)
+      .text('29 Route des Premiers Français', 62, infoY + 37, { lineBreak: false })
+      .text('97460 Saint-Paul, La Réunion', 62, infoY + 50, { lineBreak: false })
+      .text('SIRET : 945 112 753', 62, infoY + 63, { lineBreak: false })
+      .text('TVA non applicable, art. 293 B du CGI', 62, infoY + 76, { lineBreak: false });
 
-    finalizeDoc(doc);
+    // Destinataire (right)
+    doc.rect(rightX, infoY, rightW, infoH).fillColor(SURFACE).fill();
+    doc.rect(rightX, infoY, rightW, infoH).lineWidth(0.5).strokeColor(BORDER).stroke();
+    doc.fontSize(7).font('Helvetica-Bold').fillColor(MUTED)
+      .text('DESTINATAIRE', rightX + 12, infoY + 10, { lineBreak: false });
+    doc.fontSize(10).font('Helvetica-Bold').fillColor(INK)
+      .text(pdv.name, rightX + 12, infoY + 22, { width: rightW - 24, lineBreak: false });
+
+    let destY = infoY + 37;
+    if (pdv.client_societe) {
+      doc.fontSize(8).font('Helvetica').fillColor(MUTED)
+        .text(pdv.client_societe, rightX + 12, destY, { width: rightW - 24, lineBreak: false });
+      destY += 13;
+    }
+    if (pdv.client_nom && pdv.client_nom !== pdv.name) {
+      doc.fontSize(8).font('Helvetica').fillColor(MUTED)
+        .text(pdv.client_nom, rightX + 12, destY, { width: rightW - 24, lineBreak: false });
+      destY += 13;
+    }
+    if (pdv.client_address) {
+      doc.fontSize(8).font('Helvetica').fillColor(MUTED)
+        .text(pdv.client_address, rightX + 12, destY, { width: rightW - 24, lineBreak: false });
+    }
+
+    // ── Product table ──────────────────────────────────────────────────────
+    let ry = infoY + infoH + 15;
+
+    const drawBLHeader = (y: number) => {
+      doc.rect(50, y, 495, 22).fillColor(PRIMARY).fill();
+      doc.fontSize(7.5).font('Helvetica-Bold').fillColor(WHITE)
+        .text('DÉSIGNATION', col.desc, y + 7, { width: col.descW, lineBreak: false })
+        .text('QTÉ',         col.qty,  y + 7, { width: col.qtyW,  align: 'right', lineBreak: false })
+        .text('UNITÉ',       col.unit, y + 7, { width: col.unitW, lineBreak: false })
+        .text('P.U. HT',     col.pu,   y + 7, { width: col.puW,   align: 'right', lineBreak: false })
+        .text('TOTAL HT',    col.tot,  y + 7, { width: col.totW,  align: 'right', lineBreak: false });
+      return y + 22;
+    };
+
+    ry = drawBLHeader(ry);
+    let rowColorIdx = 0;
+    let totalHTSum = 0;
+    let totalQty = 0;
+
+    for (const item of pdv.items) {
+      doc.fontSize(8.5).font('Helvetica');
+      const nameH = doc.heightOfString(item.product_name, { width: col.descW });
+      const skuH  = item.sku ? 11 : 0;
+      const rowH  = Math.max(24, Math.ceil(nameH) + skuH + 10);
+
+      if (ry + rowH > PAGE_BOTTOM) {
+        doc.addPage();
+        ry = drawBLHeader(50);
+        rowColorIdx = 0;
+      }
+
+      doc.rect(50, ry, 495, rowH).fillColor(rowColorIdx % 2 === 0 ? WHITE : SURFACE).fill();
+      doc.rect(50, ry, 495, rowH).lineWidth(0.3).strokeColor(BORDER).stroke();
+
+      const lineHT = item.quantity * Number(item.price_ht ?? 0);
+      if (item.price_ht != null) totalHTSum += lineHT;
+      totalQty += item.quantity;
+
+      doc.fontSize(8.5).font('Helvetica').fillColor(INK)
+        .text(item.product_name, col.desc, ry + 6, { width: col.descW, lineBreak: false });
+      if (item.sku) {
+        doc.fontSize(7).font('Helvetica').fillColor(MUTED)
+          .text(`Réf. ${item.sku}`, col.desc, ry + 6 + Math.ceil(nameH), { width: col.descW, lineBreak: false });
+      }
+
+      doc.fontSize(8.5).font('Helvetica').fillColor(INK)
+        .text(String(item.quantity), col.qty,  ry + 6, { width: col.qtyW,  align: 'right', lineBreak: false })
+        .text(item.unit ?? '—',     col.unit, ry + 6, { width: col.unitW, lineBreak: false });
+
+      if (item.price_ht != null) {
+        doc.fillColor(INK)
+          .text(`${Number(item.price_ht).toFixed(2)} €`, col.pu,  ry + 6, { width: col.puW,  align: 'right', lineBreak: false })
+          .text(`${lineHT.toFixed(2)} €`,                col.tot, ry + 6, { width: col.totW, align: 'right', lineBreak: false });
+      } else {
+        doc.fillColor(MUTED)
+          .text('—', col.pu,  ry + 6, { width: col.puW,  align: 'right', lineBreak: false })
+          .text('—', col.tot, ry + 6, { width: col.totW, align: 'right', lineBreak: false });
+      }
+
+      ry += rowH;
+      rowColorIdx++;
+    }
+
+    // QTÉ total row
+    if (ry + 22 > PAGE_BOTTOM) { doc.addPage(); ry = 50; }
+    doc.rect(50, ry, 495, 22).fillColor(SURFACE).fill();
+    doc.rect(50, ry, 495, 22).lineWidth(0.3).strokeColor(BORDER).stroke();
+    doc.fontSize(8).font('Helvetica-Bold').fillColor(MUTED)
+      .text('TOTAL QTÉ', col.desc, ry + 7, { width: col.descW, lineBreak: false })
+      .text(String(totalQty), col.qty, ry + 7, { width: col.qtyW, align: 'right', lineBreak: false });
+    ry += 22;
+
+    // Totals block HT / TVA / TTC
+    const tva = totalHTSum * TVA_RATE;
+    const ttc = totalHTSum + tva;
+    const totalsH = 76;
+
+    if (ry + 12 + totalsH > PAGE_BOTTOM) { doc.addPage(); ry = 50; }
+    ry += 12;
+
+    doc.rect(350, ry, 187, totalsH).fillColor(SURFACE).fill();
+    doc.rect(350, ry, 187, totalsH).lineWidth(0.5).strokeColor(BORDER).stroke();
+
+    doc.fontSize(8).font('Helvetica').fillColor(MUTED)
+      .text('Total HT', 362, ry + 12, { lineBreak: false })
+      .text(`${totalHTSum.toFixed(2)} €`, col.tot, ry + 12, { width: col.totW, align: 'right', lineBreak: false });
+    doc.fontSize(8).font('Helvetica').fillColor(MUTED)
+      .text('TVA 8,5 %', 362, ry + 30, { lineBreak: false })
+      .text(`${tva.toFixed(2)} €`, col.tot, ry + 30, { width: col.totW, align: 'right', lineBreak: false });
+
+    doc.moveTo(362, ry + 46).lineTo(537, ry + 46).lineWidth(0.5).strokeColor(BORDER).stroke();
+
+    doc.fontSize(9).font('Helvetica-Bold').fillColor(INK)
+      .text('TOTAL TTC', 362, ry + 54, { lineBreak: false })
+      .text(`${ttc.toFixed(2)} €`, col.tot, ry + 54, { width: col.totW, align: 'right', lineBreak: false });
+
+    // Footer on every page
+    const totalPages = doc.bufferedPageRange().count;
+    for (let p = 0; p < totalPages; p++) {
+      doc.switchToPage(p);
+      if (totalPages > 1) {
+        doc.fontSize(7).font('Helvetica').fillColor(MUTED)
+          .text(`Page ${p + 1} / ${totalPages}`, 400, 755, { width: 145, align: 'right', lineBreak: false });
+      }
+      doc.fontSize(7).font('Helvetica').fillColor(MUTED)
+        .text('Inca Import · SIRET 945 112 753 · 29 Route des Premiers Français, 97460 Saint-Paul, La Réunion', 50, 760, { width: 495, align: 'center', lineBreak: false })
+        .text('inca-import@hotmail.com · 0692 47 89 41 · TVA non applicable, art. 293 B du CGI', 50, 772, { width: 495, align: 'center', lineBreak: false });
+    }
+    doc.flushPages();
     doc.end();
   });
 }
