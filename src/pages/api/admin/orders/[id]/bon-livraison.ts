@@ -15,19 +15,24 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
 
   const { data: order } = await supabaseAdmin
     .from('orders')
-    .select('id, nom, societe, email, telephone, created_at')
+    .select('id, nom, societe, email, telephone, created_at, bl_number')
     .eq('id', id)
     .single();
 
   if (!order) return new Response('Non trouvé', { status: 404 });
 
-  const [{ data: items }, { data: blNumber }] = await Promise.all([
-    supabaseAdmin
-      .from('order_items')
-      .select('product_name, quantity, unit, products(price_ht, sku)')
-      .eq('order_id', id),
-    supabaseAdmin.rpc('next_bl_number'),
-  ]);
+  const { data: items } = await supabaseAdmin
+    .from('order_items')
+    .select('product_name, quantity, unit, products(price_ht, sku)')
+    .eq('order_id', id);
+
+  // Reuse existing BL number or generate and persist a new one
+  let blNumber = (order as any).bl_number as string | null;
+  if (!blNumber) {
+    const { data: newBl } = await supabaseAdmin.rpc('next_bl_number');
+    blNumber = newBl as string;
+    await supabaseAdmin.from('orders').update({ bl_number: blNumber }).eq('id', id);
+  }
 
   // Robust client lookup: email (trimmed) → nom → societe
   const CLIENT_SELECT = 'nom, societe, points_de_vente, livraison_rue, livraison_ville, livraison_code_postal, adresse_pdv';
