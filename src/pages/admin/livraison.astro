@@ -41,13 +41,17 @@ const clientPDVs = (clients ?? []).map(c => ({
   clientLabel: c.nom + (c.societe ? ` · ${c.societe}` : ''),
 }));
 
-// Email → pdvKey. When two clients share an email, both get their own key
-// by indexing on client id — we build the map from all rows, last-write wins
-// only matters if truly duplicate emails exist in client_accounts.
+// Email → pdvKey (trimmed + lowercased on both sides to tolerate whitespace drift)
 const emailToClientKey = new Map(
   (clients ?? [])
     .filter(c => c.email)
-    .map(c => [(c.email as string).toLowerCase(), `client_${c.id}`])
+    .map(c => [(c.email as string).trim().toLowerCase(), `client_${c.id}`])
+);
+// nom fallback — catches orders where email is null or was stored differently
+const nomToClientKey = new Map(
+  (clients ?? [])
+    .filter(c => c.nom)
+    .map(c => [(c.nom as string).trim().toLowerCase(), `client_${c.id}`])
 );
 
 const allPDVs = clientPDVs;
@@ -234,7 +238,7 @@ const categories = Object.keys(productsByCategory).sort();
 // ── Confirmed orders pending delivery ──────────────────────────────────────
 const { data: confirmedOrders } = await supabaseAdmin
   .from('orders')
-  .select('id, email, nom')
+  .select('id, email, nom, societe')
   .eq('status', 'confirmee');
 
 const confirmedOrderIds = (confirmedOrders ?? []).map(o => o.id);
@@ -247,9 +251,19 @@ const { data: confirmedItems } = confirmedOrderIds.length > 0
       .not('product_id', 'is', null)
   : { data: [] as { order_id: string; product_id: string; quantity: number }[] };
 
+// societe fallback — some orders store the company name in societe, not nom
+const societeToClientKey = new Map(
+  (clients ?? [])
+    .filter(c => c.societe)
+    .map(c => [(c.societe as string).trim().toLowerCase(), `client_${c.id}`])
+);
+
 const orderToPdvKey = new Map<string, string>();
 for (const order of confirmedOrders ?? []) {
-  const key = order.email ? emailToClientKey.get(order.email.toLowerCase()) : undefined;
+  const byEmail   = order.email   ? emailToClientKey.get(order.email.trim().toLowerCase())     : undefined;
+  const byNom     = order.nom     ? nomToClientKey.get(order.nom.trim().toLowerCase())         : undefined;
+  const bySociete = (order as any).societe ? societeToClientKey.get((order as any).societe.trim().toLowerCase()) : undefined;
+  const key = byEmail ?? byNom ?? bySociete;
   if (key) orderToPdvKey.set(order.id, key);
 }
 
@@ -320,8 +334,8 @@ const unmatchedOrders = (confirmedOrders ?? []).filter(o => !orderToPdvKey.has(o
           )}
           {unmatchedOrders.length > 0 && (
             <span class="pending-banner-warn">
-              {unmatchedOrders.length} commande{unmatchedOrders.length > 1 ? 's' : ''} sans PDV associé
-              ({unmatchedOrders.map(o => o.nom ?? o.email ?? o.id).join(', ')})
+              {unmatchedOrders.length} commande{unmatchedOrders.length > 1 ? 's' : ''} sans PDV associé :
+              {unmatchedOrders.map(o => `${o.nom ?? '—'} (email: ${o.email ?? 'null'})`).join(' · ')}
             </span>
           )}
         </div>
