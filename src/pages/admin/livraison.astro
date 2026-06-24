@@ -70,91 +70,94 @@ if (Astro.request.method === 'POST') {
   const loadedOrderIds = ((form.get('loaded_order_ids') as string) ?? '')
     .split(',').map(s => s.trim()).filter(Boolean);
 
-  const { data: blNumber, error: blErr } = await supabaseAdmin.rpc('next_bl_number');
-  if (blErr || !blNumber) {
-    errorMessage = `Erreur lors de la génération du numéro de BL${blErr ? ' : ' + blErr.message : ''}.`;
-  } else {
-    const deliveryId = blNumber as string;
-    const now = new Date();
-    const dateStr = now.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const batchId = `REC-${now.toISOString().slice(0, 10).replace(/-/g, '')}-${now.toTimeString().slice(0, 5).replace(':', '')}`;
 
-    const clientById = new Map((clients ?? []).map(c => [c.id, c]));
+  const clientById = new Map((clients ?? []).map(c => [c.id, c]));
 
-    const pdvMeta: { key: string; name: string; clientId: string | null }[] = [];
-    const deliveryPDVs: {
-      name: string;
-      items: { product_name: string; quantity: number; unit?: string | null; price_ht?: number | null; sku?: string | null }[];
-      client_nom?: string | null;
-      client_societe?: string | null;
-      client_address?: string | null;
-    }[] = [];
+  const pdvMeta: { key: string; name: string; clientId: string | null }[] = [];
+  const deliveryPDVs: {
+    name: string;
+    items: { product_name: string; quantity: number; unit?: string | null; price_ht?: number | null; sku?: string | null }[];
+    client_nom?: string | null;
+    client_societe?: string | null;
+    client_address?: string | null;
+  }[] = [];
 
-    for (const pdv of allPDVs) {
-      if (form.get(`included_${pdv.key}`) !== 'on') continue;
-      const clientId = pdv.key.startsWith('client_') ? pdv.key.slice('client_'.length) : null;
-      const ci = clientId ? clientById.get(clientId) : null;
+  for (const pdv of allPDVs) {
+    if (form.get(`included_${pdv.key}`) !== 'on') continue;
+    const clientId = pdv.key.startsWith('client_') ? pdv.key.slice('client_'.length) : null;
+    const ci = clientId ? clientById.get(clientId) : null;
 
-      const items: { product_name: string; quantity: number; unit?: string | null; price_ht?: number | null; sku?: string | null }[] = [];
-      for (const p of products) {
-        const qty = parseInt((form.get(`qty_${pdv.key}_${p.id}`) as string) || '0', 10);
-        if (qty > 0) items.push({
-          product_name: p.name,
-          quantity: qty,
-          unit: p.unit ?? null,
-          price_ht: (p as any).price_ht ?? null,
-          sku: (p as any).sku ?? null,
-        });
-      }
-      if (items.length === 0) continue;
-
-      const villePostal = [ci?.livraison_code_postal, ci?.livraison_ville].filter(Boolean).join(' ') || null;
-      const addrParts = [ci?.livraison_rue, villePostal, 'La Réunion'].filter(Boolean);
-      const clientAddress = addrParts.length > 1
-        ? addrParts.join(', ')
-        : ((ci as any)?.adresse_pdv ?? null);
-
-      deliveryPDVs.push({
-        name: pdv.name,
-        items,
-        client_nom: ci?.nom ?? null,
-        client_societe: ci?.societe ?? null,
-        client_address: clientAddress,
+    const items: { product_name: string; quantity: number; unit?: string | null; price_ht?: number | null; sku?: string | null }[] = [];
+    for (const p of products) {
+      const qty = parseInt((form.get(`qty_${pdv.key}_${p.id}`) as string) || '0', 10);
+      if (qty > 0) items.push({
+        product_name: p.name,
+        quantity: qty,
+        unit: p.unit ?? null,
+        price_ht: (p as any).price_ht ?? null,
+        sku: (p as any).sku ?? null,
       });
-      pdvMeta.push({ key: pdv.key, name: pdv.name, clientId });
     }
+    if (items.length === 0) continue;
 
-    if (deliveryPDVs.length === 0) {
-      errorMessage = 'Sélectionnez au moins un point de vente avec des produits.';
+    const villePostal = [ci?.livraison_code_postal, ci?.livraison_ville].filter(Boolean).join(' ') || null;
+    const addrParts = [ci?.livraison_rue, villePostal, 'La Réunion'].filter(Boolean);
+    const clientAddress = addrParts.length > 1
+      ? addrParts.join(', ')
+      : ((ci as any)?.adresse_pdv ?? null);
+
+    deliveryPDVs.push({
+      name: pdv.name,
+      items,
+      client_nom: ci?.nom ?? null,
+      client_societe: ci?.societe ?? null,
+      client_address: clientAddress,
+    });
+    pdvMeta.push({ key: pdv.key, name: pdv.name, clientId });
+  }
+
+  if (deliveryPDVs.length === 0) {
+    errorMessage = 'Sélectionnez au moins un point de vente avec des produits.';
+  } else {
+    // One unique BL number per PDV
+    const blResults = await Promise.all(deliveryPDVs.map(() => supabaseAdmin.rpc('next_bl_number')));
+    const blErr = blResults.find(r => r.error);
+    if (blErr) {
+      errorMessage = `Erreur lors de la génération des numéros de BL : ${blErr.error!.message}`;
     } else {
+      const blNumbers = blResults.map(r => r.data as string);
       try {
-        const deliveryData = { id: deliveryId, date: dateStr, pdvs: deliveryPDVs, notes };
+        const deliveryData = { id: batchId, date: dateStr, pdvs: deliveryPDVs, notes };
 
         const [summaryBuffer, ...pdvBuffers] = await Promise.all([
           generateDeliverySummaryPDF(deliveryData),
-          ...deliveryPDVs.map(pdv => generatePDVDeliveryPDF(pdv, deliveryId, dateStr)),
+          ...deliveryPDVs.map((pdv, i) => generatePDVDeliveryPDF(pdv, blNumbers[i], dateStr)),
         ]);
 
         const attachments = [
-          { filename: `recapitulatif-${deliveryId}.pdf`, content: summaryBuffer },
+          { filename: `recapitulatif-${batchId}.pdf`, content: summaryBuffer },
           ...deliveryPDVs.map((pdv, i) => ({
-            filename: `bl-${slugPDV(pdv.name)}-${deliveryId}.pdf`,
+            filename: `${blNumbers[i]}-${slugPDV(pdv.name)}.pdf`,
             content: pdvBuffers[i],
           })),
         ];
 
-        const pdvListHtml = deliveryPDVs.map(p => `&bull; ${p.name}`).join('<br/>');
+        const pdvListHtml = deliveryPDVs.map((p, i) => `&bull; <strong>${blNumbers[i]}</strong> &mdash; ${p.name}`).join('<br/>');
         const attachListHtml = [
           `&bull; <strong>R&eacute;capitulatif</strong> &mdash; bilan consolid&eacute;`,
-          ...deliveryPDVs.map(p => `&bull; <strong>${p.name}</strong> &mdash; bon de livraison`),
+          ...deliveryPDVs.map((p, i) => `&bull; <strong>${blNumbers[i]}</strong> &mdash; ${p.name}`),
         ].join('<br/>');
 
         const resend = new Resend(import.meta.env.RESEND_API_KEY);
         const { error: sendError } = await resend.emails.send({
           from: FROM,
           to: ['inca-import@hotmail.com'],
-          subject: `${deliveryId} — ${deliveryPDVs.length} BL · ${dateStr}`,
+          subject: `${blNumbers.join(', ')} · ${dateStr}`,
           html: `<p>Bonjour,</p>
-<p>Le <strong>${deliveryId}</strong> du ${dateStr} est pr&ecirc;t (${deliveryPDVs.length} point${deliveryPDVs.length > 1 ? 's' : ''} de vente).</p>
+<p>${deliveryPDVs.length} bon${deliveryPDVs.length > 1 ? 's' : ''} de livraison du ${dateStr}.</p>
 <p><strong>Points de vente :</strong><br/>${pdvListHtml}</p>
 <p><strong>Pi&egrave;ces jointes (${attachments.length}) :</strong><br/>${attachListHtml}</p>
 <p>Cordialement,<br/>Inca Import</p>`,
@@ -165,7 +168,7 @@ if (Astro.request.method === 'POST') {
           console.error('[livraison] Resend error:', sendError);
           errorMessage = `PDF générés mais l'envoi a échoué : ${sendError.message}`;
         } else {
-          successMessage = `${attachments.length} PDF envoyés (${deliveryId}) → inca-import@hotmail.com`;
+          successMessage = `${attachments.length} PDF envoyés (${blNumbers.join(', ')}) → inca-import@hotmail.com`;
           if (loadedOrderIds.length > 0) {
             await supabaseAdmin
               .from('orders')
@@ -175,13 +178,13 @@ if (Astro.request.method === 'POST') {
           try {
             await Promise.all(
               pdvMeta.map(async (meta, i) => {
-                const storagePath = `${deliveryId}/${meta.key}.pdf`;
+                const storagePath = `${blNumbers[i]}/${meta.key}.pdf`;
                 const { error: upErr } = await supabaseAdmin.storage
                   .from('delivery-notes')
                   .upload(storagePath, pdvBuffers[i], { contentType: 'application/pdf', upsert: false });
                 if (upErr) { console.error('[livraison] upload error', meta.key, upErr.message); return; }
                 const { error: dbErr } = await supabaseAdmin.from('delivery_notes').insert({
-                  delivery_id: deliveryId,
+                  delivery_id: blNumbers[i],
                   client_id: meta.clientId,
                   pdv_key: meta.key,
                   pdv_name: meta.name,
