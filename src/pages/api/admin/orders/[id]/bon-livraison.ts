@@ -15,24 +15,38 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
 
   const { data: order } = await supabaseAdmin
     .from('orders')
-    .select('id, nom, societe, email, created_at')
+    .select('id, nom, societe, email, telephone, created_at')
     .eq('id', id)
     .single();
 
   if (!order) return new Response('Non trouvé', { status: 404 });
 
-  const [{ data: items }, { data: client }, { data: blNumber }] = await Promise.all([
+  const [{ data: items }, { data: blNumber }] = await Promise.all([
     supabaseAdmin
       .from('order_items')
       .select('product_name, quantity, unit, products(price_ht, sku)')
       .eq('order_id', id),
-    supabaseAdmin
-      .from('client_accounts')
-      .select('nom, societe, points_de_vente, livraison_rue, livraison_ville, livraison_code_postal, adresse_pdv')
-      .eq('email', order.email)
-      .maybeSingle(),
     supabaseAdmin.rpc('next_bl_number'),
   ]);
+
+  // Robust client lookup: email (trimmed) → nom → societe
+  const CLIENT_SELECT = 'nom, societe, points_de_vente, livraison_rue, livraison_ville, livraison_code_postal, adresse_pdv';
+  let client: any = null;
+  if (order.email) {
+    const { data } = await supabaseAdmin.from('client_accounts').select(CLIENT_SELECT)
+      .eq('email', order.email.trim()).maybeSingle();
+    client = data;
+  }
+  if (!client && order.nom) {
+    const { data } = await supabaseAdmin.from('client_accounts').select(CLIENT_SELECT)
+      .ilike('nom', order.nom.trim()).maybeSingle();
+    client = data;
+  }
+  if (!client && (order as any).societe) {
+    const { data } = await supabaseAdmin.from('client_accounts').select(CLIENT_SELECT)
+      .ilike('societe', (order as any).societe.trim()).maybeSingle();
+    client = data;
+  }
 
   const date = new Date(order.created_at).toLocaleDateString('fr-FR', {
     day: '2-digit', month: '2-digit', year: 'numeric',
