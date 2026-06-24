@@ -15,11 +15,6 @@ function slugPDV(name: string): string {
     .replace(/^-|-$/g, '');
 }
 
-const FIXED_PDVS = [
-  { key: 'fixed_ola-tamarins',    name: 'OLA Tamarins',    clientLabel: null as string | null },
-  { key: 'fixed_vito-saint-paul', name: 'VITO Saint-Paul', clientLabel: null as string | null },
-  { key: 'fixed_total-tamarins',  name: 'TOTAL Tamarins',  clientLabel: null as string | null },
-];
 
 const [{ data: clients }, { data: productsRaw }, { data: transporters }] = await Promise.all([
   supabaseAdmin
@@ -55,7 +50,7 @@ const emailToClientKey = new Map(
     .map(c => [(c.email as string).toLowerCase(), `client_${c.id}`])
 );
 
-const allPDVs = [...FIXED_PDVS, ...clientPDVs];
+const allPDVs = clientPDVs;
 const products = productsRaw ?? [];
 
 type Product = (typeof products)[number];
@@ -391,72 +386,8 @@ const unmatchedOrders = (confirmedOrders ?? []).filter(o => !orderToPdvKey.has(o
 
       <div class="pdv-groups">
 
-        <!-- Fixes -->
-        <div class="pdv-group">
-          <p class="pdv-group-label">Points de vente fixes</p>
-          <div class="pdv-list">
-            {FIXED_PDVS.map(pdv => {
-              const hasPending = !!pendingQtys[pdv.key];
-              const orderCount = orderCountByPDV[pdv.key] ?? 0;
-              return (
-                <div class={`pdv-card${hasPending ? ' pdv-card--has-orders' : ''}`} data-pdv={pdv.key}>
-                  <label class="pdv-header">
-                    <input type="checkbox" name={`included_${pdv.key}`} class="pdv-checkbox" data-target={`pdv-body-${pdv.key}`} />
-                    <span class="pdv-header-text">
-                      <span class="pdv-name-row">
-                        <span class="pdv-name">{pdv.name}</span>
-                        {hasPending && (
-                          <span class="pdv-order-badge">{orderCount} commande{orderCount > 1 ? 's' : ''}</span>
-                        )}
-                      </span>
-                    </span>
-                    <svg class="pdv-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-                      <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                  </label>
-                  <div class="pdv-body" id={`pdv-body-${pdv.key}`} hidden>
-                    <div class="pdv-body-controls">
-                      <div class="pdv-search-wrap">
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-                          <circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.25"/>
-                          <path d="M10 10l2.5 2.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>
-                        </svg>
-                        <input type="text" class="pdv-search" placeholder="Rechercher un produit…" autocomplete="off" aria-label="Rechercher un produit" />
-                      </div>
-                    </div>
-                    {categories.length === 0 ? (
-                      <p class="pdv-empty">Aucun produit en stock.</p>
-                    ) : (
-                      categories.map(cat => (
-                        <div class="pdv-cat">
-                          <p class="pdv-cat-name">{cat}</p>
-                          <div class="pdv-products">
-                            {productsByCategory[cat].map(p => (
-                              <div class="pdv-product-row" data-product-id={p.id} data-product-name={p.name.toLowerCase()}>
-                                <span class="pdv-product-name">{p.name}</span>
-                                {p.unit && <span class="pdv-product-unit">{p.unit}</span>}
-                                <div class="stepper">
-                                  <button type="button" class="step-btn step-dec" aria-label={`Diminuer ${p.name}`}>−</button>
-                                  <input type="number" name={`qty_${pdv.key}_${p.id}`} class="step-input" value="0" min="0" max="9999" aria-label={`Quantité ${p.name}`} />
-                                  <button type="button" class="step-btn step-inc" aria-label={`Augmenter ${p.name}`}>+</button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        <!-- Clients -->
         {clientPDVs.length > 0 && (
           <div class="pdv-group">
-            <p class="pdv-group-label">Clients</p>
             <div class="pdv-list">
               {clientPDVs.map(pdv => {
                 const hasPending = !!pendingQtys[pdv.key];
