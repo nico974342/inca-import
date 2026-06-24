@@ -52,7 +52,7 @@ const BORDER   = '#E7E2DC';
 const WHITE    = '#FFFFFF';
 
 const FOOTER_L1 = 'Inca Import · 29 Route des Premiers Français · 97460 Saint-Paul · SIRET 945 112 753';
-const FOOTER_L2 = 'contact@inca-import.re · 0692 47 89 41 · TVA non applicable, art. 293 B du CGI';
+const FOOTER_L2 = 'contact@inca-import.re · 0692 47 89 41';
 
 export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -722,7 +722,7 @@ export function generatePDVDeliveryPDF(
       }
       doc.fontSize(7).font('Helvetica').fillColor(MUTED)
         .text('Inca Import · SIRET 945 112 753 · 29 Route des Premiers Français, 97460 Saint-Paul, La Réunion', 50, 760, { width: 495, align: 'center', lineBreak: false })
-        .text('inca-import@hotmail.com · 0692 47 89 41 · TVA non applicable, art. 293 B du CGI', 50, 772, { width: 495, align: 'center', lineBreak: false });
+        .text('inca-import@hotmail.com · 0692 47 89 41', 50, 772, { width: 495, align: 'center', lineBreak: false });
     }
     doc.flushPages();
     doc.end();
