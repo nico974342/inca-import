@@ -43,8 +43,8 @@ if (Astro.request.method === 'POST') {
       }).catch(err => console.error('[commandes] sendOrderStatusEmail threw:', err));
     }
 
-    // Decrement stock only on first transition to expediee
-    if (current?.status !== 'expediee' && new_status === 'expediee') {
+    // Decrement stock only on first transition to livree
+    if (current?.status !== 'livree' && new_status === 'livree') {
       const { data: items } = await supabaseAdmin
         .from('order_items')
         .select('product_id, product_name, quantity, unit, products(price_ht)')
