@@ -559,8 +559,10 @@ export function generatePDVDeliveryPDF(
     doc.on('error', reject);
     const PAGE_BOTTOM = 730;
 
-    // Column positions
-    const col = { desc: 58, descW: 145, qty: 205, qtyW: 30, unit: 237, unitW: 37, tva: 276, tvaW: 34, pu: 312, puW: 55, tot: 369, totW: 70, totTTC: 441, totTTCW: 98 };
+    // Column positions — DÉSIGNATION | QTÉ | UNITÉ | P.U. HT | TOTAL HT | TVA | TOTAL TTC
+    const col = { desc: 58, descW: 165, qty: 225, qtyW: 33, unit: 260, unitW: 40, pu: 302, puW: 60, tot: 364, totW: 70, tva: 436, tvaW: 36, totTTC: 474, totTTCW: 65 };
+    // Totals block value column (independent of table — right-aligned within box 350–537)
+    const tbValX = 444; const tbValW = 86;
 
     // ── Header ─────────────────────────────────────────────────────────────
     doc.fontSize(20).font('Helvetica-Bold').fillColor(PRIMARY)
@@ -624,9 +626,9 @@ export function generatePDVDeliveryPDF(
         .text('DÉSIGNATION', col.desc,   y + 7, { width: col.descW,   lineBreak: false })
         .text('QTÉ',         col.qty,    y + 7, { width: col.qtyW,    align: 'right', lineBreak: false })
         .text('UNITÉ',       col.unit,   y + 7, { width: col.unitW,   lineBreak: false })
-        .text('TVA',         col.tva,    y + 7, { width: col.tvaW,    align: 'right', lineBreak: false })
         .text('P.U. HT',     col.pu,     y + 7, { width: col.puW,     align: 'right', lineBreak: false })
         .text('TOTAL HT',    col.tot,    y + 7, { width: col.totW,    align: 'right', lineBreak: false })
+        .text('TVA',         col.tva,    y + 7, { width: col.tvaW,    align: 'center', lineBreak: false })
         .text('TOTAL TTC',   col.totTTC, y + 7, { width: col.totTTCW, align: 'right', lineBreak: false });
       return y + 22;
     };
@@ -672,14 +674,10 @@ export function generatePDVDeliveryPDF(
         .text(String(item.quantity), col.qty,  ry + 6, { width: col.qtyW,  align: 'right', lineBreak: false })
         .text(item.unit ?? '—',     col.unit, ry + 6, { width: col.unitW, lineBreak: false });
 
-      const tvaLabel = `${(itemRate * 100).toFixed(1).replace('.', ',')} %`;
-      doc.fontSize(7.5).font('Helvetica').fillColor(MUTED)
-        .text(tvaLabel, col.tva, ry + 6, { width: col.tvaW, align: 'right', lineBreak: false });
-
       if (item.price_ht != null) {
         doc.fontSize(8.5).font('Helvetica').fillColor(INK)
-          .text(`${Number(item.price_ht).toFixed(2)} €`, col.pu,     ry + 6, { width: col.puW,     align: 'right', lineBreak: false })
-          .text(`${lineHT.toFixed(2)} €`,                col.tot,    ry + 6, { width: col.totW,    align: 'right', lineBreak: false })
+          .text(`${Number(item.price_ht).toFixed(2)} €`, col.pu,  ry + 6, { width: col.puW,  align: 'right', lineBreak: false })
+          .text(`${lineHT.toFixed(2)} €`,                col.tot, ry + 6, { width: col.totW, align: 'right', lineBreak: false })
           .text(`${lineTTC!.toFixed(2)} €`,              col.totTTC, ry + 6, { width: col.totTTCW, align: 'right', lineBreak: false });
       } else {
         doc.fontSize(8.5).font('Helvetica').fillColor(MUTED)
@@ -687,6 +685,11 @@ export function generatePDVDeliveryPDF(
           .text('—', col.tot,    ry + 6, { width: col.totW,    align: 'right', lineBreak: false })
           .text('—', col.totTTC, ry + 6, { width: col.totTTCW, align: 'right', lineBreak: false });
       }
+
+      // TVA rate badge — centred between TOTAL HT and TOTAL TTC
+      const tvaLabel = `${(itemRate * 100).toFixed(1).replace('.', ',')} %`;
+      doc.fontSize(7).font('Helvetica').fillColor(MUTED)
+        .text(tvaLabel, col.tva, ry + 6, { width: col.tvaW, align: 'center', lineBreak: false });
 
       ry += rowH;
       rowColorIdx++;
@@ -715,19 +718,19 @@ export function generatePDVDeliveryPDF(
 
     doc.fontSize(8).font('Helvetica').fillColor(MUTED)
       .text('Total HT', 362, ry + 12, { lineBreak: false })
-      .text(`${totalHTSum.toFixed(2)} €`, col.tot, ry + 12, { width: col.totW, align: 'right', lineBreak: false });
+      .text(`${totalHTSum.toFixed(2)} €`, tbValX, ry + 12, { width: tbValW, align: 'right', lineBreak: false });
 
     const tvaTotal = tvaRates.reduce((s, [, amt]) => s + amt, 0);
     doc.fontSize(8).font('Helvetica').fillColor(MUTED)
       .text('TVA', 362, ry + 30, { lineBreak: false })
-      .text(tvaRates.length > 0 ? `${tvaTotal.toFixed(2)} €` : '—', col.tot, ry + 30, { width: col.totW, align: 'right', lineBreak: false });
+      .text(tvaRates.length > 0 ? `${tvaTotal.toFixed(2)} €` : '—', tbValX, ry + 30, { width: tbValW, align: 'right', lineBreak: false });
 
-    const sepY  = ry + 48;
-    const ttcY  = sepY + 10;
+    const sepY = ry + 48;
+    const ttcY = sepY + 10;
     doc.moveTo(362, sepY).lineTo(537, sepY).lineWidth(0.5).strokeColor(BORDER).stroke();
     doc.fontSize(9).font('Helvetica-Bold').fillColor(INK)
       .text('TOTAL TTC', 362, ttcY, { lineBreak: false })
-      .text(`${ttc.toFixed(2)} €`, col.tot, ttcY, { width: col.totW, align: 'right', lineBreak: false });
+      .text(`${ttc.toFixed(2)} €`, tbValX, ttcY, { width: tbValW, align: 'right', lineBreak: false });
 
     // Footer on every page
     const totalPages = doc.bufferedPageRange().count;
