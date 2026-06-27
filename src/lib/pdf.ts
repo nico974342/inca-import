@@ -560,7 +560,7 @@ export function generatePDVDeliveryPDF(
     const PAGE_BOTTOM = 730;
 
     // Column positions
-    const col = { desc: 58, descW: 210, qty: 272, qtyW: 40, unit: 316, unitW: 50, pu: 368, puW: 72, tot: 442, totW: 95 };
+    const col = { desc: 58, descW: 168, qty: 228, qtyW: 34, unit: 264, unitW: 42, pu: 308, puW: 58, tot: 368, totW: 74, totTTC: 444, totTTCW: 95 };
 
     // ── Header ─────────────────────────────────────────────────────────────
     doc.fontSize(20).font('Helvetica-Bold').fillColor(PRIMARY)
@@ -621,11 +621,12 @@ export function generatePDVDeliveryPDF(
     const drawBLHeader = (y: number) => {
       doc.rect(50, y, 495, 22).fillColor(PRIMARY).fill();
       doc.fontSize(7.5).font('Helvetica-Bold').fillColor(WHITE)
-        .text('DÉSIGNATION', col.desc, y + 7, { width: col.descW, lineBreak: false })
-        .text('QTÉ',         col.qty,  y + 7, { width: col.qtyW,  align: 'right', lineBreak: false })
-        .text('UNITÉ',       col.unit, y + 7, { width: col.unitW, lineBreak: false })
-        .text('P.U. HT',     col.pu,   y + 7, { width: col.puW,   align: 'right', lineBreak: false })
-        .text('TOTAL HT',    col.tot,  y + 7, { width: col.totW,  align: 'right', lineBreak: false });
+        .text('DÉSIGNATION', col.desc,   y + 7, { width: col.descW,   lineBreak: false })
+        .text('QTÉ',         col.qty,    y + 7, { width: col.qtyW,    align: 'right', lineBreak: false })
+        .text('UNITÉ',       col.unit,   y + 7, { width: col.unitW,   lineBreak: false })
+        .text('P.U. HT',     col.pu,     y + 7, { width: col.puW,     align: 'right', lineBreak: false })
+        .text('TOTAL HT',    col.tot,    y + 7, { width: col.totW,    align: 'right', lineBreak: false })
+        .text('TOTAL TTC',   col.totTTC, y + 7, { width: col.totTTCW, align: 'right', lineBreak: false });
       return y + 22;
     };
 
@@ -650,11 +651,12 @@ export function generatePDVDeliveryPDF(
       doc.rect(50, ry, 495, rowH).fillColor(rowColorIdx % 2 === 0 ? WHITE : SURFACE).fill();
       doc.rect(50, ry, 495, rowH).lineWidth(0.3).strokeColor(BORDER).stroke();
 
-      const lineHT = item.quantity * Number(item.price_ht ?? 0);
+      const itemRate = item.tva_rate ?? 0.085;
+      const lineHT   = item.quantity * Number(item.price_ht ?? 0);
+      const lineTTC  = item.price_ht != null ? lineHT * (1 + itemRate) : null;
       if (item.price_ht != null) {
         totalHTSum += lineHT;
-        const rate = item.tva_rate ?? 0.085;
-        tvaByRate.set(rate, (tvaByRate.get(rate) ?? 0) + lineHT * rate);
+        tvaByRate.set(itemRate, (tvaByRate.get(itemRate) ?? 0) + lineHT * itemRate);
       }
       totalQty += item.quantity;
 
@@ -671,12 +673,14 @@ export function generatePDVDeliveryPDF(
 
       if (item.price_ht != null) {
         doc.fillColor(INK)
-          .text(`${Number(item.price_ht).toFixed(2)} €`, col.pu,  ry + 6, { width: col.puW,  align: 'right', lineBreak: false })
-          .text(`${lineHT.toFixed(2)} €`,                col.tot, ry + 6, { width: col.totW, align: 'right', lineBreak: false });
+          .text(`${Number(item.price_ht).toFixed(2)} €`, col.pu,     ry + 6, { width: col.puW,     align: 'right', lineBreak: false })
+          .text(`${lineHT.toFixed(2)} €`,                col.tot,    ry + 6, { width: col.totW,    align: 'right', lineBreak: false })
+          .text(`${lineTTC!.toFixed(2)} €`,              col.totTTC, ry + 6, { width: col.totTTCW, align: 'right', lineBreak: false });
       } else {
         doc.fillColor(MUTED)
-          .text('—', col.pu,  ry + 6, { width: col.puW,  align: 'right', lineBreak: false })
-          .text('—', col.tot, ry + 6, { width: col.totW, align: 'right', lineBreak: false });
+          .text('—', col.pu,     ry + 6, { width: col.puW,     align: 'right', lineBreak: false })
+          .text('—', col.tot,    ry + 6, { width: col.totW,    align: 'right', lineBreak: false })
+          .text('—', col.totTTC, ry + 6, { width: col.totTTCW, align: 'right', lineBreak: false });
       }
 
       ry += rowH;
