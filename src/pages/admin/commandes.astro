@@ -43,6 +43,29 @@ if (Astro.request.method === 'POST') {
       }).catch(err => console.error('[commandes] sendOrderStatusEmail threw:', err));
     }
 
+    // Restore stock when cancelling a livree order (stock was decremented on livree)
+    if (current?.status === 'livree' && new_status === 'annulee') {
+      const { data: cancelItems } = await supabaseAdmin
+        .from('order_items')
+        .select('product_id, quantity')
+        .eq('order_id', order_id);
+
+      for (const item of cancelItems ?? []) {
+        if (!item.product_id) continue;
+        const { data: prod } = await supabaseAdmin
+          .from('products')
+          .select('stock_quantity')
+          .eq('id', item.product_id)
+          .single();
+        if (!prod) continue;
+        const restoredQty = prod.stock_quantity + item.quantity;
+        await supabaseAdmin
+          .from('products')
+          .update({ stock_quantity: restoredQty, in_stock: true })
+          .eq('id', item.product_id);
+      }
+    }
+
     // Decrement stock only on first transition to livree
     if (current?.status !== 'livree' && new_status === 'livree') {
       const { data: items } = await supabaseAdmin
