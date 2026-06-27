@@ -11,11 +11,26 @@ if (Astro.request.method === 'POST') {
   const new_status = data.get('status')   as string;
   const VALID = ['en_attente', 'confirmee', 'en_preparation', 'expediee', 'livree', 'annulee'];
 
+  // TVA rate update (can be submitted independently of status)
+  const tva_preset   = data.get('tva_preset')   as string | null;
+  const tva_manual   = data.get('tva_manual')   as string | null;
+
+  if (order_id && tva_preset && !new_status) {
+    let rate = 0.085;
+    if (tva_preset === '0.021') rate = 0.021;
+    else if (tva_preset === 'custom' && tva_manual) {
+      const parsed = parseFloat(tva_manual.replace(',', '.')) / 100;
+      if (!isNaN(parsed) && parsed >= 0 && parsed <= 1) rate = parsed;
+    }
+    await supabaseAdmin.from('orders').update({ tva_rate: rate }).eq('id', order_id);
+    return Astro.redirect('/admin/commandes');
+  }
+
   if (order_id && VALID.includes(new_status)) {
     // Fetch current status to detect first-time confirmation
     const { data: current } = await supabaseAdmin
       .from('orders')
-      .select('status, nom, societe, email, telephone, user_id, created_at')
+      .select('status, tva_rate, nom, societe, email, telephone, user_id, created_at')
       .eq('id', order_id).single();
 
     await supabaseAdmin.from('orders').update({ status: new_status }).eq('id', order_id);
@@ -121,7 +136,8 @@ if (Astro.request.method === 'POST') {
         });
 
         const totalHt  = products.reduce((s, p) => s + p.total_ht, 0);
-        const tva      = totalHt * 0.085;
+        const tvaRate  = (current as any).tva_rate ?? 0.085;
+        const tva      = totalHt * tvaRate;
         const totalTtc = totalHt + tva;
 
         sendOrderConfirmedWebhook({
@@ -148,12 +164,12 @@ const filterStatus = Astro.url.searchParams.get('status') ?? '';
 // Fetch all orders (filter applied in DB only when set)
 let query = supabaseAdmin
   .from('orders')
-  .select('id, status, created_at, nom, societe, email, telephone, notes, user_id, invoice_path')
+  .select('id, status, tva_rate, created_at, nom, societe, email, telephone, notes, user_id, invoice_path')
   .order('created_at', { ascending: false });
 
 const { data: allOrders } = await supabaseAdmin
   .from('orders')
-  .select('id, status, created_at, nom, societe, email, telephone, notes, user_id, invoice_path')
+  .select('id, status, tva_rate, created_at, nom, societe, email, telephone, notes, user_id, invoice_path')
   .order('created_at', { ascending: false });
 
 const orders = filterStatus
@@ -187,6 +203,7 @@ function orderTotal(orderId: string): number | null {
 
 function pennylaneSummary(order: (typeof orders)[number], items: any[], total: number | null): string {
   const fmt = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
+  const tvaRate = (order as any).tva_rate ?? 0.085;
 
   const lines = items.map(item => {
     const pu     = item.products?.price_ht;
@@ -195,7 +212,7 @@ function pennylaneSummary(order: (typeof orders)[number], items: any[], total: n
     return `- ${item.product_name}${item.unit ? ' (' + item.unit + ')' : ''} — Qté ${item.quantity} × ${puNum != null ? fmt(puNum) : '—'} = ${lineHt != null ? fmt(lineHt) : '—'}`;
   });
 
-  const tva = total != null ? total * 0.085 : null;
+  const tva = total != null ? total * tvaRate : null;
   const ttc = total != null && tva != null ? total + tva : null;
 
   return [
@@ -309,6 +326,33 @@ function shortId(id: string) {
                   </select>
                   <button type="submit" class="status-save">Enregistrer</button>
                 </form>
+
+                <!-- TVA rate form -->
+                {(() => {
+                  const tvaRate = (order as any).tva_rate ?? 0.085;
+                  const preset  = tvaRate === 0.085 ? '0.085' : tvaRate === 0.021 ? '0.021' : 'custom';
+                  const manualPct = preset === 'custom' ? (tvaRate * 100).toFixed(2) : '';
+                  return (
+                    <form method="POST" class="tva-form" data-tva-form>
+                      <input type="hidden" name="order_id" value={order.id} />
+                      <label class="status-label-text">TVA :</label>
+                      <select name="tva_preset" class="status-select tva-select" data-tva-select>
+                        <option value="0.085" selected={preset === '0.085'}>8,5 %</option>
+                        <option value="0.021" selected={preset === '0.021'}>2,1 %</option>
+                        <option value="custom"  selected={preset === 'custom'}>Manuel…</option>
+                      </select>
+                      <input
+                        type="number" name="tva_manual" min="0" max="100" step="0.01"
+                        class={`tva-manual-input${preset !== 'custom' ? ' tva-manual-hidden' : ''}`}
+                        placeholder="ex: 3.50"
+                        value={manualPct}
+                        data-tva-manual
+                      />
+                      <span class="tva-pct-label" data-tva-pct-label style={preset !== 'custom' ? 'display:none' : ''}>%</span>
+                      <button type="submit" class="status-save">Enregistrer</button>
+                    </form>
+                  );
+                })()}
 
                 <!-- Client info -->
                 <div class="client-info">
@@ -689,6 +733,37 @@ details[open] .chevron { transform: rotate(180deg); }
 }
 .status-save:hover { opacity: 0.88; }
 
+/* TVA form */
+.tva-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.tva-manual-input {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  width: 80px;
+  outline-offset: 2px;
+}
+.tva-manual-input:focus { outline: 2px solid var(--color-primary); }
+.tva-manual-hidden { display: none; }
+
+.tva-pct-label {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+
 /* Client info */
 .client-info {
   display: flex;
@@ -992,6 +1067,20 @@ details[open] .chevron { transform: rotate(180deg); }
 </style>
 
 <script>
+// TVA preset toggle
+document.querySelectorAll<HTMLSelectElement>('[data-tva-select]').forEach(sel => {
+  const form    = sel.closest('[data-tva-form]') as HTMLElement;
+  const manual  = form?.querySelector<HTMLInputElement>('[data-tva-manual]');
+  const pctLbl  = form?.querySelector<HTMLElement>('[data-tva-pct-label]');
+  const toggle  = () => {
+    const isCustom = sel.value === 'custom';
+    manual?.classList.toggle('tva-manual-hidden', !isCustom);
+    if (pctLbl) pctLbl.style.display = isCustom ? '' : 'none';
+  };
+  toggle();
+  sel.addEventListener('change', toggle);
+});
+
 // Show selected filename in upload label
 document.querySelectorAll<HTMLInputElement>('.inv-file-label input[type="file"]').forEach(input => {
   const span = input.closest('.inv-file-label')?.querySelector('span');

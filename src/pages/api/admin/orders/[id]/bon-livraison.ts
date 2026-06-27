@@ -15,7 +15,7 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
 
   const { data: order } = await supabaseAdmin
     .from('orders')
-    .select('id, nom, societe, email, telephone, created_at, bl_number')
+    .select('id, nom, societe, email, telephone, created_at, bl_number, tva_rate')
     .eq('id', id)
     .single();
 
@@ -77,6 +77,7 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
     },
     blNumber as string,
     date,
+    (order as any).tva_rate ?? 0.085,
   );
 
   return new Response(buffer, {

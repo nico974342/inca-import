@@ -548,7 +548,7 @@ export function generateDeliverySummaryPDF(delivery: PdfDeliveryData): Promise<B
 // ── Per-PDV PDF: legal Bon de Livraison ──────────────────────────────────
 
 export function generatePDVDeliveryPDF(
-  pdv: DeliveryPDV, blNumber: string, date: string
+  pdv: DeliveryPDV, blNumber: string, date: string, tvaRate = 0.085
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true, info: { Title: `${blNumber} — ${pdv.name}`, Author: 'Inca Import' } });
@@ -557,7 +557,7 @@ export function generatePDVDeliveryPDF(
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-    const TVA_RATE = 0.085;
+    const TVA_RATE = tvaRate;
     const PAGE_BOTTOM = 730;
 
     // Column positions
@@ -703,7 +703,7 @@ export function generatePDVDeliveryPDF(
       .text('Total HT', 362, ry + 12, { lineBreak: false })
       .text(`${totalHTSum.toFixed(2)} €`, col.tot, ry + 12, { width: col.totW, align: 'right', lineBreak: false });
     doc.fontSize(8).font('Helvetica').fillColor(MUTED)
-      .text('TVA 8,5 %', 362, ry + 30, { lineBreak: false })
+      .text(`TVA ${(TVA_RATE * 100).toFixed(1).replace('.', ',')} %`, 362, ry + 30, { lineBreak: false })
       .text(`${tva.toFixed(2)} €`, col.tot, ry + 30, { width: col.totW, align: 'right', lineBreak: false });
 
     doc.moveTo(362, ry + 46).lineTo(537, ry + 46).lineWidth(0.5).strokeColor(BORDER).stroke();
