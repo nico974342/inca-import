@@ -26,6 +26,7 @@ export interface DeliveryItem {
   unit?: string | null;
   sku?: string | null;
   price_ht?: number | null;
+  tva_rate?: number | null;
 }
 
 export interface DeliveryPDV {
@@ -548,7 +549,7 @@ export function generateDeliverySummaryPDF(delivery: PdfDeliveryData): Promise<B
 // ── Per-PDV PDF: legal Bon de Livraison ──────────────────────────────────
 
 export function generatePDVDeliveryPDF(
-  pdv: DeliveryPDV, blNumber: string, date: string, tvaRate = 0.085
+  pdv: DeliveryPDV, blNumber: string, date: string
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true, info: { Title: `${blNumber} — ${pdv.name}`, Author: 'Inca Import' } });
@@ -556,8 +557,6 @@ export function generatePDVDeliveryPDF(
     doc.on('data', (c: Buffer) => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
-
-    const TVA_RATE = tvaRate;
     const PAGE_BOTTOM = 730;
 
     // Column positions
@@ -634,6 +633,7 @@ export function generatePDVDeliveryPDF(
     let rowColorIdx = 0;
     let totalHTSum = 0;
     let totalQty = 0;
+    const tvaByRate = new Map<number, number>(); // rate → TVA amount
 
     for (const item of pdv.items) {
       doc.fontSize(8.5).font('Helvetica');
@@ -651,7 +651,11 @@ export function generatePDVDeliveryPDF(
       doc.rect(50, ry, 495, rowH).lineWidth(0.3).strokeColor(BORDER).stroke();
 
       const lineHT = item.quantity * Number(item.price_ht ?? 0);
-      if (item.price_ht != null) totalHTSum += lineHT;
+      if (item.price_ht != null) {
+        totalHTSum += lineHT;
+        const rate = item.tva_rate ?? 0.085;
+        tvaByRate.set(rate, (tvaByRate.get(rate) ?? 0) + lineHT * rate);
+      }
       totalQty += item.quantity;
 
       doc.fontSize(8.5).font('Helvetica').fillColor(INK)
@@ -688,10 +692,12 @@ export function generatePDVDeliveryPDF(
       .text(String(totalQty), col.qty, ry + 7, { width: col.qtyW, align: 'right', lineBreak: false });
     ry += 22;
 
-    // Totals block HT / TVA / TTC
-    const tva = totalHTSum * TVA_RATE;
-    const ttc = totalHTSum + tva;
-    const totalsH = 76;
+    // Totals block HT / TVA (per rate) / TTC
+    const tvaRates = Array.from(tvaByRate.entries()).sort((a, b) => b[0] - a[0]);
+    const totalTVA = tvaRates.reduce((s, [, amt]) => s + amt, 0);
+    const ttc      = totalHTSum + totalTVA;
+    const nRates   = Math.max(tvaRates.length, 1);
+    const totalsH  = 30 + 18 * nRates + 40; // HT line + n TVA lines + separator + TTC
 
     if (ry + 12 + totalsH > PAGE_BOTTOM) { doc.addPage(); ry = 50; }
     ry += 12;
@@ -702,15 +708,25 @@ export function generatePDVDeliveryPDF(
     doc.fontSize(8).font('Helvetica').fillColor(MUTED)
       .text('Total HT', 362, ry + 12, { lineBreak: false })
       .text(`${totalHTSum.toFixed(2)} €`, col.tot, ry + 12, { width: col.totW, align: 'right', lineBreak: false });
-    doc.fontSize(8).font('Helvetica').fillColor(MUTED)
-      .text(`TVA ${(TVA_RATE * 100).toFixed(1).replace('.', ',')} %`, 362, ry + 30, { lineBreak: false })
-      .text(`${tva.toFixed(2)} €`, col.tot, ry + 30, { width: col.totW, align: 'right', lineBreak: false });
 
-    doc.moveTo(362, ry + 46).lineTo(537, ry + 46).lineWidth(0.5).strokeColor(BORDER).stroke();
+    if (tvaRates.length === 0) {
+      doc.text('TVA', 362, ry + 30, { lineBreak: false }).text('—', col.tot, ry + 30, { width: col.totW, align: 'right', lineBreak: false });
+    } else {
+      tvaRates.forEach(([rate, amt], i) => {
+        const ly = ry + 30 + i * 18;
+        const label = `TVA ${(rate * 100).toFixed(1).replace('.', ',')} %`;
+        doc.fontSize(8).font('Helvetica').fillColor(MUTED)
+          .text(label, 362, ly, { lineBreak: false })
+          .text(`${amt.toFixed(2)} €`, col.tot, ly, { width: col.totW, align: 'right', lineBreak: false });
+      });
+    }
 
+    const sepY  = ry + 30 + nRates * 18 - 2;
+    const ttcY  = sepY + 10;
+    doc.moveTo(362, sepY).lineTo(537, sepY).lineWidth(0.5).strokeColor(BORDER).stroke();
     doc.fontSize(9).font('Helvetica-Bold').fillColor(INK)
-      .text('TOTAL TTC', 362, ry + 54, { lineBreak: false })
-      .text(`${ttc.toFixed(2)} €`, col.tot, ry + 54, { width: col.totW, align: 'right', lineBreak: false });
+      .text('TOTAL TTC', 362, ttcY, { lineBreak: false })
+      .text(`${ttc.toFixed(2)} €`, col.tot, ttcY, { width: col.totW, align: 'right', lineBreak: false });
 
     // Footer on every page
     const totalPages = doc.bufferedPageRange().count;

@@ -12,6 +12,14 @@ if (Astro.request.method === 'POST') {
   const description = (data.get('description') as string)?.trim() || null;
   const sku       = (data.get('sku')       as string)?.trim() || null;
   const price_ht        = data.get('price_ht')        ? parseFloat(data.get('price_ht') as string) : null;
+  const tva_preset      = data.get('tva_preset') as string;
+  const tva_manual_str  = data.get('tva_manual')  as string;
+  let   tva_rate: number = 0.085;
+  if (tva_preset === '0.021') tva_rate = 0.021;
+  else if (tva_preset === 'custom' && tva_manual_str) {
+    const p = parseFloat(tva_manual_str.replace(',', '.')) / 100;
+    if (!isNaN(p) && p >= 0 && p <= 1) tva_rate = p;
+  }
   const unit            = (data.get('unit')            as string)?.trim() || 'carton';
   const units_per_carton = data.get('units_per_carton') ? parseInt(data.get('units_per_carton') as string, 10) || null : null;
   const image_url       = (data.get('image_url')       as string)?.trim() || null;
@@ -24,7 +32,7 @@ if (Astro.request.method === 'POST') {
   } else {
     const { error } = await supabaseAdmin
       .from('products')
-      .insert({ name, slug, category, description, sku, price_ht, unit, units_per_carton, image_url, in_stock, position, stock_quantity });
+      .insert({ name, slug, category, description, sku, price_ht, tva_rate, unit, units_per_carton, image_url, in_stock, position, stock_quantity });
 
     if (error) {
       formError = error.code === '23505'
@@ -86,6 +94,21 @@ if (Astro.request.method === 'POST') {
           <div class="field">
             <label for="units_per_carton">Unités par carton</label>
             <input type="number" id="units_per_carton" name="units_per_carton" min="1" placeholder="ex : 24" />
+          </div>
+        </div>
+
+        <div class="field-group tva-row">
+          <div class="field">
+            <label for="tva_preset">Taux de TVA</label>
+            <select id="tva_preset" name="tva_preset" data-tva-select>
+              <option value="0.085" selected>8,5 %</option>
+              <option value="0.021">2,1 %</option>
+              <option value="custom">Manuel…</option>
+            </select>
+          </div>
+          <div class="field tva-manual-hidden" data-tva-manual-field>
+            <label for="tva_manual">Taux personnalisé (%)</label>
+            <input type="number" id="tva_manual" name="tva_manual" min="0" max="100" step="0.01" placeholder="ex: 3.50" />
           </div>
         </div>
 
@@ -200,6 +223,8 @@ input:focus, select:focus, textarea:focus {
 }
 
 .field-group--3 { grid-template-columns: 1fr 1fr 1fr; }
+.tva-row { grid-template-columns: 1fr 1fr; }
+.tva-manual-hidden { display: none; }
 
 @media (max-width: 560px) {
   .field-group,
@@ -225,6 +250,14 @@ input:focus, select:focus, textarea:focus {
 </style>
 
 <script>
+  const tvaSelect = document.querySelector<HTMLSelectElement>('[data-tva-select]');
+  const tvaField  = document.querySelector<HTMLElement>('[data-tva-manual-field]');
+  if (tvaSelect && tvaField) {
+    tvaSelect.addEventListener('change', () => {
+      tvaField.classList.toggle('tva-manual-hidden', tvaSelect.value !== 'custom');
+    });
+  }
+
   const nameInput = document.getElementById('name') as HTMLInputElement;
   const slugInput = document.getElementById('slug') as HTMLInputElement;
 

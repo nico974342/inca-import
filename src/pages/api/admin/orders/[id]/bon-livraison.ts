@@ -15,7 +15,7 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
 
   const { data: order } = await supabaseAdmin
     .from('orders')
-    .select('id, nom, societe, email, telephone, created_at, bl_number, tva_rate')
+    .select('id, nom, societe, email, telephone, created_at, bl_number')
     .eq('id', id)
     .single();
 
@@ -23,7 +23,7 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
 
   const { data: items } = await supabaseAdmin
     .from('order_items')
-    .select('product_name, quantity, unit, products(price_ht, sku)')
+    .select('product_name, quantity, unit, products(price_ht, sku, tva_rate)')
     .eq('order_id', id);
 
   // Reuse existing BL number or generate and persist a new one
@@ -68,8 +68,9 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
         product_name: it.product_name,
         quantity:     it.quantity,
         unit:         it.unit ?? null,
-        price_ht:     (it as any).products?.price_ht ?? null,
-        sku:          (it as any).products?.sku       ?? null,
+        price_ht:     (it as any).products?.price_ht  ?? null,
+        sku:          (it as any).products?.sku        ?? null,
+        tva_rate:     (it as any).products?.tva_rate   ?? 0.085,
       })),
       client_nom:     order.nom,
       client_societe: order.societe ?? null,
@@ -77,7 +78,6 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
     },
     blNumber as string,
     date,
-    (order as any).tva_rate ?? 0.085,
   );
 
   return new Response(buffer, {
