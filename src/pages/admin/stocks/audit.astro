@@ -1,0 +1,464 @@
+---
+import AdminLayout from '../../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../../lib/supabase';
+
+// ── 1. Fetch all products ─────────────────────────────────────────────
+const { data: products } = await supabaseAdmin
+  .from('products')
+  .select('id, name, sku, category, stock_quantity')
+  .order('name');
+
+// ── 2. Total received per product (from receptions) ───────────────────
+const { data: receptionItems } = await supabaseAdmin
+  .from('stock_reception_items')
+  .select('product_id, quantity');
+
+// ── 3. Total delivered per product — only currently-"livree" orders ───
+//    Orders cancelled AFTER being marked livree already had their
+//    stock restored (see commandes.astro); exclude them by filtering
+//    on the current status = 'livree'.
+const { data: deliveredItems } = await supabaseAdmin
+  .from('order_items')
+  .select('product_id, quantity, orders!inner(status)')
+  .eq('orders.status', 'livree');
+
+// ── 4. Aggregate per product ──────────────────────────────────────────
+type AuditRow = {
+  id: string;
+  name: string;
+  sku: string | null;
+  category: string;
+  stock_quantity: number;
+  total_received: number;
+  total_delivered: number;
+  calculated: number;
+  discrepancy: number;
+};
+
+const receivedMap  = new Map<string, number>();
+const deliveredMap = new Map<string, number>();
+
+for (const r of (receptionItems ?? [])) {
+  receivedMap.set(r.product_id, (receivedMap.get(r.product_id) ?? 0) + r.quantity);
+}
+
+for (const d of (deliveredItems ?? [])) {
+  if (!d.product_id) continue;
+  deliveredMap.set(d.product_id, (deliveredMap.get(d.product_id) ?? 0) + d.quantity);
+}
+
+const rows: AuditRow[] = (products ?? []).map(p => {
+  const received   = receivedMap.get(p.id)  ?? 0;
+  const delivered  = deliveredMap.get(p.id) ?? 0;
+  const calculated = received - delivered;
+  const actual     = p.stock_quantity ?? 0;
+  return {
+    id:              p.id,
+    name:            p.name,
+    sku:             p.sku ?? null,
+    category:        p.category,
+    stock_quantity:  actual,
+    total_received:  received,
+    total_delivered: delivered,
+    calculated,
+    discrepancy:     actual - calculated,
+  };
+});
+
+// Sort: discrepancies first, then by name
+rows.sort((a, b) => {
+  const aDiff = a.discrepancy !== 0 ? 1 : 0;
+  const bDiff = b.discrepancy !== 0 ? 1 : 0;
+  if (bDiff !== aDiff) return bDiff - aDiff;
+  return a.name.localeCompare(b.name, 'fr');
+});
+
+const discrepancyCount = rows.filter(r => r.discrepancy !== 0).length;
+const totalReceived    = rows.reduce((s, r) => s + r.total_received, 0);
+const totalDelivered   = rows.reduce((s, r) => s + r.total_delivered, 0);
+---
+<AdminLayout title="Audit cohérence des stocks" activeNav="stocks">
+
+  <div class="page-header">
+    <a href="/admin/stocks" class="back-link">← Retour aux stocks</a>
+    <div class="header-row">
+      <h1 class="page-title">Audit cohérence des stocks</h1>
+      {discrepancyCount > 0 ? (
+        <span class="badge-alert">{discrepancyCount} écart{discrepancyCount > 1 ? 's' : ''} détecté{discrepancyCount > 1 ? 's' : ''}</span>
+      ) : (
+        <span class="badge-ok">Tout cohérent</span>
+      )}
+    </div>
+    <p class="page-desc">
+      Vérifie que <strong>stock actuel = total reçu − total livré</strong> pour chaque produit.
+      Un écart indique des ajustements manuels, du stock initial saisi hors réceptions,
+      ou un bug de logique de décrémentation/incrémentation.
+    </p>
+  </div>
+
+  <!-- Summary cards -->
+  <div class="summary-grid">
+    <div class="summary-card">
+      <span class="summary-value">{rows.length}</span>
+      <span class="summary-label">Produits</span>
+    </div>
+    <div class="summary-card summary-card--received">
+      <span class="summary-value">{totalReceived}</span>
+      <span class="summary-label">Unités reçues (réceptions)</span>
+    </div>
+    <div class="summary-card summary-card--delivered">
+      <span class="summary-value">{totalDelivered}</span>
+      <span class="summary-label">Unités livrées (BL livrés)</span>
+    </div>
+    {discrepancyCount > 0 ? (
+      <div class="summary-card summary-card--error">
+        <span class="summary-value">{discrepancyCount}</span>
+        <span class="summary-label">Produits avec écart</span>
+      </div>
+    ) : (
+      <div class="summary-card summary-card--ok">
+        <span class="summary-value">✓</span>
+        <span class="summary-label">Aucun écart</span>
+      </div>
+    )}
+  </div>
+
+  <!-- Explanation box -->
+  <div class="info-box">
+    <strong>Comment lire ce tableau</strong>
+    <ul>
+      <li><strong>Total reçu</strong> — cumul de toutes les réceptions fournisseurs enregistrées dans /admin/reception.</li>
+      <li><strong>Total livré</strong> — cumul des quantités dans les commandes dont le statut est actuellement <em>Livrée</em> (les commandes annulées après livraison ont déjà restauré leur stock).</li>
+      <li><strong>Calculé</strong> — reçu − livré : ce que le stock devrait être si tout est passé par les réceptions.</li>
+      <li><strong>Réel</strong> — valeur <code>stock_quantity</code> actuelle en base.</li>
+      <li><strong>Écart</strong> = Réel − Calculé. Un écart ≠ 0 signifie du stock saisi manuellement, du stock initial hors réceptions, ou un bug.</li>
+    </ul>
+  </div>
+
+  <!-- Table -->
+  <div class="table-wrap">
+    <table class="audit-table">
+      <thead>
+        <tr>
+          <th class="col-product">Produit</th>
+          <th class="col-num">Total reçu</th>
+          <th class="col-num">Total livré</th>
+          <th class="col-num">Calculé</th>
+          <th class="col-num">Réel (DB)</th>
+          <th class="col-num">Écart</th>
+          <th class="col-status">Statut</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(r => {
+          const ok = r.discrepancy === 0;
+          return (
+            <tr class={ok ? '' : 'row--error'}>
+              <td class="col-product">
+                <span class="product-name">{r.name}</span>
+                {r.sku && <span class="product-sku">{r.sku}</span>}
+              </td>
+              <td class="col-num td-mono">{r.total_received}</td>
+              <td class="col-num td-mono">{r.total_delivered}</td>
+              <td class="col-num td-mono td-calc">{r.calculated}</td>
+              <td class="col-num td-mono td-real">{r.stock_quantity}</td>
+              <td class="col-num td-mono">
+                <span class={`ecart-chip ${ok ? 'ecart--ok' : r.discrepancy > 0 ? 'ecart--pos' : 'ecart--neg'}`}>
+                  {r.discrepancy > 0 ? '+' : ''}{r.discrepancy}
+                </span>
+              </td>
+              <td class="col-status">
+                {ok ? (
+                  <span class="status-ok">✓ OK</span>
+                ) : (
+                  <span class="status-err">
+                    {r.discrepancy > 0
+                      ? `+${r.discrepancy} non comptabilisé`
+                      : `${r.discrepancy} manquant`}
+                  </span>
+                )}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+
+  {discrepancyCount > 0 && (
+    <div class="advice-box">
+      <strong>Que faire en cas d'écart ?</strong>
+      <ul>
+        <li><strong>Écart positif (ex. +10)</strong> — le stock réel est supérieur au calculé. Probablement du stock initial saisi manuellement avant le déploiement des réceptions, ou des ajustements manuels sur la page Stocks.</li>
+        <li><strong>Écart négatif (ex. −5)</strong> — le stock réel est inférieur au calculé. Peut indiquer un bug de décrémentation double, ou des livraisons non enregistrées via le système.</li>
+        <li>Pour corriger : enregistrez une réception de régularisation pour aligner le total reçu, ou ajustez directement le stock sur <a href="/admin/stocks">la page Stocks</a>.</li>
+      </ul>
+    </div>
+  )}
+
+</AdminLayout>
+
+<style>
+.page-header {
+  margin-bottom: var(--space-6);
+}
+
+.back-link {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+.back-link:hover { color: var(--color-ink); }
+
+.header-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-2);
+}
+
+.page-title {
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: var(--color-ink);
+  margin: 0;
+}
+
+.page-desc {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  margin: 0;
+  max-width: 72ch;
+  line-height: 1.6;
+}
+
+.badge-alert {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  background: oklch(0.95 0.04 25);
+  border: 1px solid oklch(0.85 0.08 25);
+  color: oklch(0.46 0.18 25);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.badge-ok {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  background: oklch(0.92 0.08 145);
+  border: 1px solid oklch(0.80 0.12 145);
+  color: oklch(0.32 0.14 145);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
+.summary-card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.summary-value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--color-ink);
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+}
+
+.summary-label {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-muted);
+}
+
+.summary-card--received { border-color: oklch(0.85 0.08 220); }
+.summary-card--received .summary-value { color: oklch(0.38 0.12 220); }
+
+.summary-card--delivered { border-color: oklch(0.85 0.08 150); }
+.summary-card--delivered .summary-value { color: oklch(0.38 0.12 150); }
+
+.summary-card--error { border-color: oklch(0.82 0.09 25); }
+.summary-card--error .summary-value { color: oklch(0.46 0.18 25); }
+
+.summary-card--ok { border-color: oklch(0.80 0.12 145); }
+.summary-card--ok .summary-value { color: oklch(0.32 0.14 145); }
+
+.info-box {
+  background: oklch(0.96 0.02 220);
+  border: 1px solid oklch(0.88 0.04 220);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  margin-bottom: var(--space-5);
+}
+
+.info-box strong { color: var(--color-ink); }
+
+.info-box ul {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.info-box li { color: oklch(0.38 0.04 220); }
+.info-box code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: oklch(0.90 0.04 220);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.table-wrap {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  overflow-x: auto;
+  margin-bottom: var(--space-5);
+}
+
+.audit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  min-width: 720px;
+}
+
+.audit-table thead th {
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  background: var(--color-surface);
+  border-bottom: 2px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.audit-table thead th.col-num { text-align: right; }
+
+.audit-table tbody td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+
+.audit-table tbody tr:last-child td { border-bottom: none; }
+.audit-table tbody tr:hover td { background: var(--color-surface); }
+
+.row--error td { background: oklch(0.975 0.015 25); }
+.row--error:hover td { background: oklch(0.96 0.02 25) !important; }
+
+.col-product { width: 30%; }
+.col-num     { text-align: right; width: 11%; font-size: var(--text-xs); }
+.col-status  { width: 20%; }
+
+.product-name {
+  display: block;
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.product-sku {
+  display: block;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--color-muted);
+  margin-top: 1px;
+}
+
+.td-mono { font-family: var(--font-mono); }
+
+.td-calc {
+  color: oklch(0.38 0.10 220);
+  font-weight: 600;
+}
+
+.td-real {
+  color: var(--color-ink);
+  font-weight: 700;
+}
+
+.ecart-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+
+.ecart--ok  { background: oklch(0.93 0.07 145); color: oklch(0.32 0.12 145); }
+.ecart--pos { background: oklch(0.95 0.07 60);  color: oklch(0.38 0.15 55);  }
+.ecart--neg { background: oklch(0.95 0.04 25);  color: oklch(0.46 0.18 25);  }
+
+.status-ok {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: oklch(0.40 0.12 145);
+}
+
+.status-err {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: oklch(0.46 0.18 25);
+}
+
+.advice-box {
+  background: oklch(0.97 0.02 40);
+  border: 1px solid oklch(0.88 0.05 40);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+}
+
+.advice-box strong { color: var(--color-ink); }
+
+.advice-box ul {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.advice-box li { color: oklch(0.42 0.06 40); line-height: 1.5; }
+.advice-box a  { color: var(--color-primary-deep); }
+
+@media (max-width: 768px) {
+  .summary-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 480px) {
+  .summary-grid { grid-template-columns: 1fr; }
+}
+</style>

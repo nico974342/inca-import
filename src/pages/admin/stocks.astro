@@ -36,6 +36,16 @@ const CAT_LABEL: Record<string, string> = {
   ></div>
 
   <div style="display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap;margin-bottom:var(--space-5);">
+    <a
+      href="/admin/stocks/audit"
+      style="display:inline-flex;align-items:center;gap:0.35rem;padding:0.5rem 1rem;font-size:var(--text-sm);font-weight:600;color:oklch(0.38 0.12 220);background:oklch(0.94 0.04 220);border:1px solid oklch(0.85 0.07 220);border-radius:var(--radius-sm);text-decoration:none;white-space:nowrap;"
+    >
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true" style="flex-shrink:0;">
+        <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.4"/>
+        <path d="M7 4v3.5l2 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      Audit cohérence
+    </a>
     <select
       id="filterCategory"
       style="padding:0.5rem 0.75rem;font-family:var(--font-body);font-size:var(--text-sm);color:var(--color-ink);background:var(--color-bg);border:1.5px solid var(--color-border-strong);border-radius:var(--radius-sm);min-height:40px;"
