@@ -1,0 +1,456 @@
+---
+import AdminLayout from '../../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../../lib/supabase';
+
+const { data: products } = await supabaseAdmin
+  .from('products')
+  .select('id, name, sku, stock_quantity, prix_achat_moyen_ht')
+  .eq('in_stock', true)
+  .order('name');
+
+const today = new Date().toISOString().split('T')[0];
+---
+<AdminLayout title="Nouvelle réception fournisseur" activeNav="reception">
+
+  <div class="page-header">
+    <a href="/admin/reception" class="back-link">← Retour aux réceptions</a>
+    <h1 class="page-title">Nouvelle réception fournisseur</h1>
+  </div>
+
+  <form method="post" action="/api/admin/reception/create" class="reception-form" id="receptionForm">
+
+    <section class="form-section">
+      <h2 class="section-title">Informations réception</h2>
+      <div class="form-grid">
+        <div class="field">
+          <label for="supplier_name" class="label">Fournisseur <span class="required">*</span></label>
+          <input type="text" id="supplier_name" name="supplier_name" required class="input" placeholder="Nom du fournisseur" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="received_at" class="label">Date de réception <span class="required">*</span></label>
+          <input type="date" id="received_at" name="received_at" required class="input" value={today} />
+        </div>
+        <div class="field field--full">
+          <label for="notes" class="label">Notes (optionnel)</label>
+          <input type="text" id="notes" name="notes" class="input" placeholder="Numéro BL fournisseur, remarques…" />
+        </div>
+      </div>
+    </section>
+
+    <section class="form-section">
+      <div class="section-header">
+        <h2 class="section-title">Produits reçus</h2>
+        <button type="button" id="addRowBtn" class="btn btn-ghost">+ Ajouter un produit</button>
+      </div>
+
+      <div class="items-table-wrap">
+        <table class="items-table" id="itemsTable">
+          <thead>
+            <tr>
+              <th class="col-product">Produit</th>
+              <th class="col-stock">Stock actuel</th>
+              <th class="col-pump">PUMP actuel</th>
+              <th class="col-qty">Quantité reçue <span class="required">*</span></th>
+              <th class="col-cost">Coût unitaire HT <span class="required">*</span></th>
+              <th class="col-total">Total HT</th>
+              <th class="col-action"></th>
+            </tr>
+          </thead>
+          <tbody id="itemsBody">
+            <!-- rows injected by JS -->
+          </tbody>
+          <tfoot>
+            <tr id="totalRow" class="total-row" style="display:none">
+              <td colspan="5" class="total-label">Total réception</td>
+              <td class="total-value" id="grandTotal">—</td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <p class="items-hint" id="noItemsHint">Cliquez sur « + Ajouter un produit » pour commencer.</p>
+    </section>
+
+    <div class="form-actions">
+      <a href="/admin/reception" class="btn btn-ghost">Annuler</a>
+      <button type="submit" class="btn btn-primary" id="submitBtn" disabled>Enregistrer la réception</button>
+    </div>
+
+  </form>
+</AdminLayout>
+
+<script define:vars={{ products }}>
+const PRODUCTS = products ?? [];
+
+const productMap = {};
+PRODUCTS.forEach(p => { productMap[p.id] = p; });
+
+let rowCount = 0;
+
+function fmt(n) {
+  return n.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2 });
+}
+
+function fmtNum(n) {
+  if (n == null) return '—';
+  return n.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function buildOptions(selectedId) {
+  const usedIds = getUsedProductIds();
+  return PRODUCTS.map(p => {
+    const disabled = usedIds.has(p.id) && p.id !== selectedId ? 'disabled' : '';
+    const sel = p.id === selectedId ? 'selected' : '';
+    return `<option value="${p.id}" ${disabled} ${sel}>${p.name}${p.sku ? ' (' + p.sku + ')' : ''}</option>`;
+  }).join('');
+}
+
+function getUsedProductIds() {
+  const s = new Set();
+  document.querySelectorAll('[data-product-select]').forEach(sel => {
+    if (sel.value) s.add(sel.value);
+  });
+  return s;
+}
+
+function addRow(productId) {
+  const idx = rowCount++;
+  const tbody = document.getElementById('itemsBody');
+  const tr = document.createElement('tr');
+  tr.className = 'item-row';
+  tr.dataset.idx = idx;
+
+  const p = productId ? productMap[productId] : null;
+  const stockVal  = p ? (p.stock_quantity ?? 0) : '—';
+  const pumpVal   = p && p.prix_achat_moyen_ht != null ? fmtNum(p.prix_achat_moyen_ht) + ' €' : '—';
+
+  tr.innerHTML = `
+    <td class="col-product">
+      <select name="product_id[]" class="select" data-product-select required>
+        <option value="">— Choisir un produit —</option>
+        ${buildOptions(productId)}
+      </select>
+    </td>
+    <td class="col-stock td-info" data-stock="${p ? (p.stock_quantity ?? 0) : ''}">${stockVal}</td>
+    <td class="col-pump  td-info" data-pump="${p && p.prix_achat_moyen_ht != null ? p.prix_achat_moyen_ht : ''}">${pumpVal}</td>
+    <td class="col-qty">
+      <input type="number" name="quantity[]" class="input input--num" min="1" step="1" placeholder="0" required />
+    </td>
+    <td class="col-cost">
+      <input type="number" name="unit_cost_ht[]" class="input input--num" min="0" step="0.01" placeholder="0.00" required />
+    </td>
+    <td class="col-total td-info" data-row-total="${idx}">—</td>
+    <td class="col-action">
+      <button type="button" class="remove-btn" data-remove="${idx}" title="Supprimer">×</button>
+    </td>
+  `;
+
+  tbody.appendChild(tr);
+
+  const sel    = tr.querySelector('[data-product-select]');
+  const qtyIn  = tr.querySelector('[name="quantity[]"]');
+  const costIn = tr.querySelector('[name="unit_cost_ht[]"]');
+
+  sel.addEventListener('change', () => {
+    const pid = sel.value;
+    const prod = productMap[pid];
+    const stockCell = tr.querySelector('[data-stock]');
+    const pumpCell  = tr.querySelector('[data-pump]');
+    stockCell.textContent = prod ? (prod.stock_quantity ?? 0) : '—';
+    pumpCell.textContent  = prod && prod.prix_achat_moyen_ht != null ? fmtNum(prod.prix_achat_moyen_ht) + ' €' : '—';
+    refreshAllSelects();
+    updateTotal();
+  });
+
+  [qtyIn, costIn].forEach(i => i.addEventListener('input', updateTotal));
+
+  tr.querySelector('.remove-btn').addEventListener('click', () => {
+    tr.remove();
+    refreshAllSelects();
+    updateTotal();
+    toggleHint();
+  });
+
+  toggleHint();
+  updateTotal();
+}
+
+function refreshAllSelects() {
+  const usedIds = getUsedProductIds();
+  document.querySelectorAll('[data-product-select]').forEach(sel => {
+    const currentVal = sel.value;
+    Array.from(sel.options).forEach(opt => {
+      if (!opt.value) return;
+      opt.disabled = usedIds.has(opt.value) && opt.value !== currentVal;
+    });
+  });
+}
+
+function updateTotal() {
+  let grand = 0;
+  let allValid = true;
+
+  document.querySelectorAll('.item-row').forEach(tr => {
+    const costIn = tr.querySelector('[name="unit_cost_ht[]"]');
+    const qtyIn  = tr.querySelector('[name="quantity[]"]');
+    const sel    = tr.querySelector('[data-product-select]');
+    const totalCell = tr.querySelector('[data-row-total]');
+
+    const qty  = parseFloat(qtyIn?.value) || 0;
+    const cost = parseFloat(costIn?.value) || 0;
+    const rowTotal = qty * cost;
+
+    if (totalCell) totalCell.textContent = qty && cost ? fmt(rowTotal) : '—';
+    grand += rowTotal;
+
+    if (!sel?.value || !qtyIn?.value || !costIn?.value) allValid = false;
+  });
+
+  const rows = document.querySelectorAll('.item-row').length;
+  const totalRow = document.getElementById('totalRow');
+  const grandEl  = document.getElementById('grandTotal');
+  const submitBtn = document.getElementById('submitBtn');
+
+  if (totalRow) totalRow.style.display = rows > 0 ? '' : 'none';
+  if (grandEl)  grandEl.textContent = grand > 0 ? fmt(grand) : '—';
+  if (submitBtn) submitBtn.disabled = !(rows > 0 && allValid);
+}
+
+function toggleHint() {
+  const hint = document.getElementById('noItemsHint');
+  const rows = document.querySelectorAll('.item-row').length;
+  if (hint) hint.style.display = rows === 0 ? '' : 'none';
+}
+
+document.getElementById('addRowBtn')?.addEventListener('click', () => addRow(null));
+
+// Start with one empty row
+addRow(null);
+</script>
+
+<style>
+.page-header {
+  margin-bottom: var(--space-6);
+}
+.back-link {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+.back-link:hover { color: var(--color-ink); }
+
+.page-title {
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: var(--color-ink);
+  margin: 0;
+}
+
+.reception-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.form-section {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+}
+
+.section-title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-ink);
+  margin: 0 0 var(--space-4);
+}
+.section-header .section-title { margin-bottom: 0; }
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+
+.field--full { grid-column: 1 / -1; }
+
+.label {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+  margin-bottom: var(--space-1);
+}
+
+.required { color: oklch(0.55 0.18 25); }
+
+.input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  font-family: var(--font-body);
+  box-sizing: border-box;
+  transition: border-color var(--dur-fast);
+}
+.input:focus { outline: 2px solid var(--color-primary); outline-offset: 2px; border-color: var(--color-primary); }
+
+.input--num {
+  font-family: var(--font-mono);
+  text-align: right;
+}
+
+.select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  font-family: var(--font-body);
+  cursor: pointer;
+}
+.select:focus { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+
+.items-table-wrap {
+  overflow-x: auto;
+}
+
+.items-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  min-width: 760px;
+}
+
+.items-table thead th {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.items-table .item-row td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+
+.col-product { width: 32%; }
+.col-stock   { width: 10%; }
+.col-pump    { width: 12%; }
+.col-qty     { width: 13%; }
+.col-cost    { width: 13%; }
+.col-total   { width: 12%; }
+.col-action  { width: 48px; text-align: center; }
+
+.td-info {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  text-align: right;
+}
+
+.total-row td {
+  padding: var(--space-3) var(--space-3);
+  background: var(--color-surface);
+  border-top: 2px solid var(--color-border);
+}
+
+.total-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-ink);
+  text-align: right;
+}
+
+.total-value {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--color-ink);
+  text-align: right;
+}
+
+.remove-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1.1rem;
+  color: var(--color-muted);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  line-height: 1;
+  transition: color var(--dur-fast), background var(--dur-fast);
+}
+.remove-btn:hover { color: oklch(0.55 0.18 25); background: oklch(0.95 0.04 25); }
+
+.items-hint {
+  margin-top: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  text-align: center;
+  font-style: italic;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-5);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast);
+}
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--color-primary);
+  color: white;
+  border-color: var(--color-primary);
+}
+.btn-primary:hover:not(:disabled) { background: var(--color-primary-deep); border-color: var(--color-primary-deep); }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--color-ink);
+  border-color: var(--color-border);
+}
+.btn-ghost:hover { background: var(--color-surface); }
+
+@media (max-width: 640px) {
+  .form-grid { grid-template-columns: 1fr; }
+  .field--full { grid-column: auto; }
+}
+</style>

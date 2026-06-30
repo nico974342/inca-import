@@ -1,0 +1,230 @@
+---
+import AdminLayout from '../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../lib/supabase';
+
+const success = !!Astro.url.searchParams.get('success');
+
+const { data: receptions } = await supabaseAdmin
+  .from('stock_receptions')
+  .select('id, supplier_name, received_at, created_at, notes, stock_reception_items(product_id, quantity, unit_cost_ht, products(name))')
+  .order('received_at', { ascending: false })
+  .limit(100);
+
+function formatDate(d: string) {
+  return new Date(d).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+function formatPrice(p: number) {
+  return p.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2 });
+}
+---
+<AdminLayout title="Réceptions fournisseurs" activeNav="reception">
+
+  {success && (
+    <div class="alert-success" role="alert">
+      Réception enregistrée — stocks et coûts moyens mis à jour.
+    </div>
+  )}
+
+  <div class="toolbar">
+    <a href="/admin/reception/new" class="btn btn-primary">+ Nouvelle réception</a>
+  </div>
+
+  {(receptions ?? []).length === 0 ? (
+    <div class="empty-state">
+      <p class="empty-title">Aucune réception enregistrée.</p>
+      <p class="empty-body">Enregistrez votre première livraison fournisseur pour commencer le suivi PUMP.</p>
+      <a href="/admin/reception/new" class="btn btn-primary" style="margin-top: var(--space-5)">+ Nouvelle réception</a>
+    </div>
+  ) : (
+    <div class="reception-list">
+      {(receptions ?? []).map(r => {
+        const items = (r as any).stock_reception_items ?? [];
+        const totalQty = items.reduce((s: number, i: any) => s + i.quantity, 0);
+        const totalCost = items.reduce((s: number, i: any) => s + (i.quantity * i.unit_cost_ht), 0);
+        return (
+          <div class="reception-card">
+            <div class="rec-header">
+              <div class="rec-meta">
+                <span class="rec-supplier">{r.supplier_name}</span>
+                <span class="rec-date">{formatDate(r.received_at)}</span>
+              </div>
+              <div class="rec-stats">
+                <span class="rec-stat">{items.length} produit{items.length > 1 ? 's' : ''}</span>
+                <span class="rec-stat">{totalQty} unité{totalQty > 1 ? 's' : ''}</span>
+                <span class="rec-stat rec-stat--cost">{formatPrice(totalCost)} HT</span>
+              </div>
+            </div>
+            {r.notes && <p class="rec-notes">{r.notes}</p>}
+            <table class="rec-items">
+              <thead>
+                <tr>
+                  <th>Produit</th>
+                  <th>Qté</th>
+                  <th>Coût unitaire HT</th>
+                  <th>Total HT</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((it: any) => (
+                  <tr>
+                    <td>{it.products?.name ?? it.product_id}</td>
+                    <td class="td-num">{it.quantity}</td>
+                    <td class="td-num">{formatPrice(it.unit_cost_ht)}</td>
+                    <td class="td-num">{formatPrice(it.quantity * it.unit_cost_ht)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+    </div>
+  )}
+</AdminLayout>
+
+<style>
+.alert-success {
+  margin-bottom: var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  background: oklch(0.92 0.08 150);
+  border: 1px solid oklch(0.80 0.12 150);
+  border-radius: var(--radius-md);
+  color: oklch(0.28 0.12 150);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--space-5);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-5);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-decoration: none;
+  border: none;
+  cursor: pointer;
+  transition: background var(--dur-fast);
+}
+.btn-primary {
+  background: var(--color-primary);
+  color: white;
+}
+.btn-primary:hover { background: var(--color-primary-deep); }
+
+.empty-state {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-16) var(--space-8);
+  text-align: center;
+}
+.empty-title { font-weight: 600; color: var(--color-ink); margin-bottom: var(--space-2); }
+.empty-body  { color: var(--color-muted); font-size: var(--text-sm); }
+
+.reception-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.reception-card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.rec-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.rec-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.rec-supplier {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.rec-date {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
+
+.rec-stats {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.rec-stat {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  padding: 2px 8px;
+  background: var(--color-surface);
+  border-radius: var(--radius-full);
+}
+
+.rec-stat--cost {
+  color: var(--color-primary-deep);
+  background: oklch(0.568 0.149 45.9 / 0.08);
+  font-weight: 600;
+}
+
+.rec-notes {
+  padding: var(--space-2) var(--space-5);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  font-style: italic;
+  border-bottom: 1px solid var(--color-border);
+  margin: 0;
+}
+
+.rec-items {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.rec-items thead th {
+  padding: var(--space-2) var(--space-5);
+  text-align: left;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.rec-items tbody td {
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-ink);
+}
+.rec-items tbody tr:last-child td { border-bottom: none; }
+.rec-items tbody tr:hover td { background: var(--color-surface); }
+
+.td-num {
+  font-family: var(--font-mono);
+  text-align: right;
+}
+</style>

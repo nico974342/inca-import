@@ -24,15 +24,31 @@ const [
   supabaseAdmin.from('orders').select('id, nom, societe, status, created_at').order('created_at', { ascending: false }).limit(5),
   supabaseAdmin.from('contact_requests').select('id, nom, societe, status, created_at').order('created_at', { ascending: false }).limit(5),
   supabaseAdmin.from('products').select('id, name, stock_quantity').lt('stock_quantity', 5).order('stock_quantity', { ascending: true }).limit(6),
-  supabaseAdmin.from('orders').select('id, order_items(quantity, products(price_ht))').in('status', ['confirmee', 'en_preparation', 'expediee', 'livree']).gte('created_at', monthStart),
+  supabaseAdmin.from('orders').select('id, order_items(quantity, products(price_ht, prix_achat_moyen_ht))').in('status', ['confirmee', 'en_preparation', 'expediee', 'livree']).gte('created_at', monthStart),
 ]);
 
-const caMonth = (monthOrders ?? []).reduce((sum, order) => {
-  const orderTotal = ((order as any).order_items ?? []).reduce((s: number, item: any) => {
-    return s + Number(item.products?.price_ht ?? 0) * item.quantity;
-  }, 0);
-  return sum + orderTotal;
-}, 0);
+let caMonth = 0;
+let costMonth = 0;
+let costableUnits = 0;
+let totalUnits = 0;
+
+for (const order of (monthOrders ?? [])) {
+  for (const item of ((order as any).order_items ?? [])) {
+    const qty  = item.quantity ?? 0;
+    const prix = Number(item.products?.price_ht ?? 0);
+    const pump = item.products?.prix_achat_moyen_ht != null ? Number(item.products.prix_achat_moyen_ht) : null;
+    caMonth += prix * qty;
+    totalUnits += qty;
+    if (pump != null) {
+      costMonth    += pump * qty;
+      costableUnits += qty;
+    }
+  }
+}
+
+const margeMonth = costableUnits > 0 && caMonth > 0
+  ? ((caMonth - costMonth) / caMonth) * 100
+  : null;
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
@@ -133,6 +149,11 @@ const hasPendingClients    = (clientsEnAttente ?? 0) > 0;
       <div class="stat-body">
         <span class="stat-value stat-value--ca">{formatCA(caMonth)}</span>
         <span class="stat-label">CA du mois (HT)</span>
+        {margeMonth != null && (
+          <span class={`stat-marge ${margeMonth >= 30 ? 'stat-marge--green' : margeMonth >= 15 ? 'stat-marge--amber' : 'stat-marge--red'}`}>
+            Marge {margeMonth.toFixed(1)}%
+          </span>
+        )}
       </div>
     </div>
 
@@ -329,6 +350,18 @@ a.stat-card:hover {
 a.stat-card--urgent:hover { border-color: var(--color-primary); }
 
 .stat-card--ca { cursor: default; }
+
+.stat-marge {
+  display: inline-block;
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+}
+.stat-marge--green { background: oklch(0.92 0.08 145); color: oklch(0.32 0.14 145); }
+.stat-marge--amber { background: oklch(0.95 0.07 60);  color: oklch(0.38 0.15 55);  }
+.stat-marge--red   { background: oklch(0.95 0.04 25);  color: oklch(0.46 0.18 25);  }
 
 .stat-icon {
   width: 38px;

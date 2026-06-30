@@ -3,7 +3,7 @@ import '../../styles/global.css';
 
 interface Props {
   title: string;
-  activeNav?: 'dashboard' | 'produits' | 'stocks' | 'clients' | 'temoignages' | 'commande-rapide' | 'livraison' | 'commandes' | 'journal';
+  activeNav?: 'dashboard' | 'produits' | 'stocks' | 'reception' | 'clients' | 'temoignages' | 'commande-rapide' | 'livraison' | 'commandes' | 'journal';
 }
 
 const { title, activeNav } = Astro.props;
@@ -76,6 +76,13 @@ const { title, activeNav } = Astro.props;
             <path d="M2 5.5 8 9l6-3.5M8 9v5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
           </svg>
           Stocks
+        </a>
+        <a href="/admin/reception" class={`nav-link ${activeNav === 'reception' ? 'nav-link--active' : ''}`}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M1 4.5 3 2h10l2 2.5V13a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M5.5 8 8 10.5 10.5 8M8 10.5V5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Réception stock
         </a>
         <a href="/admin/clients" class={`nav-link ${activeNav === 'clients' ? 'nav-link--active' : ''}`}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">

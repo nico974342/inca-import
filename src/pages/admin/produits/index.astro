@@ -4,7 +4,7 @@ import { supabaseAdmin } from '../../../lib/supabase';
 
 const { data: products, error } = await supabaseAdmin
   .from('products')
-  .select('id, name, category, sku, price_ht, unit, in_stock, stock_quantity, position')
+  .select('id, name, category, sku, price_ht, unit, in_stock, stock_quantity, position, prix_achat_moyen_ht')
   .order('position', { ascending: true })
   .order('name', { ascending: true });
 
@@ -17,6 +17,19 @@ const CAT_LABEL: Record<string, string> = {
 function formatPrice(p: number | null) {
   if (p == null) return '—';
   return p.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' });
+}
+
+function margeClass(marge: number | null): string {
+  if (marge == null) return 'marge--none';
+  if (marge >= 30) return 'marge--green';
+  if (marge >= 15) return 'marge--amber';
+  return 'marge--red';
+}
+
+function margeInfo(pump: number | null, prix: number | null): { label: string; cls: string } {
+  if (pump == null || prix == null || prix === 0) return { label: '—', cls: 'marge--none' };
+  const m = ((prix - pump) / prix) * 100;
+  return { label: m.toFixed(1) + '%', cls: margeClass(m) };
 }
 ---
 <AdminLayout title="Produits" activeNav="produits">
@@ -33,6 +46,8 @@ function formatPrice(p: number | null) {
             <th>Catégorie</th>
             <th>SKU</th>
             <th>Prix HT</th>
+            <th>Coût moy. HT</th>
+            <th>Marge</th>
             <th>Stock</th>
             <th>Pos.</th>
             <th></th>
@@ -49,6 +64,11 @@ function formatPrice(p: number | null) {
               </td>
               <td class="td-mono">{p.sku ?? '—'}</td>
               <td class="td-mono">{formatPrice(p.price_ht)}</td>
+              <td class="td-mono td-muted">{formatPrice((p as any).prix_achat_moyen_ht ?? null)}</td>
+              {(() => {
+                const mi = margeInfo((p as any).prix_achat_moyen_ht ?? null, p.price_ht ?? null);
+                return <td><span class={`marge-chip ${mi.cls}`}>{mi.label}</span></td>;
+              })()}
               <td>
                 {(p.stock_quantity ?? 0) === 0 ? (
                   <span class="stock-chip stock-chip--out">Rupture</span>
@@ -147,6 +167,21 @@ function formatPrice(p: number | null) {
 .badge--boissons    { background: oklch(0.93 0.05 220); color: oklch(0.35 0.10 220); }
 .badge--snacks      { background: oklch(0.94 0.05 60);  color: oklch(0.40 0.12 60);  }
 .badge--confiseries { background: oklch(0.93 0.06 330); color: oklch(0.40 0.12 330); }
+
+.marge-chip {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+.marge--none  { background: var(--color-surface-2); color: var(--color-muted); }
+.marge--green { background: oklch(0.92 0.08 145); color: oklch(0.32 0.14 145); }
+.marge--amber { background: oklch(0.95 0.07 60);  color: oklch(0.38 0.15 55);  }
+.marge--red   { background: oklch(0.95 0.04 25);  color: oklch(0.46 0.18 25);  }
 
 .stock-chip {
   display: inline-flex;
