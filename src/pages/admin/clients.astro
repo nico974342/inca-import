@@ -80,11 +80,26 @@ if (Astro.request.method === 'POST') {
   return Astro.redirect('/admin/clients');
 }
 
-const { data: clientsRaw }  = await supabaseAdmin.from('client_accounts').select('*').order('created_at', { ascending: false });
-const { data: contactsRaw } = await supabaseAdmin.from('contact_requests').select('*').order('created_at', { ascending: false });
+const [
+  { data: clientsRaw },
+  { data: contactsRaw },
+  { data: authUsersData },
+] = await Promise.all([
+  supabaseAdmin.from('client_accounts').select('*').order('created_at', { ascending: false }),
+  supabaseAdmin.from('contact_requests').select('*').order('created_at', { ascending: false }),
+  supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 }),
+]);
 
 const clients  = clientsRaw  ?? [];
 const contacts = contactsRaw ?? [];
+
+// Build a set of emails that have admin role in Supabase auth
+const adminEmailSet = new Set(
+  ((authUsersData as any)?.users ?? [])
+    .filter((u: any) => u.user_metadata?.role !== 'client')
+    .map((u: any) => u.email as string)
+    .filter(Boolean)
+);
 
 const pendingCount = clients.filter(c => c.status === 'en_attente').length;
 const deleted      = !!Astro.url.searchParams.get('deleted');
@@ -108,6 +123,7 @@ type Row = {
   statusLabel: string;
   notes: string | null;
   created_at: string;
+  isAdmin: boolean;
 };
 
 const rows: Row[] = [
@@ -123,6 +139,7 @@ const rows: Row[] = [
     statusLabel: CLIENT_STATUS_LABELS[c.status] ?? c.status,
     notes: c.notes,
     created_at: c.created_at,
+    isAdmin: !!(c.email && adminEmailSet.has(c.email)),
   })),
   ...contacts
     .filter(ct => !convertedContactIds.has(ct.id))
@@ -138,6 +155,7 @@ const rows: Row[] = [
       statusLabel: ct.status === 'converti' ? 'Converti' : 'Nouveau contact',
       notes: ct.notes,
       created_at: ct.created_at,
+      isAdmin: false,
     })),
 ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
@@ -225,6 +243,7 @@ function formatDate(iso: string) {
             <th>Email</th>
             <th>Point de vente</th>
             <th>Statut</th>
+            <th>Accès</th>
             <th>Inscription</th>
             <th>Notes</th>
             <th></th>
@@ -269,6 +288,11 @@ function formatDate(iso: string) {
                   </form>
                 ) : (
                   <span class={`status-badge status-badge--${r.status === 'converti' ? 'converti' : 'nouveau'}`}>{r.statusLabel}</span>
+                )}
+              </td>
+              <td>
+                {r.kind === 'client' && r.isAdmin && (
+                  <span class="badge-admin">Admin</span>
                 )}
               </td>
               <td class="td-muted">{formatDate(r.created_at)}</td>
@@ -624,6 +648,17 @@ tr[data-pending="true"]:hover td {
   font-size: var(--text-xs);
   color: var(--color-muted);
   line-height: 1.4;
+}
+
+.badge-admin {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  background: oklch(0.93 0.07 45.9);
+  color: oklch(0.40 0.15 45.9);
+  white-space: nowrap;
 }
 
 .empty-state {

@@ -35,7 +35,7 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
   }
 
   // Robust client lookup: email (trimmed) → nom → societe
-  const CLIENT_SELECT = 'nom, societe, points_de_vente, livraison_rue, livraison_ville, livraison_code_postal, adresse_pdv';
+  const CLIENT_SELECT = 'nom, societe, points_de_vente, livraison_rue, livraison_ville, livraison_code_postal, adresse_pdv, facturation_same, facturation_rue, facturation_code_postal, facturation_ville';
   let client: any = null;
   if (order.email) {
     const { data } = await supabaseAdmin.from('client_accounts').select(CLIENT_SELECT)
@@ -61,6 +61,16 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
   const addrParts   = [client?.livraison_rue, villePostal, 'La Réunion'].filter(Boolean);
   const clientAddress = addrParts.length > 1 ? addrParts.join(', ') : (client?.adresse_pdv ?? null);
 
+  let clientFacturationAddress: string | null = null;
+  if (client) {
+    if (client.facturation_same) {
+      clientFacturationAddress = clientAddress;
+    } else {
+      const factParts = [client.facturation_rue, client.facturation_code_postal, client.facturation_ville].filter(Boolean);
+      clientFacturationAddress = factParts.length ? factParts.join(', ') : null;
+    }
+  }
+
   const buffer = await generatePDVDeliveryPDF(
     {
       name: client?.points_de_vente ?? order.nom,
@@ -72,9 +82,10 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
         sku:          (it as any).products?.sku        ?? null,
         tva_rate:     (it as any).products?.tva_rate   ?? 0.085,
       })),
-      client_nom:     order.nom,
-      client_societe: order.societe ?? null,
-      client_address: clientAddress,
+      client_nom:                  order.nom,
+      client_societe:              order.societe ?? null,
+      client_address:              clientAddress,
+      client_facturation_address:  clientFacturationAddress,
     },
     blNumber as string,
     date,

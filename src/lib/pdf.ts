@@ -35,6 +35,7 @@ export interface DeliveryPDV {
   client_nom?: string | null;
   client_societe?: string | null;
   client_address?: string | null;
+  client_facturation_address?: string | null;
 }
 
 export interface PdfDeliveryData {
@@ -44,13 +45,16 @@ export interface PdfDeliveryData {
   notes?: string | null;
 }
 
-const PRIMARY  = '#C96334';
-const INK      = '#1E1A16';
-const MUTED    = '#706B65';
-const SURFACE  = '#F6F3EF';
-const ROW_ALT  = '#F2EFE9';   // subtle alternating row tint
-const BORDER   = '#E7E2DC';
-const WHITE    = '#FFFFFF';
+const PRIMARY   = '#C96334';
+const INK       = '#1E1A16';
+const MUTED     = '#706B65';
+const SURFACE   = '#F6F3EF';
+const ROW_ALT   = '#F2EFE9';   // subtle alternating row tint
+const BORDER    = '#E7E2DC';
+const WHITE     = '#FFFFFF';
+const LIVR_BG   = '#FFF0E6';  // warm tint for livraison block
+const LIVR_BORD = '#E8A87C';  // orange border for livraison block
+const LIVR_LBL  = '#9B4D1E';  // darker orange for livraison label
 
 const FOOTER_L1 = 'Inca Import · 29 Route des Premiers Français · 97460 Saint-Paul · SIRET 945 112 753';
 const FOOTER_L2 = 'contact@inca-import.re · 0692 47 89 41';
@@ -574,16 +578,18 @@ export function generatePDVDeliveryPDF(
 
     doc.moveTo(50, 84).lineTo(545, 84).lineWidth(0.5).strokeColor(BORDER).stroke();
 
-    // ── Two-column info block ──────────────────────────────────────────────
-    const infoY = 94;
-    const infoH = 90;
-    const halfW = 237;
+    // ── Two-row info block ─────────────────────────────────────────────────
+    const infoY  = 94;
+    const row1H  = 76;
+    const row2H  = 68;
+    const halfW  = 237;
     const rightX = 50 + halfW + 8;
     const rightW = 495 - halfW - 8;
+    const row2Y  = infoY + row1H + 6;
 
-    // Fournisseur (left)
-    doc.rect(50, infoY, halfW, infoH).fillColor(SURFACE).fill();
-    doc.rect(50, infoY, halfW, infoH).lineWidth(0.5).strokeColor(BORDER).stroke();
+    // Row 1 left: Fournisseur
+    doc.rect(50, infoY, halfW, row1H).fillColor(SURFACE).fill();
+    doc.rect(50, infoY, halfW, row1H).lineWidth(0.5).strokeColor(BORDER).stroke();
     doc.fontSize(7).font('Helvetica-Bold').fillColor(MUTED)
       .text('FOURNISSEUR', 62, infoY + 10, { lineBreak: false });
     doc.fontSize(10).font('Helvetica-Bold').fillColor(INK)
@@ -593,32 +599,42 @@ export function generatePDVDeliveryPDF(
       .text('97460 Saint-Paul, La Réunion', 62, infoY + 50, { lineBreak: false })
       .text('SIRET : 945 112 753', 62, infoY + 63, { lineBreak: false });
 
-    // Destinataire (right)
-    doc.rect(rightX, infoY, rightW, infoH).fillColor(SURFACE).fill();
-    doc.rect(rightX, infoY, rightW, infoH).lineWidth(0.5).strokeColor(BORDER).stroke();
+    // Row 1 right: Client — société as primary name, nom as contact line
+    const displayName = pdv.client_societe ?? pdv.client_nom ?? pdv.name;
+    const displayContact = pdv.client_societe && pdv.client_nom ? pdv.client_nom : null;
+    doc.rect(rightX, infoY, rightW, row1H).fillColor(SURFACE).fill();
+    doc.rect(rightX, infoY, rightW, row1H).lineWidth(0.5).strokeColor(BORDER).stroke();
     doc.fontSize(7).font('Helvetica-Bold').fillColor(MUTED)
-      .text('DESTINATAIRE', rightX + 12, infoY + 10, { lineBreak: false });
-    doc.fontSize(10).font('Helvetica-Bold').fillColor(INK)
-      .text(pdv.name, rightX + 12, infoY + 22, { width: rightW - 24, lineBreak: false });
+      .text('CLIENT', rightX + 12, infoY + 10, { lineBreak: false });
+    doc.fontSize(11).font('Helvetica-Bold').fillColor(INK)
+      .text(displayName, rightX + 12, infoY + 22, { width: rightW - 24, lineBreak: false });
+    if (displayContact) {
+      doc.fontSize(8).font('Helvetica').fillColor(MUTED)
+        .text(displayContact, rightX + 12, infoY + 39, { width: rightW - 24, lineBreak: false });
+    }
 
-    let destY = infoY + 37;
-    if (pdv.client_societe) {
-      doc.fontSize(8).font('Helvetica').fillColor(MUTED)
-        .text(pdv.client_societe, rightX + 12, destY, { width: rightW - 24, lineBreak: false });
-      destY += 13;
-    }
-    if (pdv.client_nom && pdv.client_nom !== pdv.name) {
-      doc.fontSize(8).font('Helvetica').fillColor(MUTED)
-        .text(pdv.client_nom, rightX + 12, destY, { width: rightW - 24, lineBreak: false });
-      destY += 13;
-    }
+    // Row 2 left: Adresse de facturation
+    doc.rect(50, row2Y, halfW, row2H).fillColor(SURFACE).fill();
+    doc.rect(50, row2Y, halfW, row2H).lineWidth(0.5).strokeColor(BORDER).stroke();
+    doc.fontSize(7).font('Helvetica-Bold').fillColor(MUTED)
+      .text('FACTURATION', 62, row2Y + 10, { lineBreak: false });
+    doc.fontSize(8).font('Helvetica').fillColor(MUTED)
+      .text(pdv.client_facturation_address ?? '—', 62, row2Y + 23, { width: halfW - 24 });
+
+    // Row 2 right: Lieu de livraison (orange tint)
+    doc.rect(rightX, row2Y, rightW, row2H).fillColor(LIVR_BG).fill();
+    doc.rect(rightX, row2Y, rightW, row2H).lineWidth(0.5).strokeColor(LIVR_BORD).stroke();
+    doc.fontSize(7).font('Helvetica-Bold').fillColor(LIVR_LBL)
+      .text('LIEU DE LIVRAISON', rightX + 12, row2Y + 10, { lineBreak: false });
+    doc.fontSize(9).font('Helvetica-Bold').fillColor(INK)
+      .text(pdv.name, rightX + 12, row2Y + 23, { width: rightW - 24, lineBreak: false });
     if (pdv.client_address) {
       doc.fontSize(8).font('Helvetica').fillColor(MUTED)
-        .text(pdv.client_address, rightX + 12, destY, { width: rightW - 24, lineBreak: false });
+        .text(pdv.client_address, rightX + 12, row2Y + 37, { width: rightW - 24, lineBreak: false });
     }
 
     // ── Product table ──────────────────────────────────────────────────────
-    let ry = infoY + infoH + 15;
+    let ry = row2Y + row2H + 15;
 
     const drawBLHeader = (y: number) => {
       doc.rect(50, y, 495, 22).fillColor(PRIMARY).fill();
@@ -638,6 +654,7 @@ export function generatePDVDeliveryPDF(
     let totalHTSum = 0;
     let totalQty = 0;
     const tvaByRate = new Map<number, number>(); // rate → TVA amount
+    const htByRate  = new Map<number, number>(); // rate → base HT
 
     for (const item of pdv.items) {
       doc.fontSize(8.5).font('Helvetica');
@@ -660,6 +677,7 @@ export function generatePDVDeliveryPDF(
       if (item.price_ht != null) {
         totalHTSum += lineHT;
         tvaByRate.set(itemRate, (tvaByRate.get(itemRate) ?? 0) + lineHT * itemRate);
+        htByRate.set(itemRate,  (htByRate.get(itemRate)  ?? 0) + lineHT);
       }
       totalQty += item.quantity;
 
@@ -704,15 +722,51 @@ export function generatePDVDeliveryPDF(
       .text(String(totalQty), col.qty, ry + 7, { width: col.qtyW, align: 'right', lineBreak: false });
     ry += 22;
 
-    // Totals block HT / TVA (per rate) / TTC
-    const tvaRates = Array.from(tvaByRate.entries()).sort((a, b) => b[0] - a[0]);
+    // ── Ventilation TVA + totals block ────────────────────────────────────
+    const tvaRates = Array.from(tvaByRate.entries()).sort((a, b) => b[0] - a[0]); // highest rate first
     const totalTVA = tvaRates.reduce((s, [, amt]) => s + amt, 0);
     const ttc      = totalHTSum + totalTVA;
     const totalsH  = 76; // HT + TVA + separator + TTC
 
-    if (ry + 12 + totalsH > PAGE_BOTTOM) { doc.addPage(); ry = 50; }
+    // TVA breakdown table height: header (18) + one row per rate (18 each)
+    const tvaTableH = tvaRates.length > 0 ? 18 + tvaRates.length * 18 : 0;
+    const blockH    = Math.max(totalsH, tvaTableH);
+
+    if (ry + 12 + blockH > PAGE_BOTTOM) { doc.addPage(); ry = 50; }
     ry += 12;
 
+    // Left: ventilation TVA par taux
+    if (tvaRates.length > 0) {
+      const tvaTblX  = 50;
+      const tvaTblW  = 280;
+      const cTaux    = tvaTblX + 12;
+      const cBase    = tvaTblX + 105;
+      const cBaseW   = 80;
+      const cMtv     = tvaTblX + 195;
+      const cMtvW    = 74;
+
+      // Header
+      doc.rect(tvaTblX, ry, tvaTblW, 18).fillColor(SURFACE).fill();
+      doc.rect(tvaTblX, ry, tvaTblW, 18).lineWidth(0.3).strokeColor(BORDER).stroke();
+      doc.fontSize(7).font('Helvetica-Bold').fillColor(MUTED)
+        .text('TAUX',        cTaux, ry + 5, { lineBreak: false })
+        .text('BASE HT',     cBase, ry + 5, { width: cBaseW, align: 'right', lineBreak: false })
+        .text('MONTANT TVA', cMtv,  ry + 5, { width: cMtvW,  align: 'right', lineBreak: false });
+
+      let tvaRowY = ry + 18;
+      for (const [rate, tvaAmt] of tvaRates) {
+        const baseHT = htByRate.get(rate) ?? 0;
+        doc.rect(tvaTblX, tvaRowY, tvaTblW, 18).fillColor(WHITE).fill();
+        doc.rect(tvaTblX, tvaRowY, tvaTblW, 18).lineWidth(0.3).strokeColor(BORDER).stroke();
+        doc.fontSize(8).font('Helvetica').fillColor(INK)
+          .text(`${(rate * 100).toFixed(1).replace('.', ',')} %`, cTaux, tvaRowY + 5, { lineBreak: false })
+          .text(`${baseHT.toFixed(2)} €`, cBase, tvaRowY + 5, { width: cBaseW, align: 'right', lineBreak: false })
+          .text(`${tvaAmt.toFixed(2)} €`, cMtv,  tvaRowY + 5, { width: cMtvW,  align: 'right', lineBreak: false });
+        tvaRowY += 18;
+      }
+    }
+
+    // Right: totals block (HT / TVA globale / TTC)
     doc.rect(350, ry, 187, totalsH).fillColor(SURFACE).fill();
     doc.rect(350, ry, 187, totalsH).lineWidth(0.5).strokeColor(BORDER).stroke();
 
@@ -720,10 +774,9 @@ export function generatePDVDeliveryPDF(
       .text('Total HT', 362, ry + 12, { lineBreak: false })
       .text(`${totalHTSum.toFixed(2)} €`, tbValX, ry + 12, { width: tbValW, align: 'right', lineBreak: false });
 
-    const tvaTotal = tvaRates.reduce((s, [, amt]) => s + amt, 0);
     doc.fontSize(8).font('Helvetica').fillColor(MUTED)
       .text('TVA', 362, ry + 30, { lineBreak: false })
-      .text(tvaRates.length > 0 ? `${tvaTotal.toFixed(2)} €` : '—', tbValX, ry + 30, { width: tbValW, align: 'right', lineBreak: false });
+      .text(tvaRates.length > 0 ? `${totalTVA.toFixed(2)} €` : '—', tbValX, ry + 30, { width: tbValW, align: 'right', lineBreak: false });
 
     const sepY = ry + 48;
     const ttcY = sepY + 10;
