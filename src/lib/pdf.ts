@@ -565,8 +565,8 @@ export function generatePDVDeliveryPDF(
     const SIG_H      = 95;  // signature block height
     const PAGE_BOTTOM = 640; // leave room for signatures + footer on every page
 
-    // Column positions — DÉSIGNATION | QTÉ | UNITÉ | U/CARTON
-    const col = { desc: 58, descW: 257, qty: 317, qtyW: 45, unit: 364, unitW: 52, upc: 420, upcW: 117 };
+    // Column positions — DÉSIGNATION | U/CARTON | QTÉ | TOTAL UNITÉS
+    const col = { desc: 58, descW: 240, upc: 300, upcW: 70, qty: 372, qtyW: 65, tot: 439, totW: 98 };
 
     // ── Header ─────────────────────────────────────────────────────────────
     doc.fontSize(20).font('Helvetica-Bold').fillColor(PRIMARY)
@@ -639,16 +639,18 @@ export function generatePDVDeliveryPDF(
     const drawBLHeader = (y: number) => {
       doc.rect(50, y, 495, 22).fillColor(PRIMARY).fill();
       doc.fontSize(7.5).font('Helvetica-Bold').fillColor(WHITE)
-        .text('DÉSIGNATION', col.desc, y + 7, { width: col.descW, lineBreak: false })
-        .text('QTÉ',         col.qty,  y + 7, { width: col.qtyW,  align: 'right', lineBreak: false })
-        .text('UNITÉ',       col.unit, y + 7, { width: col.unitW, lineBreak: false })
-        .text('U/CARTON',    col.upc,  y + 7, { width: col.upcW,  align: 'right', lineBreak: false });
+        .text('DÉSIGNATION',   col.desc, y + 7, { width: col.descW, lineBreak: false })
+        .text('U/CARTON',      col.upc,  y + 7, { width: col.upcW,  align: 'right', lineBreak: false })
+        .text('QTÉ CARTONS',   col.qty,  y + 7, { width: col.qtyW,  align: 'right', lineBreak: false })
+        .text('TOTAL UNITÉS',  col.tot,  y + 7, { width: col.totW,  align: 'right', lineBreak: false });
       return y + 22;
     };
 
     ry = drawBLHeader(ry);
     let rowColorIdx = 0;
-    let totalQty = 0;
+    let totalQty   = 0;
+    let totalUnits = 0;
+    let allHaveUpc = true;
 
     for (const item of pdv.items) {
       doc.fontSize(8.5).font('Helvetica');
@@ -666,6 +668,8 @@ export function generatePDVDeliveryPDF(
       doc.rect(50, ry, 495, rowH).lineWidth(0.3).strokeColor(BORDER).stroke();
 
       totalQty += item.quantity;
+      if (item.units_per_carton != null) totalUnits += item.quantity * item.units_per_carton;
+      else allHaveUpc = false;
 
       doc.fontSize(8.5).font('Helvetica').fillColor(INK)
         .text(item.product_name, col.desc, ry + 6, { width: col.descW, lineBreak: false });
@@ -674,24 +678,27 @@ export function generatePDVDeliveryPDF(
           .text(`Réf. ${item.sku}`, col.desc, ry + 6 + Math.ceil(nameH), { width: col.descW, lineBreak: false });
       }
 
-      const upcStr = item.units_per_carton != null ? String(item.units_per_carton) : '—';
+      const upc    = item.units_per_carton ?? null;
+      const upcStr = upc != null ? String(upc) : '—';
+      const totStr = upc != null ? String(item.quantity * upc) : '—';
 
       doc.fontSize(8.5).font('Helvetica').fillColor(INK)
-        .text(String(item.quantity), col.qty,  ry + 6, { width: col.qtyW,  align: 'right', lineBreak: false })
-        .text(item.unit ?? '—',     col.unit, ry + 6, { width: col.unitW, lineBreak: false })
-        .text(upcStr,               col.upc,  ry + 6, { width: col.upcW,  align: 'right', lineBreak: false });
+        .text(upcStr,               col.upc, ry + 6, { width: col.upcW, align: 'right', lineBreak: false })
+        .text(String(item.quantity), col.qty, ry + 6, { width: col.qtyW, align: 'right', lineBreak: false })
+        .text(totStr,               col.tot, ry + 6, { width: col.totW, align: 'right', lineBreak: false });
 
       ry += rowH;
       rowColorIdx++;
     }
 
-    // QTÉ total row
+    // Total row
     if (ry + 22 > PAGE_BOTTOM) { doc.addPage(); ry = 50; }
     doc.rect(50, ry, 495, 22).fillColor(SURFACE).fill();
     doc.rect(50, ry, 495, 22).lineWidth(0.3).strokeColor(BORDER).stroke();
     doc.fontSize(8).font('Helvetica-Bold').fillColor(MUTED)
-      .text('TOTAL QTÉ', col.desc, ry + 7, { width: col.descW, lineBreak: false })
-      .text(String(totalQty), col.qty, ry + 7, { width: col.qtyW, align: 'right', lineBreak: false });
+      .text('TOTAUX', col.desc, ry + 7, { width: col.descW, lineBreak: false })
+      .text(String(totalQty), col.qty, ry + 7, { width: col.qtyW, align: 'right', lineBreak: false })
+      .text(allHaveUpc ? String(totalUnits) : '—', col.tot, ry + 7, { width: col.totW, align: 'right', lineBreak: false });
     ry += 22;
 
     // ── Signature block ────────────────────────────────────────────────────
