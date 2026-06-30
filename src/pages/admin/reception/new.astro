@@ -29,6 +29,7 @@ const today = new Date().toISOString().split('T')[0];
         <div class="field">
           <label for="received_at" class="label">Date de réception <span class="required">*</span></label>
           <input type="date" id="received_at" name="received_at" required class="input" value={today} />
+          <p id="dateHint" class="field-hint" style="display:none"></p>
         </div>
         <div class="field field--full">
           <label for="notes" class="label">Notes (optionnel)</label>
@@ -225,6 +226,25 @@ function toggleHint() {
 
 document.getElementById('addRowBtn')?.addEventListener('click', () => addRow(null));
 
+// Date hint: warn when backdating
+const dateInput = document.getElementById('received_at');
+const dateHint  = document.getElementById('dateHint');
+
+function checkDateHint() {
+  if (!dateInput || !dateHint) return;
+  const val   = dateInput.value;
+  const today = new Date().toISOString().slice(0, 10);
+  if (val && val < today) {
+    dateHint.textContent = '⚠ Date antérieure à aujourd\'hui — cette réception sera enregistrée à titre historique uniquement. Le stock et le PUMP ne seront pas modifiés.';
+    dateHint.style.display = '';
+  } else {
+    dateHint.style.display = 'none';
+  }
+}
+
+dateInput?.addEventListener('change', checkDateHint);
+checkDateHint();
+
 // Start with one empty row
 addRow(null);
 </script>
@@ -296,6 +316,17 @@ addRow(null);
 }
 
 .required { color: oklch(0.55 0.18 25); }
+
+.field-hint {
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  color: oklch(0.42 0.12 70);
+  background: oklch(0.96 0.05 75);
+  border: 1px solid oklch(0.88 0.09 75);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  line-height: 1.5;
+}
 
 .input {
   width: 100%;

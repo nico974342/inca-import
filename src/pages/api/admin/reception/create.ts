@@ -68,37 +68,45 @@ export const POST: APIRoute = async ({ request, cookies }) => {
     return Response.redirect(new URL('/admin/reception/new', request.url), 303);
   }
 
-  // For each product: fetch current state, compute new PUMP, update stock
-  for (const row of rows) {
-    const { data: prod } = await supabaseAdmin
-      .from('products')
-      .select('stock_quantity, prix_achat_moyen_ht')
-      .eq('id', row.productId)
-      .single();
+  // Compare receivedAt (YYYY-MM-DD) against today's server date.
+  // Both are plain date strings so lexicographic comparison is correct.
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const isLive   = receivedAt >= todayStr; // today or future → apply stock + PUMP
 
-    if (!prod) continue;
+  if (isLive) {
+    // For each product: fetch current state, compute new PUMP, update stock
+    for (const row of rows) {
+      const { data: prod } = await supabaseAdmin
+        .from('products')
+        .select('stock_quantity, prix_achat_moyen_ht')
+        .eq('id', row.productId)
+        .single();
 
-    const oldQty  = prod.stock_quantity ?? 0;
-    const oldPump = prod.prix_achat_moyen_ht;
+      if (!prod) continue;
 
-    let newPump: number;
-    if (oldQty <= 0 || oldPump == null) {
-      // No existing stock or no PUMP: new PUMP is just the received cost
-      newPump = row.unitCost;
-    } else {
-      newPump = ((oldQty * oldPump) + (row.quantity * row.unitCost)) / (oldQty + row.quantity);
+      const oldQty  = prod.stock_quantity ?? 0;
+      const oldPump = prod.prix_achat_moyen_ht;
+
+      let newPump: number;
+      if (oldQty <= 0 || oldPump == null) {
+        newPump = row.unitCost;
+      } else {
+        newPump = ((oldQty * oldPump) + (row.quantity * row.unitCost)) / (oldQty + row.quantity);
+      }
+
+      const newQty = oldQty + row.quantity;
+
+      await supabaseAdmin
+        .from('products')
+        .update({
+          stock_quantity:      newQty,
+          prix_achat_moyen_ht: Math.round(newPump * 10000) / 10000,
+        })
+        .eq('id', row.productId);
     }
-
-    const newQty = oldQty + row.quantity;
-
-    await supabaseAdmin
-      .from('products')
-      .update({
-        stock_quantity:       newQty,
-        prix_achat_moyen_ht:  Math.round(newPump * 10000) / 10000,
-      })
-      .eq('id', row.productId);
   }
+  // Backdated receptions (received_at < today): records saved for history only,
+  // no stock_quantity or prix_achat_moyen_ht change.
 
   // Audit log
   await logAdminAction({
@@ -109,11 +117,13 @@ export const POST: APIRoute = async ({ request, cookies }) => {
     targetLabel:  supplierName,
     details: {
       received_at:    receivedAt,
+      historique:     !isLive,
       products_count: rows.length,
       total_units:    rows.reduce((s, r) => s + r.quantity, 0),
       total_cost_ht:  rows.reduce((s, r) => s + r.quantity * r.unitCost, 0),
     },
   });
 
-  return Response.redirect(new URL('/admin/reception?success=1', request.url), 303);
+  const successParam = isLive ? 'success=1' : 'success=historical';
+  return Response.redirect(new URL(`/admin/reception?${successParam}`, request.url), 303);
 };
