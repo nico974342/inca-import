@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
+import { logAdminAction } from '../../../../../lib/audit';
 
 export const POST: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -56,6 +57,15 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
     const { error: authErr } = await supabaseAdmin.auth.admin.deleteUser(client.user_id);
     if (authErr) console.error('[delete client] auth.deleteUser error:', authErr.message);
   }
+
+  await logAdminAction({
+    adminEmail: user.email ?? 'inconnu',
+    action: 'client.suppression',
+    targetType: 'client',
+    targetId: id,
+    targetLabel: client.email ?? id,
+    details: { orders_deleted: orderIds.length },
+  });
 
   return Response.redirect(new URL('/admin/clients?deleted=1', request.url).toString(), 303);
 };

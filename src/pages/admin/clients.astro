@@ -3,10 +3,13 @@ import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { sanitizeText, sanitizeEmail } from '../../lib/sanitize';
 import { sendClientActivationEmail } from '../../lib/email';
+import { logAdminAction } from '../../lib/audit';
 
 if (Astro.request.method === 'POST') {
   const data   = await Astro.request.formData();
   const action = data.get('action') as string;
+
+  const adminEmail = (Astro.locals as any).user?.email ?? 'inconnu';
 
   if (action === 'convert') {
     const contactId = data.get('contact_id') as string;
@@ -28,13 +31,31 @@ if (Astro.request.method === 'POST') {
         status: 'actif',
       });
       await supabaseAdmin.from('contact_requests').update({ status: 'converti' }).eq('id', contact.id);
+      await logAdminAction({
+        adminEmail,
+        action: 'client.conversion',
+        targetType: 'client',
+        targetLabel: contact.societe ?? contact.nom,
+        details: { email: contact.email },
+      });
     }
   } else if (action === 'update_client') {
     const id     = data.get('id')     as string;
     const status = data.get('status') as string;
     const notes  = sanitizeText(data.get('notes') as string, 500);
     if (id && status) {
+      const { data: prev } = await supabaseAdmin.from('client_accounts').select('nom, societe, status').eq('id', id).single();
       await supabaseAdmin.from('client_accounts').update({ status, notes: notes || null }).eq('id', id);
+      if (prev && prev.status !== status) {
+        await logAdminAction({
+          adminEmail,
+          action: 'client.statut',
+          targetType: 'client',
+          targetId: id,
+          targetLabel: prev.societe ?? prev.nom,
+          details: { ancien: prev.status, nouveau: status },
+        });
+      }
     }
   } else if (action === 'activate_client') {
     const id = data.get('id') as string;
@@ -55,6 +76,14 @@ if (Astro.request.method === 'POST') {
           console.error('[admin/clients] activation email failed:', e);
         }
       }
+      await logAdminAction({
+        adminEmail,
+        action: 'client.activation',
+        targetType: 'client',
+        targetId: id,
+        targetLabel: client?.nom ?? id,
+        details: { email: client?.email },
+      });
     }
   } else if (action === 'create_client') {
     const nom           = sanitizeText(data.get('nom')            as string, 120);
@@ -68,6 +97,13 @@ if (Astro.request.method === 'POST') {
       await supabaseAdmin.from('client_accounts').insert({
         nom, societe: societe || null, telephone: telephone || null, email,
         points_de_vente: pointsDeVente || null, notes: notes || null, status,
+      });
+      await logAdminAction({
+        adminEmail,
+        action: 'client.creation',
+        targetType: 'client',
+        targetLabel: societe || nom,
+        details: { email, status },
       });
     }
   } else if (action === 'update_contact_notes') {

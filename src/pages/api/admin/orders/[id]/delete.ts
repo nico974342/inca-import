@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
+import { logAdminAction } from '../../../../../lib/audit';
 
 export const POST: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -11,8 +12,18 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
   const { id } = params;
   if (!id) return new Response('Non trouvé', { status: 404 });
 
+  const { data: order } = await supabaseAdmin.from('orders').select('nom, societe').eq('id', id).single();
+
   await supabaseAdmin.from('order_items').delete().eq('order_id', id);
   await supabaseAdmin.from('orders').delete().eq('id', id);
+
+  await logAdminAction({
+    adminEmail: user.email ?? 'inconnu',
+    action: 'commande.suppression',
+    targetType: 'order',
+    targetId: id,
+    targetLabel: order ? `${order.societe ?? order.nom}` : id,
+  });
 
   return Response.redirect(new URL('/admin/commandes', request.url).toString(), 303);
 };

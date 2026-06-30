@@ -3,6 +3,7 @@ import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { sendLowStockAlert, sendOrderStatusEmail } from '../../lib/email';
 import { sendOrderConfirmedWebhook } from '../../lib/webhooks';
+import { logAdminAction } from '../../lib/audit';
 
 // Handle POST: update order status
 if (Astro.request.method === 'POST') {
@@ -138,6 +139,17 @@ if (Astro.request.method === 'POST') {
           date: current.created_at,
         });
       }
+    }
+
+    if (current && current.status !== new_status) {
+      await logAdminAction({
+        adminEmail: (Astro.locals as any).user?.email ?? 'inconnu',
+        action: 'commande.statut',
+        targetType: 'order',
+        targetId: order_id,
+        targetLabel: current.societe ?? current.nom,
+        details: { ancien: current.status, nouveau: new_status },
+      });
     }
   }
   return Astro.redirect('/admin/commandes');

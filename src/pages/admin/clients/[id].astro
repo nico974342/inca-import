@@ -2,6 +2,7 @@
 import AdminLayout from '../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../lib/supabase';
 import { sanitizeText, sanitizeEmail } from '../../../lib/sanitize';
+import { logAdminAction } from '../../../lib/audit';
 
 const { id } = Astro.params;
 let formError = '';
@@ -83,6 +84,13 @@ if (Astro.request.method === 'POST') {
         ? 'Cet email est déjà utilisé par un autre client.'
         : `Erreur : ${error.message}`;
     } else {
+      await logAdminAction({
+        adminEmail: (Astro.locals as any).user?.email ?? 'inconnu',
+        action: 'client.modification',
+        targetType: 'client',
+        targetId: id!,
+        targetLabel: societe || nom,
+      });
       return Astro.redirect(`/admin/clients/${id}`);
     }
   }

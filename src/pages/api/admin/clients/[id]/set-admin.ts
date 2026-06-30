@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
+import { logAdminAction } from '../../../../../lib/audit';
 
 export const POST: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -56,6 +57,15 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
     user_id: authUserId,
     ...(action === 'promote' ? { status: 'actif' } : {}),
   }).eq('id', id);
+
+  await logAdminAction({
+    adminEmail: user.email ?? 'inconnu',
+    action: action === 'promote' ? 'client.promotion_admin' : 'client.retrogradation',
+    targetType: 'client',
+    targetId: id,
+    targetLabel: client.email,
+    details: { nouveau_role: newRole },
+  });
 
   return Response.redirect(`${base}/admin/clients/${id}`, 303);
 };
