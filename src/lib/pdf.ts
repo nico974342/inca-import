@@ -27,6 +27,7 @@ export interface DeliveryItem {
   sku?: string | null;
   price_ht?: number | null;
   tva_rate?: number | null;
+  units_per_carton?: number | null;
 }
 
 export interface DeliveryPDV {
@@ -561,10 +562,11 @@ export function generatePDVDeliveryPDF(
     doc.on('data', (c: Buffer) => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
-    const PAGE_BOTTOM = 730;
+    const SIG_H      = 95;  // signature block height
+    const PAGE_BOTTOM = 640; // leave room for signatures + footer on every page
 
-    // Column positions — DÉSIGNATION | QTÉ | UNITÉ
-    const col = { desc: 58, descW: 340, qty: 404, qtyW: 60, unit: 466, unitW: 72 };
+    // Column positions — DÉSIGNATION | QTÉ | UNITÉ | U/CARTON
+    const col = { desc: 58, descW: 257, qty: 317, qtyW: 45, unit: 364, unitW: 52, upc: 420, upcW: 117 };
 
     // ── Header ─────────────────────────────────────────────────────────────
     doc.fontSize(20).font('Helvetica-Bold').fillColor(PRIMARY)
@@ -639,7 +641,8 @@ export function generatePDVDeliveryPDF(
       doc.fontSize(7.5).font('Helvetica-Bold').fillColor(WHITE)
         .text('DÉSIGNATION', col.desc, y + 7, { width: col.descW, lineBreak: false })
         .text('QTÉ',         col.qty,  y + 7, { width: col.qtyW,  align: 'right', lineBreak: false })
-        .text('UNITÉ',       col.unit, y + 7, { width: col.unitW, lineBreak: false });
+        .text('UNITÉ',       col.unit, y + 7, { width: col.unitW, lineBreak: false })
+        .text('U/CARTON',    col.upc,  y + 7, { width: col.upcW,  align: 'right', lineBreak: false });
       return y + 22;
     };
 
@@ -671,9 +674,12 @@ export function generatePDVDeliveryPDF(
           .text(`Réf. ${item.sku}`, col.desc, ry + 6 + Math.ceil(nameH), { width: col.descW, lineBreak: false });
       }
 
+      const upcStr = item.units_per_carton != null ? String(item.units_per_carton) : '—';
+
       doc.fontSize(8.5).font('Helvetica').fillColor(INK)
         .text(String(item.quantity), col.qty,  ry + 6, { width: col.qtyW,  align: 'right', lineBreak: false })
-        .text(item.unit ?? '—',     col.unit, ry + 6, { width: col.unitW, lineBreak: false });
+        .text(item.unit ?? '—',     col.unit, ry + 6, { width: col.unitW, lineBreak: false })
+        .text(upcStr,               col.upc,  ry + 6, { width: col.upcW,  align: 'right', lineBreak: false });
 
       ry += rowH;
       rowColorIdx++;
@@ -687,6 +693,29 @@ export function generatePDVDeliveryPDF(
       .text('TOTAL QTÉ', col.desc, ry + 7, { width: col.descW, lineBreak: false })
       .text(String(totalQty), col.qty, ry + 7, { width: col.qtyW, align: 'right', lineBreak: false });
     ry += 22;
+
+    // ── Signature block ────────────────────────────────────────────────────
+    // Ensure it fits on the current page; if not, open a new one
+    if (ry + 28 + SIG_H > PAGE_BOTTOM + SIG_H + 10) { doc.addPage(); ry = 50; }
+    ry += 28;
+
+    const sigBoxW = 234;
+    const sigGap  = 27;
+    const sigR    = 50 + sigBoxW + sigGap; // x of second box
+
+    const drawSigBox = (x: number, label: string) => {
+      doc.rect(x, ry, sigBoxW, SIG_H).lineWidth(0.5).strokeColor(BORDER).fillAndStroke(SURFACE, BORDER);
+      doc.fontSize(6.5).font('Helvetica-Bold').fillColor(MUTED)
+        .text(label, x + 12, ry + 10, { width: sigBoxW - 24, lineBreak: false });
+      // Date line near bottom
+      doc.fontSize(8).font('Helvetica').fillColor(MUTED)
+        .text('Date :', x + 12, ry + SIG_H - 22, { lineBreak: false });
+      doc.moveTo(x + 42, ry + SIG_H - 13).lineTo(x + sigBoxW - 12, ry + SIG_H - 13)
+        .lineWidth(0.4).strokeColor(BORDER).stroke();
+    };
+
+    drawSigBox(50,   'SIGNATURE TRANSPORTEUR');
+    drawSigBox(sigR, 'SIGNATURE DESTINATAIRE');
 
     // Footer on every page
     const totalPages = doc.bufferedPageRange().count;

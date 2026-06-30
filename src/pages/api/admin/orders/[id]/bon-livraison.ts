@@ -23,7 +23,7 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
 
   const { data: items } = await supabaseAdmin
     .from('order_items')
-    .select('product_name, quantity, unit, products(price_ht, sku, tva_rate)')
+    .select('product_name, quantity, unit, products(price_ht, sku, tva_rate, units_per_carton)')
     .eq('order_id', id);
 
   // Reuse existing BL number or generate and persist a new one
@@ -78,9 +78,10 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
         product_name: it.product_name,
         quantity:     it.quantity,
         unit:         it.unit ?? null,
-        price_ht:     (it as any).products?.price_ht  ?? null,
-        sku:          (it as any).products?.sku        ?? null,
-        tva_rate:     (it as any).products?.tva_rate   ?? 0.085,
+        price_ht:          (it as any).products?.price_ht        ?? null,
+        sku:               (it as any).products?.sku             ?? null,
+        tva_rate:          (it as any).products?.tva_rate        ?? 0.085,
+        units_per_carton:  (it as any).products?.units_per_carton ?? null,
       })),
       client_nom:                  order.nom,
       client_societe:              order.societe ?? null,
