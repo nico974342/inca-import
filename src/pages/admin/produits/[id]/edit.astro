@@ -14,6 +14,16 @@ const { data: product } = await supabaseAdmin
 
 if (!product) return Astro.redirect('/admin/produits');
 
+// Purchase history for this product
+const { data: purchaseHistory } = await supabaseAdmin
+  .from('stock_reception_items')
+  .select('quantity, unit_cost_ht, stock_receptions(supplier_name, received_at, stock_applied)')
+  .eq('product_id', id)
+  .order('created_at', { ascending: false })
+  .limit(50);
+
+const pump = (product as any).prix_achat_moyen_ht as number | null;
+
 if (Astro.request.method === 'POST') {
   const data = await Astro.request.formData();
   const name        = (data.get('name')        as string)?.trim();
@@ -169,10 +179,221 @@ if (Astro.request.method === 'POST') {
       </form>
     </div>
   </div>
+
+  <!-- ── Achats & Coût PUMP ──────────────────────────────────────────── -->
+  <div class="pump-shell">
+    <div class="pump-header">
+      <h2 class="pump-title">Achats &amp; Coût</h2>
+      <a href={`/admin/reception/new`} class="btn btn-ghost btn-sm">+ Enregistrer une réception</a>
+    </div>
+
+    <div class="pump-stat-row">
+      <div class="pump-stat">
+        <span class="pump-stat-label">Prix de vente HT</span>
+        <span class="pump-stat-value">
+          {(product as any).price_ht != null
+            ? Number((product as any).price_ht).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })
+            : '—'}
+        </span>
+      </div>
+      <div class="pump-stat">
+        <span class="pump-stat-label">Coût moyen pondéré (PUMP)</span>
+        <span class="pump-stat-value pump-stat-value--pump">
+          {pump != null
+            ? pump.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 4, maximumFractionDigits: 4 })
+            : <span class="pump-none">Non calculé</span>}
+        </span>
+      </div>
+      {pump != null && (product as any).price_ht != null && (
+        (() => {
+          const marge = ((Number((product as any).price_ht) - pump) / Number((product as any).price_ht)) * 100;
+          const cls   = marge >= 30 ? 'green' : marge >= 15 ? 'amber' : 'red';
+          return (
+            <div class="pump-stat">
+              <span class="pump-stat-label">Marge</span>
+              <span class={`pump-marge pump-marge--${cls}`}>{marge.toFixed(1)} %</span>
+            </div>
+          );
+        })()
+      )}
+    </div>
+
+    {(purchaseHistory ?? []).length === 0 ? (
+      <p class="pump-empty">Aucun achat enregistré pour ce produit.</p>
+    ) : (
+      <table class="pump-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Fournisseur</th>
+            <th class="th-num">Qté</th>
+            <th class="th-num">Coût unitaire HT</th>
+            <th class="th-num">Total HT</th>
+            <th>Stock</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(purchaseHistory ?? []).map((h: any) => {
+            const rec = h.stock_receptions ?? {};
+            return (
+              <tr>
+                <td class="td-date">{new Date(rec.received_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })}</td>
+                <td class="td-supplier">{rec.supplier_name ?? '—'}</td>
+                <td class="td-num">{h.quantity}</td>
+                <td class="td-num">{Number(h.unit_cost_ht).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2 })}</td>
+                <td class="td-num">{(h.quantity * h.unit_cost_ht).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2 })}</td>
+                <td>
+                  {rec.stock_applied
+                    ? <span class="rec-chip rec-chip--live">Stock appliqué</span>
+                    : <span class="rec-chip rec-chip--histo">Historique</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    )}
+  </div>
 </AdminLayout>
 
 <style>
 .form-shell { max-width: 720px; }
+
+/* ── PUMP / Achats section ──────────────────────────────── */
+.pump-shell {
+  max-width: 720px;
+  margin-top: var(--space-6);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.pump-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.pump-title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-ink);
+  margin: 0;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-ink);
+  cursor: pointer;
+  transition: background var(--dur-fast);
+}
+.btn:hover { background: var(--color-surface-2); }
+.btn-sm { font-size: var(--text-xs); padding: 5px 12px; }
+
+.pump-stat-row {
+  display: flex;
+  gap: var(--space-6);
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
+}
+
+.pump-stat { display: flex; flex-direction: column; gap: var(--space-1); }
+
+.pump-stat-label {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+
+.pump-stat-value {
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--color-ink);
+}
+
+.pump-stat-value--pump { color: oklch(0.38 0.12 220); }
+
+.pump-none {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 400;
+  color: var(--color-muted);
+  font-style: italic;
+}
+
+.pump-marge {
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  padding: 2px 10px;
+  border-radius: var(--radius-full);
+  display: inline-block;
+}
+.pump-marge--green { background: oklch(0.92 0.08 145); color: oklch(0.32 0.14 145); }
+.pump-marge--amber { background: oklch(0.95 0.07 60);  color: oklch(0.38 0.15 55);  }
+.pump-marge--red   { background: oklch(0.95 0.04 25);  color: oklch(0.46 0.18 25);  }
+
+.pump-empty {
+  padding: var(--space-6) var(--space-6);
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  font-style: italic;
+  margin: 0;
+}
+
+.pump-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.pump-table thead th {
+  padding: var(--space-2) var(--space-4);
+  text-align: left;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+.pump-table .th-num { text-align: right; }
+
+.pump-table tbody td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-ink);
+}
+.pump-table tbody tr:last-child td { border-bottom: none; }
+.pump-table tbody tr:hover td { background: var(--color-surface); }
+
+.td-date     { white-space: nowrap; font-size: var(--text-xs); color: var(--color-muted); }
+.td-supplier { font-weight: 500; }
+.td-num      { font-family: var(--font-mono); text-align: right; }
+
+.rec-chip {
+  display: inline-block;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+}
+.rec-chip--live  { background: oklch(0.92 0.08 145); color: oklch(0.32 0.14 145); }
+.rec-chip--histo { background: oklch(0.95 0.06 75);  color: oklch(0.36 0.12 75);  }
 
 .form-card {
   background: var(--color-bg);
