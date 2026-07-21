@@ -5,7 +5,6 @@ import { supabaseAdmin } from '../../../lib/supabase';
 const { data: products } = await supabaseAdmin
   .from('products')
   .select('id, name, sku, stock_quantity, prix_achat_moyen_ht')
-  .eq('in_stock', true)
   .order('name');
 
 const today = new Date().toISOString().split('T')[0];

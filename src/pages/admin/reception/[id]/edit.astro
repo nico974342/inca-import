@@ -16,7 +16,6 @@ if (!reception) return Astro.redirect('/admin/reception', 302);
 const { data: products } = await supabaseAdmin
   .from('products')
   .select('id, name, sku, stock_quantity, prix_achat_moyen_ht')
-  .eq('in_stock', true)
   .order('name');
 
 const existingItems = ((reception as any).stock_reception_items ?? []).map((it: any) => ({
