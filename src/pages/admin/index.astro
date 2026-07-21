@@ -149,11 +149,13 @@ const hasPendingClients    = (clientsEnAttente ?? 0) > 0;
       <div class="stat-body">
         <span class="stat-value stat-value--ca">{formatCA(caMonth)}</span>
         <span class="stat-label">CA du mois (HT)</span>
-        {margeMonth != null && (
+        {margeMonth != null ? (
           <span class={`stat-marge ${margeMonth >= 30 ? 'stat-marge--green' : margeMonth >= 15 ? 'stat-marge--amber' : 'stat-marge--red'}`}>
-            Marge {margeMonth.toFixed(1)}%
+            Marge {margeMonth.toFixed(1)} %
           </span>
-        )}
+        ) : caMonth > 0 ? (
+          <span class="stat-marge stat-marge--none">Marge — (PUMP non défini)</span>
+        ) : null}
       </div>
     </div>
 
@@ -362,6 +364,7 @@ a.stat-card--urgent:hover { border-color: var(--color-primary); }
 .stat-marge--green { background: oklch(0.92 0.08 145); color: oklch(0.32 0.14 145); }
 .stat-marge--amber { background: oklch(0.95 0.07 60);  color: oklch(0.38 0.15 55);  }
 .stat-marge--red   { background: oklch(0.95 0.04 25);  color: oklch(0.46 0.18 25);  }
+.stat-marge--none  { background: var(--color-surface-2); color: var(--color-muted); font-weight: 500; }
 
 .stat-icon {
   width: 38px;

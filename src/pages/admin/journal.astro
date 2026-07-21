@@ -1,4 +1,4 @@
----
+﻿---
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 
@@ -33,6 +33,7 @@ const ACTION_LABELS: Record<string, string> = {
   'produit.creation':       'Produit créé',
   'reception.creation':     'Réception stock',
   'reception.modification': 'Réception modifiée',
+  'reception.suppression':  'Réception supprimée',
 };
 
 const ACTION_COLOR: Record<string, string> = {
@@ -50,6 +51,7 @@ const ACTION_COLOR: Record<string, string> = {
   'produit.creation':       'green',
   'reception.creation':     'green',
   'reception.modification': 'blue',
+  'reception.suppression':  'red',
 };
 
 function formatDateTime(iso: string) {

@@ -177,7 +177,7 @@ const orderIds = orders.map(o => o.id);
 const { data: allItems } = orderIds.length
   ? await supabaseAdmin
       .from('order_items')
-      .select('order_id, product_name, quantity, unit, products(price_ht)')
+      .select('order_id, product_name, quantity, unit, products(price_ht, prix_achat_moyen_ht)')
       .in('order_id', orderIds)
   : { data: [] };
 
@@ -195,6 +195,25 @@ function orderTotal(orderId: string): number | null {
     if (price != null) { total += Number(price) * item.quantity; hasPrice = true; }
   }
   return hasPrice ? total : null;
+}
+
+function orderMargin(orderId: string): { margeHt: number; pct: number; partial: boolean } | null {
+  const items = itemsByOrder[orderId] ?? [];
+  let margeHt = 0, caHt = 0, hasPump = false, missingPump = false;
+  for (const item of items) {
+    const prix = (item as any).products?.price_ht;
+    const pump = (item as any).products?.prix_achat_moyen_ht;
+    if (prix == null) continue;
+    caHt += Number(prix) * item.quantity;
+    if (pump != null) {
+      margeHt += (Number(prix) - Number(pump)) * item.quantity;
+      hasPump = true;
+    } else {
+      missingPump = true;
+    }
+  }
+  if (!hasPump || caHt === 0) return null;
+  return { margeHt, pct: (margeHt / caHt) * 100, partial: missingPump };
 }
 
 function pennylaneSummary(order: (typeof orders)[number], items: any[], total: number | null): string {
@@ -281,6 +300,7 @@ function shortId(id: string) {
       {orders.map(order => {
         const items    = itemsByOrder[order.id] ?? [];
         const total    = orderTotal(order.id);
+        const margin   = orderMargin(order.id);
         const status   = order.status ?? 'en_attente';
         const colorKey = STATUS_COLOR[status] ?? 'muted';
         return (
@@ -366,6 +386,17 @@ function shortId(id: string) {
                   </table>
                 ) : (
                   <p class="no-items">Aucun article enregistré.</p>
+                )}
+
+                {margin !== null && (
+                  <div class={`margin-bar ${margin.pct >= 30 ? 'margin-bar--green' : margin.pct >= 15 ? 'margin-bar--amber' : 'margin-bar--red'}`}>
+                    <span class="margin-label">
+                      Marge{margin.partial ? '*' : ''} :
+                    </span>
+                    <span class="margin-ht">{margin.margeHt >= 0 ? '+' : ''}{margin.margeHt.toFixed(2).replace('.', ',')} € HT</span>
+                    <span class="margin-pct">{margin.pct.toFixed(1)} %</span>
+                    {margin.partial && <span class="margin-partial">* certains produits sans PUMP</span>}
+                  </div>
                 )}
 
                 {order.notes && (
@@ -777,6 +808,41 @@ details[open] .chevron { transform: rotate(180deg); }
   color: var(--color-muted);
   padding: var(--space-3) 0;
 }
+
+/* ── Order margin bar ──────────────────────────── */
+.margin-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+.margin-bar--green { background: oklch(0.94 0.06 145); border: 1px solid oklch(0.84 0.09 145); }
+.margin-bar--amber { background: oklch(0.96 0.06 70);  border: 1px solid oklch(0.88 0.09 70);  }
+.margin-bar--red   { background: oklch(0.97 0.03 25);  border: 1px solid oklch(0.88 0.07 25);  }
+
+.margin-label { font-weight: 600; color: var(--color-ink); }
+
+.margin-ht {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--color-ink);
+}
+
+.margin-pct {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+}
+.margin-bar--green .margin-pct { background: oklch(0.88 0.10 145); color: oklch(0.30 0.14 145); }
+.margin-bar--amber .margin-pct { background: oklch(0.91 0.10 70);  color: oklch(0.36 0.14 65);  }
+.margin-bar--red   .margin-pct { background: oklch(0.92 0.07 25);  color: oklch(0.44 0.18 25);  }
+
+.margin-partial { color: var(--color-muted); margin-left: auto; font-style: italic; }
 
 .order-notes {
   font-size: var(--text-sm);

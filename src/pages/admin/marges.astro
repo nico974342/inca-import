@@ -1,0 +1,353 @@
+---
+import AdminLayout from '../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../lib/supabase';
+
+// Last 12 months (full calendar months, oldest first)
+const now = new Date();
+const months: { label: string; start: string; end: string }[] = [];
+for (let i = 11; i >= 0; i--) {
+  const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+  const start = d.toISOString();
+  const end   = new Date(d.getFullYear(), d.getMonth() + 1, 1).toISOString();
+  const label = d.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+  months.push({ label: label.charAt(0).toUpperCase() + label.slice(1), start, end });
+}
+
+const rangeStart = months[0].start;
+
+// One query for all orders in the 12-month window
+const { data: orders } = await supabaseAdmin
+  .from('orders')
+  .select('id, created_at, order_items(quantity, products(price_ht, prix_achat_moyen_ht))')
+  .in('status', ['confirmee', 'en_preparation', 'expediee', 'livree'])
+  .gte('created_at', rangeStart);
+
+// Aggregate by month index
+type MonthRow = {
+  label:        string;
+  caHt:         number;
+  costHt:       number;
+  margeHt:      number;
+  pct:          number | null;
+  orderCount:   number;
+  hasFullPump:  boolean;
+};
+
+const rows: MonthRow[] = months.map(m => ({
+  label:       m.label,
+  caHt:        0,
+  costHt:      0,
+  margeHt:     0,
+  pct:         null,
+  orderCount:  0,
+  hasFullPump: true,
+}));
+
+for (const order of (orders ?? [])) {
+  const ts = new Date(order.created_at).getTime();
+  const mi = months.findIndex(m => ts >= new Date(m.start).getTime() && ts < new Date(m.end).getTime());
+  if (mi === -1) continue;
+
+  rows[mi].orderCount++;
+
+  for (const item of ((order as any).order_items ?? [])) {
+    const qty  = item.quantity ?? 0;
+    const prix = item.products?.price_ht != null ? Number(item.products.price_ht) : null;
+    const pump = item.products?.prix_achat_moyen_ht != null ? Number(item.products.prix_achat_moyen_ht) : null;
+    if (prix == null) continue;
+    rows[mi].caHt += prix * qty;
+    if (pump != null) {
+      rows[mi].costHt  += pump * qty;
+      rows[mi].margeHt += (prix - pump) * qty;
+    } else {
+      rows[mi].hasFullPump = false;
+    }
+  }
+}
+
+// Compute pct after aggregation
+for (const row of rows) {
+  if (row.caHt > 0 && row.margeHt !== 0) {
+    row.pct = (row.margeHt / row.caHt) * 100;
+  }
+}
+
+// Totals across all 12 months
+const totals = rows.reduce(
+  (acc, r) => ({
+    caHt:       acc.caHt   + r.caHt,
+    costHt:     acc.costHt + r.costHt,
+    margeHt:    acc.margeHt + r.margeHt,
+    orderCount: acc.orderCount + r.orderCount,
+  }),
+  { caHt: 0, costHt: 0, margeHt: 0, orderCount: 0 },
+);
+const totalPct = totals.caHt > 0 ? (totals.margeHt / totals.caHt) * 100 : null;
+
+function fmtEur(n: number) {
+  return n.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+
+function margeClass(pct: number | null) {
+  if (pct == null) return 'muted';
+  if (pct >= 30) return 'green';
+  if (pct >= 15) return 'amber';
+  return 'red';
+}
+---
+<AdminLayout title="Historique des marges" activeNav="marges">
+
+  <div class="page-head">
+    <h1 class="page-title">Historique des marges</h1>
+    <p class="page-desc">12 derniers mois — commandes confirmées / livrées</p>
+  </div>
+
+  <!-- Totals row -->
+  <div class="totals-grid">
+    <div class="total-card">
+      <span class="total-label">CA total HT</span>
+      <span class="total-value">{fmtEur(totals.caHt)}</span>
+    </div>
+    <div class="total-card">
+      <span class="total-label">Coût total HT</span>
+      <span class="total-value total-value--cost">{fmtEur(totals.costHt)}</span>
+    </div>
+    <div class="total-card">
+      <span class="total-label">Marge totale HT</span>
+      <span class="total-value total-value--marge">{fmtEur(totals.margeHt)}</span>
+    </div>
+    <div class={`total-card total-card--pct total-card--${margeClass(totalPct)}`}>
+      <span class="total-label">Taux de marge moyen</span>
+      <span class="total-value">{totalPct != null ? totalPct.toFixed(1) + ' %' : '—'}</span>
+    </div>
+  </div>
+
+  <!-- Monthly table -->
+  <div class="table-wrap">
+    <table class="marge-table">
+      <thead>
+        <tr>
+          <th class="col-month">Mois</th>
+          <th class="col-num">Commandes</th>
+          <th class="col-num">CA HT</th>
+          <th class="col-num">Coût HT</th>
+          <th class="col-num">Marge HT</th>
+          <th class="col-num">Marge %</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(r => {
+          const cls = margeClass(r.pct);
+          const isCurrent = r.label === months[11].label;
+          return (
+            <tr class={`${isCurrent ? 'row--current' : ''}`}>
+              <td class="col-month">
+                <span class="month-label">{r.label}</span>
+                {!r.hasFullPump && r.caHt > 0 && (
+                  <span class="partial-badge" title="Certains produits sans PUMP — marge partielle">~</span>
+                )}
+                {isCurrent && <span class="current-badge">Mois en cours</span>}
+              </td>
+              <td class="col-num td-muted">{r.orderCount > 0 ? r.orderCount : '—'}</td>
+              <td class="col-num td-mono">{r.caHt > 0 ? fmtEur(r.caHt) : '—'}</td>
+              <td class="col-num td-mono td-muted">{r.costHt > 0 ? fmtEur(r.costHt) : '—'}</td>
+              <td class="col-num td-mono td-bold">{r.margeHt !== 0 ? fmtEur(r.margeHt) : r.caHt > 0 ? '—' : ''}</td>
+              <td class="col-num">
+                {r.pct != null ? (
+                  <span class={`pct-chip pct-chip--${cls}`}>{r.pct.toFixed(1)} %</span>
+                ) : r.caHt > 0 ? (
+                  <span class="pct-chip pct-chip--none">PUMP ?</span>
+                ) : (
+                  <span class="td-muted">—</span>
+                )}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+      <tfoot>
+        <tr class="row--total">
+          <td class="col-month"><strong>Total 12 mois</strong></td>
+          <td class="col-num td-muted">{totals.orderCount}</td>
+          <td class="col-num td-mono"><strong>{fmtEur(totals.caHt)}</strong></td>
+          <td class="col-num td-mono td-muted">{fmtEur(totals.costHt)}</td>
+          <td class="col-num td-mono"><strong>{fmtEur(totals.margeHt)}</strong></td>
+          <td class="col-num">
+            {totalPct != null ? (
+              <span class={`pct-chip pct-chip--${margeClass(totalPct)}`}><strong>{totalPct.toFixed(1)} %</strong></span>
+            ) : <span class="td-muted">—</span>}
+          </td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <p class="footnote">
+    Marge HT = CA HT − coût PUMP. Les lignes marquées ~ incluent des produits sans PUMP — la marge est sous-estimée.
+    Configurez les coûts via <a href="/admin/reception/new">Réception stock</a>.
+  </p>
+
+</AdminLayout>
+
+<style>
+.page-head { margin-bottom: var(--space-6); }
+.page-title { font-size: var(--text-xl); font-weight: 700; color: var(--color-ink); margin: 0 0 var(--space-1); }
+.page-desc  { font-size: var(--text-sm); color: var(--color-muted); margin: 0; }
+
+/* Totals */
+.totals-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.total-card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.total-label {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-muted);
+}
+
+.total-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--color-ink);
+  letter-spacing: -0.02em;
+}
+
+.total-value--cost  { color: oklch(0.42 0.06 220); }
+.total-value--marge { color: oklch(0.38 0.12 145); }
+
+.total-card--pct .total-value { font-size: 1.75rem; }
+.total-card--green { border-color: oklch(0.80 0.12 145); background: oklch(0.96 0.04 145); }
+.total-card--green .total-value { color: oklch(0.32 0.14 145); }
+.total-card--amber { border-color: oklch(0.84 0.10 70); background: oklch(0.97 0.04 70); }
+.total-card--amber .total-value { color: oklch(0.38 0.15 55); }
+.total-card--red   { border-color: oklch(0.84 0.08 25); background: oklch(0.97 0.03 25); }
+.total-card--red   .total-value { color: oklch(0.46 0.18 25); }
+.total-card--muted { border-color: var(--color-border); }
+.total-card--muted .total-value { color: var(--color-muted); }
+
+/* Table */
+.table-wrap {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  overflow-x: auto;
+  margin-bottom: var(--space-4);
+}
+
+.marge-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.marge-table thead th {
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  background: var(--color-surface);
+  border-bottom: 2px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.marge-table tbody td,
+.marge-table tfoot td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+
+.marge-table tbody tr:last-child td { border-bottom: none; }
+.marge-table tbody tr:hover td { background: var(--color-surface); }
+
+.row--current td { background: oklch(0.97 0.02 220); }
+.row--current:hover td { background: oklch(0.95 0.03 220) !important; }
+
+.row--total td {
+  background: var(--color-surface);
+  border-top: 2px solid var(--color-border);
+  border-bottom: none;
+}
+
+.col-month { width: 26%; }
+.col-num   { text-align: right; white-space: nowrap; }
+
+.month-label { font-weight: 500; color: var(--color-ink); }
+
+.partial-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  background: oklch(0.95 0.07 60);
+  color: oklch(0.38 0.14 60);
+  border-radius: var(--radius-full);
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: var(--space-2);
+  cursor: help;
+}
+
+.current-badge {
+  display: inline-block;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: oklch(0.38 0.12 220);
+  background: oklch(0.93 0.05 220);
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  margin-left: var(--space-2);
+}
+
+.td-mono  { font-family: var(--font-mono); text-align: right; }
+.td-muted { color: var(--color-muted); }
+.td-bold  { font-weight: 600; }
+
+.pct-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 60px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+}
+.pct-chip--green { background: oklch(0.92 0.08 145); color: oklch(0.32 0.14 145); }
+.pct-chip--amber { background: oklch(0.95 0.07 60);  color: oklch(0.38 0.15 55);  }
+.pct-chip--red   { background: oklch(0.95 0.04 25);  color: oklch(0.46 0.18 25);  }
+.pct-chip--none  { background: var(--color-surface-2); color: var(--color-muted); font-weight: 400; }
+
+.footnote {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  margin: 0;
+  line-height: 1.6;
+}
+.footnote a { color: var(--color-primary-deep); }
+
+@media (max-width: 768px) {
+  .totals-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 480px) {
+  .totals-grid { grid-template-columns: 1fr; }
+}
+</style>

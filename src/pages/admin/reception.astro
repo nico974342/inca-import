@@ -2,10 +2,11 @@
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 
-const successParam  = Astro.url.searchParams.get('success');
-const success       = successParam === '1';
-const successHisto  = successParam === 'historical';
-const successUpdate = successParam === 'updated';
+const successParam    = Astro.url.searchParams.get('success');
+const success         = successParam === '1';
+const successHisto    = successParam === 'historical';
+const successUpdate   = successParam === 'updated';
+const successDeleted  = successParam === 'deleted';
 
 const { data: receptions } = await supabaseAdmin
   .from('stock_receptions')
@@ -36,6 +37,11 @@ function formatPrice(p: number) {
   {successUpdate && (
     <div class="alert alert--success" role="alert">
       Réception mise à jour — PUMP recalculé, stock ajusté si nécessaire.
+    </div>
+  )}
+  {successDeleted && (
+    <div class="alert alert--danger" role="alert">
+      Réception supprimée — stock corrigé et PUMP recalculé.
     </div>
   )}
 
@@ -75,6 +81,14 @@ function formatPrice(p: number) {
                   <span class="rec-stat rec-stat--cost">{formatPrice(totalCost)} HT</span>
                 </div>
                 <a href={`/admin/reception/${r.id}/edit`} class="edit-btn">Modifier</a>
+                <button
+                  type="button"
+                  class="delete-btn"
+                  data-id={r.id}
+                  data-supplier={r.supplier_name}
+                  data-date={formatDate(r.received_at)}
+                  data-stock={String((r as any).stock_applied)}
+                >Supprimer</button>
               </div>
             </div>
             {r.notes && <p class="rec-notes">{r.notes}</p>}
@@ -103,7 +117,49 @@ function formatPrice(p: number) {
       })}
     </div>
   )}
+
+  <!-- Delete confirm dialog -->
+  <dialog id="deleteDialog" class="del-dialog">
+    <div class="del-body">
+      <p class="del-title">Supprimer cette réception ?</p>
+      <p class="del-desc" id="deleteDesc"></p>
+      <p class="del-warn" id="deleteWarn"></p>
+      <div class="del-footer">
+        <button type="button" class="del-cancel" id="deleteCancelBtn">Annuler</button>
+        <form id="deleteForm" method="post">
+          <button type="submit" class="del-confirm">Supprimer définitivement</button>
+        </form>
+      </div>
+    </div>
+  </dialog>
+
 </AdminLayout>
+
+<script>
+  const dialog    = document.getElementById('deleteDialog') as HTMLDialogElement;
+  const desc      = document.getElementById('deleteDesc')!;
+  const warn      = document.getElementById('deleteWarn')!;
+  const form      = document.getElementById('deleteForm') as HTMLFormElement;
+  const cancelBtn = document.getElementById('deleteCancelBtn')!;
+
+  document.querySelectorAll<HTMLButtonElement>('.delete-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id       = btn.dataset.id!;
+      const supplier = btn.dataset.supplier!;
+      const date     = btn.dataset.date!;
+      const stock    = btn.dataset.stock === 'true';
+      desc.textContent = `${supplier} — ${date}`;
+      warn.textContent = stock
+        ? 'Cette réception a été appliquée au stock. La suppression corrigera les quantités et recalculera le PUMP.'
+        : 'Réception historique — seul le PUMP sera recalculé (le stock n\'avait pas été modifié).';
+      form.action = `/api/admin/reception/${id}/delete`;
+      dialog.showModal();
+    });
+  });
+
+  cancelBtn.addEventListener('click', () => dialog.close());
+  dialog.addEventListener('click', e => { if (e.target === dialog) dialog.close(); });
+</script>
 
 <style>
 .alert {
@@ -122,6 +178,11 @@ function formatPrice(p: number) {
   background: oklch(0.95 0.06 75);
   border: 1px solid oklch(0.85 0.10 75);
   color: oklch(0.36 0.12 75);
+}
+.alert--danger {
+  background: oklch(0.96 0.04 25);
+  border: 1px solid oklch(0.84 0.08 25);
+  color: oklch(0.40 0.16 25);
 }
 
 .toolbar {
@@ -271,4 +332,95 @@ function formatPrice(p: number) {
 .rec-items tbody tr:hover td { background: var(--color-surface); }
 
 .td-num { font-family: var(--font-mono); text-align: right; }
+
+.delete-btn {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: oklch(0.46 0.18 25);
+  padding: 4px 10px;
+  border: 1px solid oklch(0.84 0.08 25);
+  border-radius: var(--radius-sm);
+  background: oklch(0.97 0.03 25);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+.delete-btn:hover {
+  background: oklch(0.93 0.06 25);
+  border-color: oklch(0.75 0.12 25);
+}
+
+/* Delete dialog */
+.del-dialog {
+  border: none;
+  border-radius: var(--radius-md);
+  padding: 0;
+  box-shadow: 0 8px 32px oklch(0 0 0 / 0.18);
+  max-width: 420px;
+  width: calc(100vw - 2rem);
+}
+.del-dialog::backdrop { background: oklch(0 0 0 / 0.4); }
+
+.del-body {
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.del-title {
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--color-ink);
+  margin: 0;
+}
+
+.del-desc {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  margin: 0;
+}
+
+.del-warn {
+  font-size: var(--text-xs);
+  color: oklch(0.40 0.15 25);
+  background: oklch(0.97 0.03 25);
+  border: 1px solid oklch(0.88 0.07 25);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  margin: 0;
+}
+
+.del-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.del-cancel {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-muted);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-5);
+  cursor: pointer;
+  transition: background var(--dur-fast);
+}
+.del-cancel:hover { background: var(--color-surface-2); }
+
+.del-confirm {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: white;
+  background: oklch(0.46 0.18 25);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-5);
+  cursor: pointer;
+  transition: background var(--dur-fast);
+}
+.del-confirm:hover { background: oklch(0.38 0.20 25); }
 </style>
