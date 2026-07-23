@@ -45,14 +45,32 @@ export const ORDER_STATUS_COLOR: Record<OrderStatus, string> = {
   annulee:        'red',
 };
 
-// ── Client account status ──────────────────────────────────────────────
-export const CLIENT_STATUSES = ['en_attente', 'actif', 'suspendu'] as const;
+// ── Client account status (prospects live here too, as status='prospect') ──
+export const CLIENT_STATUSES = ['prospect', 'en_attente', 'actif', 'suspendu'] as const;
 export type ClientStatus = (typeof CLIENT_STATUSES)[number];
 
 export const CLIENT_STATUS_LABEL: Record<ClientStatus, string> = {
+  prospect:   'Prospect',
   en_attente: 'En attente',
   actif:      'Actif',
   suspendu:   'Suspendu',
+};
+
+export const CLIENT_STATUS_COLOR: Record<ClientStatus, string> = {
+  prospect:   'purple',
+  en_attente: 'amber',
+  actif:      'green',
+  suspendu:   'red',
+};
+
+// ── Client/prospect type ────────────────────────────────────────────────
+export const CLIENT_TYPES = ['station_service', 'superette', 'autre'] as const;
+export type ClientType = (typeof CLIENT_TYPES)[number];
+
+export const CLIENT_TYPE_LABEL: Record<ClientType, string> = {
+  station_service: 'Station-service',
+  superette:       'Supérette',
+  autre:           'Autre',
 };
 
 // ── Contact request status ─────────────────────────────────────────────
@@ -81,32 +99,26 @@ export function marginColorClass(pct: number | null): 'green' | 'amber' | 'red' 
   return 'red';
 }
 
-// ── Prospect type ────────────────────────────────────────────────────────
-export const PROSPECT_TYPES = ['station_service', 'superette', 'autre'] as const;
-export type ProspectType = (typeof PROSPECT_TYPES)[number];
+// ── GMROI (Gross Margin Return On Investment) ───────────────────────────
+// GMROI = marge brute générée sur la période / valeur moyenne du stock
+// immobilisé. Returns null (displayed as "—") when the ratio can't be
+// meaningfully computed: no stock on hand, no PUMP recorded (can't value
+// the stock), or no sales at all in the window (not enough data yet —
+// deliberately distinct from a real "sold but broke even" zero).
+export function computeGmroi(
+  stockQuantity: number | null | undefined,
+  pumpHt: number | null | undefined,
+  marginOverPeriod: number | null | undefined,
+): number | null {
+  if (!stockQuantity || stockQuantity <= 0) return null;
+  if (pumpHt == null || pumpHt <= 0) return null;
+  if (marginOverPeriod == null) return null;
+  return marginOverPeriod / (stockQuantity * pumpHt);
+}
 
-export const PROSPECT_TYPE_LABEL: Record<ProspectType, string> = {
-  station_service: 'Station-service',
-  superette:       'Supérette',
-  autre:           'Autre',
-};
-
-// ── Prospect status ──────────────────────────────────────────────────────
-export const PROSPECT_STATUSES = ['a_contacter', 'contacte', 'interesse', 'converti', 'pas_interesse'] as const;
-export type ProspectStatus = (typeof PROSPECT_STATUSES)[number];
-
-export const PROSPECT_STATUS_LABEL: Record<ProspectStatus, string> = {
-  a_contacter:   'À contacter',
-  contacte:      'Contacté',
-  interesse:     'Intéressé',
-  converti:      'Converti',
-  pas_interesse: 'Pas intéressé',
-};
-
-export const PROSPECT_STATUS_COLOR: Record<ProspectStatus, string> = {
-  a_contacter:   'muted',
-  contacte:      'blue',
-  interesse:     'amber',
-  converti:      'green',
-  pas_interesse: 'red',
-};
+export function gmroiColorClass(value: number | null): 'green' | 'amber' | 'red' | 'none' {
+  if (value == null) return 'none';
+  if (value > 2) return 'green';
+  if (value >= 1) return 'amber';
+  return 'red';
+}

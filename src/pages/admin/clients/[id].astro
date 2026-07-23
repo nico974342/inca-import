@@ -3,7 +3,11 @@ import AdminLayout from '../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../lib/supabase';
 import { sanitizeText, sanitizeEmail } from '../../../lib/sanitize';
 import { logAdminAction } from '../../../lib/audit';
-import { CLIENT_STATUS_LABEL as SHARED_CLIENT_STATUS_LABEL, ORDER_STATUS_LABEL as SHARED_ORDER_STATUS_LABEL, ORDER_STATUS_COLOR as SHARED_ORDER_STATUS_COLOR } from '../../../lib/constants';
+import {
+  CLIENT_STATUSES, CLIENT_STATUS_LABEL as SHARED_CLIENT_STATUS_LABEL,
+  CLIENT_TYPES, CLIENT_TYPE_LABEL,
+  ORDER_STATUS_LABEL as SHARED_ORDER_STATUS_LABEL, ORDER_STATUS_COLOR as SHARED_ORDER_STATUS_COLOR,
+} from '../../../lib/constants';
 
 const { id } = Astro.params;
 let formError = '';
@@ -20,6 +24,9 @@ if (Astro.request.method === 'POST') {
   const data       = await Astro.request.formData();
   const nom        = sanitizeText(data.get('nom') as string, 120);
   const societe    = sanitizeText(data.get('societe') as string, 120);
+  const typeRaw    = (data.get('type') as string) ?? '';
+  const type       = (CLIENT_TYPES as readonly string[]).includes(typeRaw) ? typeRaw : null;
+  const commune    = sanitizeText(data.get('commune') as string, 100);
   const email      = sanitizeEmail(data.get('email') as string);
   const telephone  = sanitizeText(data.get('telephone') as string, 40);
   const status     = data.get('status') as string;
@@ -43,13 +50,13 @@ if (Astro.request.method === 'POST') {
   const plafondRaw     = (data.get('plafond_credit') as string)?.trim();
   const plafond_credit = plafondRaw ? parseFloat(plafondRaw) : null;
 
-  const VALID_STATUS = ['en_attente', 'actif', 'suspendu'];
+  const requiresEmail = status !== 'prospect';
 
   if (!nom) {
     formError = 'Le nom est obligatoire.';
-  } else if (!email) {
+  } else if (requiresEmail && !email) {
     formError = 'Email invalide.';
-  } else if (!VALID_STATUS.includes(status)) {
+  } else if (!(CLIENT_STATUSES as readonly string[]).includes(status)) {
     formError = 'Statut invalide.';
   } else if (remise != null && (isNaN(remise) || remise < 0 || remise > 100)) {
     formError = 'La remise doit être comprise entre 0 et 100.';
@@ -61,7 +68,9 @@ if (Astro.request.method === 'POST') {
       .update({
         nom,
         societe: societe || null,
-        email,
+        type,
+        commune: commune || null,
+        email: email || null,
         telephone: telephone || null,
         status,
         notes: notes || null,
@@ -216,6 +225,8 @@ const roleError = Astro.url.searchParams.get('role_error');
       <h2 class="card-title">Informations</h2>
       <dl class="info-list">
         <div class="info-row"><dt>Société</dt><dd>{client.societe ?? '—'}</dd></div>
+        <div class="info-row"><dt>Type</dt><dd>{(client as any).type ? CLIENT_TYPE_LABEL[(client as any).type as keyof typeof CLIENT_TYPE_LABEL] ?? (client as any).type : '—'}</dd></div>
+        <div class="info-row"><dt>Commune</dt><dd>{(client as any).commune ?? '—'}</dd></div>
         <div class="info-row"><dt>Email</dt><dd>{client.email ?? '—'}</dd></div>
         <div class="info-row"><dt>Téléphone</dt><dd>{client.telephone ?? '—'}</dd></div>
         <div class="info-row"><dt>Statut</dt><dd><span class={`status-badge status-badge--${client.status}`}>{CLIENT_STATUS_LABEL[client.status] ?? client.status}</span></dd></div>
@@ -277,8 +288,23 @@ const roleError = Astro.url.searchParams.get('role_error');
       </div>
       <div class="field-group">
         <div class="field">
-          <label for="email">Email <span class="required">*</span></label>
-          <input type="email" id="email" name="email" required value={client.email ?? ''} />
+          <label for="type">Type</label>
+          <select id="type" name="type">
+            <option value="" selected={!(client as any).type}>—</option>
+            {CLIENT_TYPES.map(t => (
+              <option value={t} selected={(client as any).type === t}>{CLIENT_TYPE_LABEL[t]}</option>
+            ))}
+          </select>
+        </div>
+        <div class="field">
+          <label for="commune">Commune</label>
+          <input type="text" id="commune" name="commune" value={(client as any).commune ?? ''} />
+        </div>
+      </div>
+      <div class="field-group">
+        <div class="field">
+          <label for="email">Email {client.status !== 'prospect' && <span class="required">*</span>}</label>
+          <input type="email" id="email" name="email" required={client.status !== 'prospect'} value={client.email ?? ''} />
         </div>
         <div class="field">
           <label for="telephone">Téléphone</label>
@@ -339,9 +365,9 @@ const roleError = Astro.url.searchParams.get('role_error');
       <div class="field">
         <label for="status">Statut</label>
         <select id="status" name="status">
-          <option value="en_attente" selected={client.status === 'en_attente'}>En attente</option>
-          <option value="actif"      selected={client.status === 'actif'}>Actif</option>
-          <option value="suspendu"   selected={client.status === 'suspendu'}>Suspendu</option>
+          {CLIENT_STATUSES.map(s => (
+            <option value={s} selected={client.status === s}>{CLIENT_STATUS_LABEL[s]}</option>
+          ))}
         </select>
       </div>
 
@@ -586,6 +612,7 @@ const roleError = Astro.url.searchParams.get('role_error');
   font-size: var(--text-xs);
   font-weight: 500;
 }
+.status-badge--prospect   { background: oklch(0.93 0.05 295); color: oklch(0.38 0.12 295); }
 .status-badge--en_attente { background: oklch(0.95 0.02 60);  color: oklch(0.45 0.10 60); }
 .status-badge--actif      { background: oklch(0.93 0.06 145); color: oklch(0.38 0.12 145); }
 .status-badge--suspendu   { background: oklch(0.95 0.02 25);  color: oklch(0.45 0.10 25); }
@@ -791,4 +818,14 @@ input:focus, select:focus, textarea:focus {
     sameCheck.addEventListener('change', toggleFactAddr);
     toggleFactAddr();
   }
+
+  // Email is only required once the status leaves "prospect"
+  const statusSelect = document.getElementById('status') as HTMLSelectElement | null;
+  const emailInput   = document.getElementById('email') as HTMLInputElement | null;
+  function syncEmailRequirement() {
+    if (!statusSelect || !emailInput) return;
+    emailInput.required = statusSelect.value !== 'prospect';
+  }
+  statusSelect?.addEventListener('change', syncEmailRequirement);
+  syncEmailRequirement();
 </script>

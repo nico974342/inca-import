@@ -5,7 +5,7 @@ import { sanitizeText, sanitizeEmail } from '../../lib/sanitize';
 import { normalizeEmail } from '../../lib/clients';
 import { sendClientActivationEmail } from '../../lib/email';
 import { logAdminAction } from '../../lib/audit';
-import { PROSPECT_TYPE_LABEL } from '../../lib/constants';
+import { CLIENT_STATUSES, CLIENT_STATUS_LABEL, CLIENT_STATUS_COLOR, CLIENT_TYPES, CLIENT_TYPE_LABEL } from '../../lib/constants';
 
 if (Astro.request.method === 'POST') {
   const data   = await Astro.request.formData();
@@ -97,15 +97,24 @@ if (Astro.request.method === 'POST') {
   } else if (action === 'create_client') {
     const nom           = sanitizeText(data.get('nom')            as string, 120);
     const societe       = sanitizeText(data.get('societe')        as string, 120);
+    const typeRaw       = (data.get('type') as string) ?? '';
+    const type          = (CLIENT_TYPES as readonly string[]).includes(typeRaw) ? typeRaw : null;
+    const commune       = sanitizeText(data.get('commune')        as string, 100);
     const telephone     = sanitizeText(data.get('telephone')      as string, 30);
     const email         = sanitizeEmail(data.get('email')         as string);
     const pointsDeVente = sanitizeText(data.get('points_de_vente') as string, 120);
     const notes         = sanitizeText(data.get('notes')          as string, 500);
-    const status        = (data.get('status') as string) || 'actif';
-    const prospectId    = (data.get('prospect_id') as string) || null;
-    if (nom && email) {
+    const status        = (data.get('status') as string) || 'prospect';
+
+    // Prospects are a lightweight first-contact record — only the name is
+    // required. A real client account (en_attente/actif/suspendu) still
+    // needs an email since login/access-linking depends on it.
+    const requiresEmail = status !== 'prospect';
+
+    if (nom && (!requiresEmail || email)) {
       const { error: insertErr } = await supabaseAdmin.from('client_accounts').insert({
-        nom, societe: societe || null, telephone: telephone || null, email,
+        nom, societe: societe || null, type, commune: commune || null,
+        telephone: telephone || null, email: email || null,
         points_de_vente: pointsDeVente || null, notes: notes || null, status,
       });
 
@@ -122,18 +131,6 @@ if (Astro.request.method === 'POST') {
         targetLabel: societe || nom,
         details: { email, status },
       });
-
-      // Created via "Convertir en client" from a prospect — close the loop
-      if (prospectId) {
-        await supabaseAdmin.from('prospects').update({ status: 'converti' }).eq('id', prospectId);
-        await logAdminAction({
-          adminEmail,
-          action: 'prospect.conversion',
-          targetType: 'prospect',
-          targetId: prospectId,
-          targetLabel: societe || nom,
-        });
-      }
     } else {
       return Astro.redirect('/admin/clients?client_error=champs_requis');
     }
@@ -147,38 +144,18 @@ if (Astro.request.method === 'POST') {
   return Astro.redirect('/admin/clients');
 }
 
-const fromProspectId = Astro.url.searchParams.get('from_prospect');
 const [
   { data: clientsRaw },
   { data: contactsRaw },
   { data: authUsersData },
-  { data: prefillProspect },
 ] = await Promise.all([
   supabaseAdmin.from('client_accounts').select('*').order('created_at', { ascending: false }),
   supabaseAdmin.from('contact_requests').select('*').order('created_at', { ascending: false }),
   supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 }),
-  fromProspectId
-    ? supabaseAdmin.from('prospects').select('*').eq('id', fromProspectId).single()
-    : Promise.resolve({ data: null }),
 ]);
 
 const clients  = clientsRaw  ?? [];
 const contacts = contactsRaw ?? [];
-
-// client_accounts has no type/commune columns — fold them into the notes
-// prefill so nothing from the prospect record is lost on conversion.
-const prospectPrefill = prefillProspect ? {
-  id:        prefillProspect.id as string,
-  nom:       prefillProspect.nom as string,
-  societe:   (prefillProspect.societe as string | null) ?? '',
-  telephone: (prefillProspect.telephone as string | null) ?? '',
-  email:     (prefillProspect.email as string | null) ?? '',
-  notes: [
-    prefillProspect.type ? `Type : ${PROSPECT_TYPE_LABEL[prefillProspect.type as keyof typeof PROSPECT_TYPE_LABEL] ?? prefillProspect.type}` : null,
-    prefillProspect.commune ? `Commune : ${prefillProspect.commune}` : null,
-    prefillProspect.notes ? `Notes prospect : ${prefillProspect.notes}` : null,
-  ].filter(Boolean).join(' — '),
-} : null;
 
 // Build a set of emails that have admin role in Supabase auth
 const adminEmailSet = new Set(
@@ -195,11 +172,12 @@ const convertedContactIds = new Set(clients.map(c => c.contact_request_id).filte
 const clientError = Astro.url.searchParams.get('client_error');
 const CLIENT_ERROR_MSG: Record<string, string> = {
   email_existe:  'Cette adresse email est déjà utilisée par un autre client.',
-  champs_requis: 'Nom et email sont obligatoires.',
+  champs_requis: 'Le nom est obligatoire (email en plus pour un client actif/en attente/suspendu).',
   erreur:        "Une erreur est survenue lors de l'enregistrement du client.",
 };
 
 const CLIENT_STATUS_LABELS: Record<string, string> = {
+  prospect:   'Prospect',
   en_attente: 'Client en attente',
   actif:      'Client actif',
   suspendu:   'Client suspendu',
@@ -210,6 +188,8 @@ type Row = {
   id: string;
   nom: string;
   societe: string | null;
+  type: string | null;
+  commune: string | null;
   telephone: string | null;
   email: string | null;
   pointsDeVente: string | null;
@@ -220,12 +200,14 @@ type Row = {
   isAdmin: boolean;
 };
 
-const rows: Row[] = [
+const allRows: Row[] = [
   ...clients.map((c): Row => ({
     kind: 'client',
     id: c.id,
     nom: c.nom,
     societe: c.societe,
+    type: (c as any).type ?? null,
+    commune: (c as any).commune ?? null,
     telephone: c.telephone,
     email: c.email,
     pointsDeVente: c.points_de_vente ?? null,
@@ -242,6 +224,8 @@ const rows: Row[] = [
       id: ct.id,
       nom: ct.nom,
       societe: ct.societe,
+      type: null,
+      commune: null,
       telephone: ct.telephone,
       email: ct.email,
       pointsDeVente: null,
@@ -252,6 +236,19 @@ const rows: Row[] = [
       isAdmin: false,
     })),
 ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+// ── Filter tabs: client statuses + a bucket for contact-request rows ──────
+const filterView = Astro.url.searchParams.get('view') ?? '';
+const viewCounts: Record<string, number> = { contact: 0 };
+for (const s of CLIENT_STATUSES) viewCounts[s] = 0;
+for (const r of allRows) {
+  if (r.kind === 'contact') viewCounts.contact++;
+  else viewCounts[r.status] = (viewCounts[r.status] ?? 0) + 1;
+}
+
+const rows = filterView
+  ? allRows.filter(r => (filterView === 'contact' ? r.kind === 'contact' : r.kind === 'client' && r.status === filterView))
+  : allRows;
 
 // Clients and contact requests are two tables merged and globally sorted
 // above, so pagination happens on the merged list rather than in the DB.
@@ -265,37 +262,42 @@ function formatDate(iso: string) {
 }
 ---
 <AdminLayout title="Clients" activeNav="clients">
-  <details class="new-client-panel" open={!!prospectPrefill}>
+  <details class="new-client-panel">
     <summary class="new-client-toggle">
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
         <path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
       </svg>
-      Nouveau client
+      Nouveau client / prospect
     </summary>
-    {prospectPrefill && (
-      <p class="prospect-prefill-hint">
-        Pré-rempli depuis le prospect <strong>{prospectPrefill.nom}</strong> — vérifiez les champs avant de créer le client.
-      </p>
-    )}
     <form method="post" class="new-client-form">
       <input type="hidden" name="action" value="create_client" />
-      {prospectPrefill && <input type="hidden" name="prospect_id" value={prospectPrefill.id} />}
       <div class="ncf-grid">
         <div class="ncf-field">
           <label for="ncf-nom">Nom <span class="ncf-req" aria-hidden="true">*</span></label>
-          <input type="text" id="ncf-nom" name="nom" required placeholder="Jean Dupont" autocomplete="off" value={prospectPrefill?.nom ?? ''} />
+          <input type="text" id="ncf-nom" name="nom" required placeholder="Jean Dupont" autocomplete="off" />
         </div>
         <div class="ncf-field">
           <label for="ncf-societe">Société</label>
-          <input type="text" id="ncf-societe" name="societe" placeholder="Ma Supérette" autocomplete="off" value={prospectPrefill?.societe ?? ''} />
+          <input type="text" id="ncf-societe" name="societe" placeholder="Ma Supérette" autocomplete="off" />
         </div>
         <div class="ncf-field">
-          <label for="ncf-email">Email <span class="ncf-req" aria-hidden="true">*</span></label>
-          <input type="email" id="ncf-email" name="email" required placeholder="jean@exemple.re" autocomplete="off" value={prospectPrefill?.email ?? ''} />
+          <label for="ncf-type">Type</label>
+          <select id="ncf-type" name="type">
+            <option value="">—</option>
+            {CLIENT_TYPES.map(t => <option value={t}>{CLIENT_TYPE_LABEL[t]}</option>)}
+          </select>
+        </div>
+        <div class="ncf-field">
+          <label for="ncf-commune">Commune</label>
+          <input type="text" id="ncf-commune" name="commune" placeholder="Saint-Paul" autocomplete="off" />
+        </div>
+        <div class="ncf-field">
+          <label for="ncf-email">Email <span class="ncf-req" id="ncf-email-req" aria-hidden="true">*</span></label>
+          <input type="email" id="ncf-email" name="email" placeholder="jean@exemple.re" autocomplete="off" />
         </div>
         <div class="ncf-field">
           <label for="ncf-telephone">Téléphone</label>
-          <input type="tel" id="ncf-telephone" name="telephone" placeholder="+262 692 00 00 00" autocomplete="off" value={prospectPrefill?.telephone ?? ''} />
+          <input type="tel" id="ncf-telephone" name="telephone" placeholder="+262 692 00 00 00" autocomplete="off" />
         </div>
         <div class="ncf-field">
           <label for="ncf-pdv">Point de vente</label>
@@ -304,19 +306,20 @@ function formatDate(iso: string) {
         <div class="ncf-field">
           <label for="ncf-status">Statut</label>
           <select id="ncf-status" name="status">
-            <option value="actif" selected>Actif</option>
+            <option value="prospect" selected>Prospect</option>
             <option value="en_attente">En attente</option>
+            <option value="actif">Actif</option>
             <option value="suspendu">Suspendu</option>
           </select>
         </div>
         <div class="ncf-field ncf-field--full">
           <label for="ncf-notes">Notes</label>
-          <input type="text" id="ncf-notes" name="notes" placeholder="Informations complémentaires…" autocomplete="off" value={prospectPrefill?.notes ?? ''} />
+          <input type="text" id="ncf-notes" name="notes" placeholder="Informations complémentaires…" autocomplete="off" />
         </div>
       </div>
       <div class="ncf-footer">
-        <button type="submit" class="btn-create">Créer le client</button>
-        <p class="ncf-hint">Si ce client s'inscrit ensuite avec le même email, son compte sera automatiquement rattaché.</p>
+        <button type="submit" class="btn-create">Ajouter</button>
+        <p class="ncf-hint">Un prospect n'a besoin que d'un nom. Pour un client actif/en attente/suspendu, l'email est requis (accès à la plateforme).</p>
       </div>
     </form>
   </details>
@@ -348,6 +351,25 @@ function formatDate(iso: string) {
       <strong>{pendingCount}</strong>&nbsp;client{pendingCount > 1 ? 's' : ''} en attente de validation — activez leur compte pour qu'ils puissent consulter les tarifs et passer commande.
     </div>
   )}
+
+  <!-- Filter tabs -->
+  <div class="filter-bar">
+    <a href="/admin/clients" class={`filter-tab ${!filterView ? 'filter-tab--active' : ''}`}>
+      Tous
+      <span class="filter-count">{allRows.length}</span>
+    </a>
+    {CLIENT_STATUSES.map(s => (
+      <a href={`/admin/clients?view=${s}`} class={`filter-tab filter-tab--${CLIENT_STATUS_COLOR[s]} ${filterView === s ? 'filter-tab--active' : ''}`}>
+        {CLIENT_STATUS_LABEL[s]}
+        {viewCounts[s] > 0 && <span class="filter-count">{viewCounts[s]}</span>}
+      </a>
+    ))}
+    <a href="/admin/clients?view=contact" class={`filter-tab ${filterView === 'contact' ? 'filter-tab--active' : ''}`}>
+      Demandes contact
+      {viewCounts.contact > 0 && <span class="filter-count">{viewCounts.contact}</span>}
+    </a>
+  </div>
+
   {rows.length > 0 ? (
     <div class="table-wrap">
       <table class="data-table">
@@ -355,6 +377,8 @@ function formatDate(iso: string) {
           <tr>
             <th>Nom</th>
             <th>Société</th>
+            <th>Type</th>
+            <th>Commune</th>
             <th>Téléphone</th>
             <th>Email</th>
             <th>Point de vente</th>
@@ -382,6 +406,8 @@ function formatDate(iso: string) {
                 ) : r.nom}
               </td>
               <td>{r.societe ?? '—'}</td>
+              <td class="td-muted">{r.type ? CLIENT_TYPE_LABEL[r.type as keyof typeof CLIENT_TYPE_LABEL] ?? r.type : '—'}</td>
+              <td class="td-muted">{r.commune ?? '—'}</td>
               <td class="td-mono">{r.telephone ?? '—'}</td>
               <td class="td-mono">{r.email ?? '—'}</td>
               <td>{r.pointsDeVente ?? '—'}</td>
@@ -397,9 +423,9 @@ function formatDate(iso: string) {
                       onchange="this.form.submit()"
                       aria-label="Changer le statut"
                     >
-                      <option value="en_attente" selected={r.status === 'en_attente'}>En attente</option>
-                      <option value="actif"      selected={r.status === 'actif'}>Actif</option>
-                      <option value="suspendu"   selected={r.status === 'suspendu'}>Suspendu</option>
+                      {CLIENT_STATUSES.map(s => (
+                        <option value={s} selected={r.status === s}>{CLIENT_STATUS_LABEL[s]}</option>
+                      ))}
                     </select>
                   </form>
                 ) : (
@@ -471,11 +497,11 @@ function formatDate(iso: string) {
   {totalPages > 1 && (
     <nav class="pagination" aria-label="Pagination">
       {page > 1 && (
-        <a href={`/admin/clients?page=${page - 1}`} class="page-btn">← Précédent</a>
+        <a href={`/admin/clients?page=${page - 1}${filterView ? `&view=${filterView}` : ''}`} class="page-btn">← Précédent</a>
       )}
       <span class="page-info">Page {page} / {totalPages}</span>
       {page < totalPages && (
-        <a href={`/admin/clients?page=${page + 1}`} class="page-btn">Suivant →</a>
+        <a href={`/admin/clients?page=${page + 1}${filterView ? `&view=${filterView}` : ''}`} class="page-btn">Suivant →</a>
       )}
     </nav>
   )}
@@ -490,6 +516,19 @@ function formatDate(iso: string) {
       if (href) window.location.href = href;
     });
   });
+
+  // Email is only required for a real client account, not a bare prospect
+  const statusSelect = document.getElementById('ncf-status') as HTMLSelectElement | null;
+  const emailInput    = document.getElementById('ncf-email') as HTMLInputElement | null;
+  const emailReq      = document.getElementById('ncf-email-req');
+  function syncEmailRequirement() {
+    if (!statusSelect || !emailInput) return;
+    const needsEmail = statusSelect.value !== 'prospect';
+    emailInput.required = needsEmail;
+    if (emailReq) emailReq.style.visibility = needsEmail ? 'visible' : 'hidden';
+  }
+  statusSelect?.addEventListener('change', syncEmailRequirement);
+  syncEmailRequirement();
 </script>
 
 <style>
@@ -643,11 +682,52 @@ tr[data-pending="true"]:hover td {
   -webkit-appearance: none;
 }
 .status-select:focus { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.status-select--prospect   { background: oklch(0.93 0.05 295); color: oklch(0.38 0.12 295); }
 .status-select--en_attente { background: oklch(0.95 0.02 60);  color: oklch(0.45 0.10 60);  }
 .status-select--actif      { background: oklch(0.93 0.06 145); color: oklch(0.38 0.12 145); }
 .status-select--suspendu   { background: oklch(0.95 0.02 25);  color: oklch(0.45 0.10 25);  }
 .status-badge--nouveau     { background: oklch(0.95 0.02 220); color: oklch(0.35 0.08 220); }
 .status-badge--converti    { background: oklch(0.93 0.06 145); color: oklch(0.38 0.12 145); }
+
+/* ── Filter tabs ──────────────────────────────────── */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+.filter-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-muted);
+  text-decoration: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-bg);
+  transition: all var(--dur-fast);
+}
+.filter-tab:hover { color: var(--color-ink); border-color: var(--color-border-strong); }
+.filter-tab--active {
+  color: var(--color-ink);
+  background: var(--color-surface-2);
+  border-color: var(--color-border-strong);
+  font-weight: 600;
+}
+.filter-count {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: var(--color-muted);
+  background: var(--color-surface);
+  padding: 1px 5px;
+  border-radius: 99px;
+  border: 1px solid var(--color-border);
+  min-width: 18px;
+  text-align: center;
+}
 
 .notes-form {
   display: flex;
@@ -749,13 +829,6 @@ tr[data-pending="true"]:hover td {
 .new-client-form {
   padding: var(--space-5) var(--space-4);
 }
-
-.prospect-prefill-hint {
-  padding: var(--space-3) var(--space-5) 0;
-  font-size: var(--text-xs);
-  color: var(--color-muted);
-}
-.prospect-prefill-hint strong { color: var(--color-ink); }
 
 .ncf-grid {
   display: grid;

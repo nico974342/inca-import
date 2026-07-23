@@ -1,14 +1,14 @@
 ---
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
-import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, CONTACT_STATUS_LABEL, CONTACT_STATUS_COLOR } from '../../lib/constants';
+import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, CONTACT_STATUS_LABEL, CONTACT_STATUS_COLOR, computeGmroi, gmroiColorClass } from '../../lib/constants';
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'] as const;
 
 const now = new Date();
 const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
-// ── 6 calendar months (oldest first, current month last) ────────────────
+// ── 6 calendar months (oldest first, current month last), for the chart ──
 const MONTHS_BACK = 6;
 const monthDefs: { label: string; start: Date; end: Date }[] = [];
 for (let i = MONTHS_BACK - 1; i >= 0; i--) {
@@ -17,25 +17,24 @@ for (let i = MONTHS_BACK - 1; i >= 0; i--) {
   const label = start.toLocaleDateString('fr-FR', { month: 'short' }).replace('.', '');
   monthDefs.push({ label: label.charAt(0).toUpperCase() + label.slice(1), start, end });
 }
-const rangeStart = monthDefs[0].start.toISOString();
 
-const todayStr = now.toISOString().slice(0, 10);
+// Order data is fetched 12 months back (for GMROI) in one query; the chart
+// simply ignores rows older than its own 6-month window (idx === -1 below).
+const marginWindowStart = new Date(now.getFullYear(), now.getMonth() - 12, now.getDate()).toISOString();
 
 const [
   { count: commandesEnAttente },
   { count: livraisonsEnAttente },
   { count: clientsEnAttente },
-  { count: prospectsARecontacter },
   { data: recentOrders },
   { data: recentContacts },
   { data: lowStockItems },
-  { data: sixMonthOrders },
+  { data: twelveMonthOrders },
+  { data: allProductsRaw },
 ] = await Promise.all([
   supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }).eq('status', 'en_attente'),
   supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }).in('status', ['confirmee', 'en_preparation', 'expediee']),
   supabaseAdmin.from('client_accounts').select('*', { count: 'exact', head: true }).eq('status', 'en_attente'),
-  supabaseAdmin.from('prospects').select('*', { count: 'exact', head: true })
-    .lte('next_followup_at', todayStr).not('status', 'in', '(converti,pas_interesse)'),
   supabaseAdmin.from('orders').select('id, nom, societe, status, created_at').order('created_at', { ascending: false }).limit(5),
   supabaseAdmin.from('contact_requests').select('id, nom, societe, status, created_at').order('created_at', { ascending: false }).limit(5),
   supabaseAdmin.from('products').select('id, name, stock_quantity').lt('stock_quantity', 5).order('stock_quantity', { ascending: true }).limit(6),
@@ -43,30 +42,38 @@ const [
     .from('orders')
     .select('id, created_at, order_items(product_id, product_name, quantity, unit, price_ht_snapshot, pump_snapshot, products(category))')
     .in('status', REVENUE_STATUSES)
-    .gte('created_at', rangeStart),
+    .gte('created_at', marginWindowStart),
+  supabaseAdmin.from('products').select('id, name, stock_quantity, prix_achat_moyen_ht'),
 ]);
 
-// ── Bucket the 6-month order set by month, and aggregate current-month
-//    products/categories in the same pass (one query serves everything). ──
+// ── Bucket the order set by month for the 6-month chart, aggregate
+//    current-month products/categories, AND sum 12-month margin per
+//    product for GMROI — all in one pass over one query's data. ──────────
 type MonthBucket = { label: string; caHt: number; margeHt: number; hasPump: boolean; orderCount: number };
 const buckets: MonthBucket[] = monthDefs.map(m => ({ label: m.label, caHt: 0, margeHt: 0, hasPump: false, orderCount: 0 }));
 
-const productAgg = new Map<string, { name: string; unit: string | null; qty: number; ca: number; marge: number; hasPump: boolean }>();
+const productAgg = new Map<string, { productId: string | null; name: string; unit: string | null; qty: number; ca: number; marge: number; hasPump: boolean }>();
 const categoryAgg = new Map<string, number>();
+const margin12moByProduct = new Map<string, number>();
 const CURRENT_IDX = MONTHS_BACK - 1;
 
-for (const order of (sixMonthOrders ?? [])) {
+for (const order of (twelveMonthOrders ?? [])) {
   const ts = new Date(order.created_at).getTime();
   const idx = monthDefs.findIndex(m => ts >= m.start.getTime() && ts < m.end.getTime());
-  if (idx === -1) continue;
-  buckets[idx].orderCount++;
   const isCurrentMonth = idx === CURRENT_IDX;
+  if (idx !== -1) buckets[idx].orderCount++;
 
   for (const item of ((order as any).order_items ?? [])) {
     const qty  = item.quantity ?? 0;
     const prix = item.price_ht_snapshot != null ? Number(item.price_ht_snapshot) : null;
     const pump = item.pump_snapshot != null ? Number(item.pump_snapshot) : null;
     if (prix == null) continue;
+
+    if (item.product_id != null && pump != null) {
+      margin12moByProduct.set(item.product_id, (margin12moByProduct.get(item.product_id) ?? 0) + (prix - pump) * qty);
+    }
+
+    if (idx === -1) continue; // outside the 6-month chart window
 
     buckets[idx].caHt += prix * qty;
     if (pump != null) {
@@ -76,7 +83,7 @@ for (const order of (sixMonthOrders ?? [])) {
 
     if (isCurrentMonth) {
       const key  = item.product_id ?? item.product_name ?? 'inconnu';
-      const prev = productAgg.get(key) ?? { name: item.product_name ?? 'Produit', unit: item.unit ?? null, qty: 0, ca: 0, marge: 0, hasPump: false };
+      const prev = productAgg.get(key) ?? { productId: item.product_id ?? null, name: item.product_name ?? 'Produit', unit: item.unit ?? null, qty: 0, ca: 0, marge: 0, hasPump: false };
       prev.qty += qty;
       prev.ca  += prix * qty;
       if (pump != null) {
@@ -90,6 +97,22 @@ for (const order of (sixMonthOrders ?? [])) {
     }
   }
 }
+
+// ── GMROI per product + "produits à surveiller" (worst performers) ───────
+const allProducts = allProductsRaw ?? [];
+const productGmroiList = allProducts.map(p => ({
+  id: p.id,
+  name: p.name,
+  stock: p.stock_quantity ?? 0,
+  gmroi: computeGmroi(p.stock_quantity, p.prix_achat_moyen_ht, margin12moByProduct.get(p.id) ?? null),
+}));
+
+const produitsASurveiller = productGmroiList
+  .filter(p => p.gmroi != null && p.gmroi < 1 && p.stock > 0)
+  .sort((a, b) => (a.gmroi ?? 0) - (b.gmroi ?? 0))
+  .slice(0, 5);
+
+const gmroiById = new Map(productGmroiList.map(p => [p.id, p.gmroi]));
 
 const caMonth         = buckets[CURRENT_IDX].caHt;
 const margeMonthHt     = buckets[CURRENT_IDX].margeHt;
@@ -208,7 +231,6 @@ const hasLowStock        = (lowStockItems ?? []).length > 0;
 const hasPendingDelivery = (livraisonsEnAttente ?? 0) > 0;
 const hasPendingClients  = (clientsEnAttente ?? 0) > 0;
 const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
-const hasPendingProspects = (prospectsARecontacter ?? 0) > 0;
 ---
 <AdminLayout title="Tableau de bord" activeNav="dashboard">
 
@@ -403,23 +425,64 @@ const hasPendingProspects = (prospectsARecontacter ?? 0) > 0;
           <h2 class="panel-title">Top 5 produits du mois</h2>
         </div>
         {top5Products.length > 0 ? (
-          <table class="top5-table">
-            <thead>
-              <tr><th>Produit</th><th class="th-r">Qté</th><th class="th-r">CA HT</th><th class="th-r">Marge HT</th></tr>
-            </thead>
-            <tbody>
-              {top5Products.map(p => (
-                <tr>
-                  <td class="top5-name">{p.name}</td>
-                  <td class="th-r top5-qty">{p.qty}{p.unit ? <span class="top5-unit"> {p.unit}{p.qty > 1 ? 's' : ''}</span> : null}</td>
-                  <td class="th-r top5-ca">{formatCA(p.ca)}</td>
-                  <td class="th-r top5-marge">{p.hasPump ? formatCA(p.marge) : '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div class="top5-table-wrap">
+            <table class="top5-table">
+              <thead>
+                <tr><th>Produit</th><th class="th-r">Qté</th><th class="th-r">CA HT</th><th class="th-r">Marge HT</th><th class="th-r">GMROI</th></tr>
+              </thead>
+              <tbody>
+                {top5Products.map(p => {
+                  const g = p.productId ? gmroiById.get(p.productId) ?? null : null;
+                  return (
+                    <tr>
+                      <td class="top5-name">{p.name}</td>
+                      <td class="th-r top5-qty">{p.qty}{p.unit ? <span class="top5-unit"> {p.unit}{p.qty > 1 ? 's' : ''}</span> : null}</td>
+                      <td class="th-r top5-ca">{formatCA(p.ca)}</td>
+                      <td class="th-r top5-marge">{p.hasPump ? formatCA(p.marge) : '—'}</td>
+                      <td class="th-r"><span class={`gmroi-chip gmroi-chip--${gmroiColorClass(g)}`}>{g != null ? g.toFixed(1) + '×' : '—'}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         ) : (
           <p class="panel-empty">Aucune vente ce mois-ci.</p>
+        )}
+      </div>
+
+      <!-- Produits à surveiller (GMROI < 1, capital dormant) -->
+      <div class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">
+            Produits à surveiller
+            <span
+              class="help-icon"
+              tabindex="0"
+              title="Produits en stock dont le GMROI est inférieur à 1 : ils immobilisent plus de capital qu'ils n'en rapportent sur les 12 derniers mois."
+            >?</span>
+          </h2>
+          <a href="/admin/produits" class="panel-link">Voir tout →</a>
+        </div>
+        {produitsASurveiller.length > 0 ? (
+          <div class="top5-table-wrap">
+            <table class="top5-table">
+              <thead>
+                <tr><th>Produit</th><th class="th-r">Stock</th><th class="th-r">GMROI</th></tr>
+              </thead>
+              <tbody>
+                {produitsASurveiller.map(p => (
+                  <tr>
+                    <td class="top5-name">{p.name}</td>
+                    <td class="th-r top5-qty">{p.stock}</td>
+                    <td class="th-r"><span class={`gmroi-chip gmroi-chip--${gmroiColorClass(p.gmroi)}`}>{p.gmroi!.toFixed(1)}×</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p class="panel-empty">Aucun produit à surveiller — bien joué.</p>
         )}
       </div>
 
@@ -428,22 +491,8 @@ const hasPendingProspects = (prospectsARecontacter ?? 0) > 0;
   </div>
 
   <!-- ── Alerts ─────────────────────────────────────── -->
-  {(hasPendingOrders || hasLowStock || hasPendingDelivery || hasPendingClients || hasPendingProspects) && (
+  {(hasPendingOrders || hasLowStock || hasPendingDelivery || hasPendingClients) && (
     <div class="alerts-row">
-      {hasPendingProspects && (
-        <a href="/admin/prospects?due=1" class="alert-card alert-card--prospects">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <circle cx="6.5" cy="5.5" r="2.5" stroke="currentColor" stroke-width="1.5"/>
-            <path d="M2 13c0-2.3 2.02-4 4.5-4s4.5 1.7 4.5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            <path d="M11.5 4v4M9.5 6h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-          <span>
-            <strong>{prospectsARecontacter}</strong>
-            {(prospectsARecontacter ?? 0) > 1 ? ' prospects à recontacter aujourd\'hui' : ' prospect à recontacter aujourd\'hui'}
-          </span>
-          <span class="alert-cta">Recontacter →</span>
-        </a>
-      )}
       {hasPendingOrders && (
         <a href="/admin/commandes?status=en_attente" class="alert-card alert-card--orders">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -974,6 +1023,7 @@ const hasPendingProspects = (prospectsARecontacter ?? 0) > 0;
 .cat-legend-ca   { color: var(--color-ink); font-weight: 600; font-variant-numeric: tabular-nums; min-width: 64px; text-align: right; }
 
 /* Top 5 products table */
+.top5-table-wrap { overflow-x: auto; }
 .top5-table {
   width: 100%;
   border-collapse: collapse;
@@ -1010,6 +1060,37 @@ const hasPendingProspects = (prospectsARecontacter ?? 0) > 0;
 .top5-ca { font-weight: 500; color: var(--color-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .top5-marge { font-weight: 700; color: oklch(0.40 0.13 150); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
+.gmroi-chip {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+.gmroi-chip--none  { background: var(--color-surface-2); color: var(--color-muted); }
+.gmroi-chip--green { background: oklch(0.92 0.08 145); color: oklch(0.32 0.14 145); }
+.gmroi-chip--amber { background: oklch(0.95 0.07 60);  color: oklch(0.38 0.15 55);  }
+.gmroi-chip--red   { background: oklch(0.95 0.04 25);  color: oklch(0.46 0.18 25);  }
+
+.help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--color-surface-2);
+  color: var(--color-muted);
+  font-size: 0.625rem;
+  font-weight: 700;
+  cursor: help;
+  vertical-align: middle;
+}
+
 /* ── Alerts ───────────────────────────────────────── */
 .alerts-row {
   display: flex;
@@ -1037,15 +1118,6 @@ const hasPendingProspects = (prospectsARecontacter ?? 0) > 0;
 }
 .alert-card--orders:hover { background: oklch(0.91 0.07 45.9); }
 .alert-card--orders svg { flex-shrink: 0; }
-
-.alert-card--prospects {
-  background: oklch(0.95 0.04 295);
-  border: 1px solid oklch(0.85 0.07 295);
-  color: oklch(0.38 0.12 295);
-  transition: background var(--dur-fast);
-}
-.alert-card--prospects:hover { background: oklch(0.90 0.06 295); }
-.alert-card--prospects svg { flex-shrink: 0; }
 
 .alert-card--clients {
   background: oklch(0.96 0.04 75);
