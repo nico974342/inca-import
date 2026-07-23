@@ -1,7 +1,6 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
 import { logAdminAction } from '../../../../../lib/audit';
-import { recalcPump } from '../../../../../lib/pump';
 
 export const POST: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -14,48 +13,29 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
   const { id } = params;
   if (!id) return new Response('Non trouvé', { status: 404 });
 
-  // Fetch reception state before deleting
+  // Fetch metadata for the audit log before the atomic delete
   const { data: rec, error: fetchErr } = await supabaseAdmin
     .from('stock_receptions')
-    .select('supplier_name, stock_applied, stock_reception_items(product_id, quantity)')
+    .select('supplier_name, stock_applied, stock_reception_items(product_id)')
     .eq('id', id)
     .single();
 
   if (fetchErr || !rec) return new Response('Non trouvé', { status: 404 });
 
-  const items: { product_id: string; quantity: number }[] =
-    (rec as any).stock_reception_items ?? [];
+  const productCount = new Set(
+    ((rec as any).stock_reception_items ?? []).map((i: any) => i.product_id)
+  ).size;
 
-  // Reverse stock if this reception had applied it
-  if ((rec as any).stock_applied) {
-    for (const item of items) {
-      const { data: prod } = await supabaseAdmin
-        .from('products')
-        .select('stock_quantity')
-        .eq('id', item.product_id)
-        .single();
-      if (!prod) continue;
-      const restoredQty = Math.max(0, (prod.stock_quantity ?? 0) - item.quantity);
-      await supabaseAdmin
-        .from('products')
-        .update({ stock_quantity: restoredQty, in_stock: restoredQty > 0 })
-        .eq('id', item.product_id);
+  // Atomic RPC: reverses applied stock, deletes the reception (cascades to
+  // items) and recalculates PUMP — all in one transaction.
+  const { error: rpcErr } = await supabaseAdmin.rpc('reception_delete', { p_reception_id: id });
+
+  if (rpcErr) {
+    console.error('reception_delete RPC error:', rpcErr);
+    if (rpcErr.message?.includes('not found')) {
+      return new Response('Non trouvé', { status: 404 });
     }
-  }
-
-  // Collect affected product IDs before the cascade delete removes items
-  const affectedIds = [...new Set(items.map(i => i.product_id))];
-
-  // Delete reception — CASCADE removes stock_reception_items automatically
-  await supabaseAdmin.from('stock_receptions').delete().eq('id', id);
-
-  // Recalculate PUMP from scratch for every affected product
-  for (const productId of affectedIds) {
-    const pump = await recalcPump(productId);
-    await supabaseAdmin
-      .from('products')
-      .update({ prix_achat_moyen_ht: pump })
-      .eq('id', productId);
+    return Response.redirect(new URL('/admin/reception', request.url), 303);
   }
 
   await logAdminAction({
@@ -66,7 +46,7 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
     targetLabel:  (rec as any).supplier_name,
     details: {
       stock_reversed:  (rec as any).stock_applied,
-      products_count:  affectedIds.length,
+      products_count:  productCount,
     },
   });
 

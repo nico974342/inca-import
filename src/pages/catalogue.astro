@@ -6,7 +6,7 @@ import { supabaseAdmin, createAuthClient } from '../lib/supabase';
 
 const { data: products } = await supabaseAdmin
   .from('products')
-  .select('id, name, slug, category, description, image_url, unit, units_per_carton, price_ht, stock_quantity')
+  .select('id, name, slug, category, description, image_url, unit, units_per_carton, price_ht, tva_rate, stock_quantity')
   .order('position', { ascending: true })
   .order('name', { ascending: true });
 
@@ -38,10 +38,17 @@ if (isClient && user) {
 const totalCartQty = Object.values(cartMap).reduce((s, q) => s + q, 0);
 
 const priceMap: Record<string, number> = {};
-for (const p of products ?? []) priceMap[p.id] = Number(p.price_ht ?? 0);
+const tvaMap:   Record<string, number> = {};
+for (const p of products ?? []) {
+  priceMap[p.id] = Number(p.price_ht ?? 0);
+  tvaMap[p.id]   = Number((p as any).tva_rate ?? 0.085);
+}
 
 const totalCartHT = Object.entries(cartMap).reduce(
   (s, [id, qty]) => s + qty * (priceMap[id] ?? 0), 0
+);
+const totalCartTTC = Object.entries(cartMap).reduce(
+  (s, [id, qty]) => s + qty * (priceMap[id] ?? 0) * (1 + (tvaMap[id] ?? 0.085)), 0
 );
 
 const total   = products?.length ?? 0;
@@ -249,6 +256,7 @@ const productsMetaJSON = JSON.stringify(
                         data-product-id={p.id}
                         data-initial-qty={cartMap[p.id] ?? 0}
                         data-price={priceMap[p.id] ?? 0}
+                        data-tva={tvaMap[p.id] ?? 0.085}
                         data-stock={p.stock_quantity !== null ? String(p.stock_quantity) : ''}
                       >
                         <button type="button" class="qty-btn qty-btn--dec" aria-label={`Retirer ${p.name} du panier`}>−</button>
@@ -351,7 +359,7 @@ const productsMetaJSON = JSON.stringify(
           </div>
           <div class="drawer-ttc-row">
             <span class="drawer-ttc-label">Total TTC</span>
-            <span class="drawer-ttc-amount" id="drawerTtc">{(totalCartHT * 1.085).toFixed(2).replace('.', ',')} €</span>
+            <span class="drawer-ttc-amount" id="drawerTtc">{totalCartTTC.toFixed(2).replace('.', ',')} €</span>
           </div>
           <a href="/commande" class="btn btn-primary drawer-checkout">
             Passer commande
@@ -514,11 +522,13 @@ const productsMetaJSON = JSON.stringify(
     // Cart state (source of truth)
     const cartState: Record<string, number> = {};
     const priceMap:  Record<string, number>  = {};
+    const tvaMap:    Record<string, number>  = {};
 
     document.querySelectorAll<HTMLElement>('.cart-controls').forEach(ctrl => {
       const id  = ctrl.dataset.productId!;
       const qty = parseInt(ctrl.dataset.initialQty ?? '0', 10);
       priceMap[id]  = parseFloat(ctrl.dataset.price ?? '0');
+      tvaMap[id]    = parseFloat(ctrl.dataset.tva ?? '0.085');
       if (qty > 0) cartState[id] = qty;
     });
 
@@ -587,9 +597,11 @@ const productsMetaJSON = JSON.stringify(
     }
 
     function updateTotal() {
-      const ht = calcTotalHT();
+      const ht  = calcTotalHT();
+      const ttc = Object.entries(cartState)
+        .reduce((s, [id, q]) => s + (q > 0 ? q * (priceMap[id] ?? 0) * (1 + (tvaMap[id] ?? 0.085)) : 0), 0);
       drawerTotalEl.textContent = ht.toFixed(2).replace('.', ',') + ' €';
-      drawerTtcEl.textContent   = (ht * 1.085).toFixed(2).replace('.', ',') + ' €';
+      drawerTtcEl.textContent   = ttc.toFixed(2).replace('.', ',') + ' €';
     }
 
     function renderDrawerItems() {

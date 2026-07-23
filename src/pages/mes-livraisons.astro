@@ -3,6 +3,7 @@ import Base from '../layouts/Base.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import { supabaseAdmin, createAuthClient } from '../lib/supabase';
+import { findClientByEmail } from '../lib/clients';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -11,11 +12,7 @@ if (!user || user.user_metadata?.role !== 'client') {
   return Astro.redirect('/connexion?from=/mes-livraisons');
 }
 
-const { data: clientAccount } = await supabaseAdmin
-  .from('client_accounts')
-  .select('id')
-  .eq('email', (user.email ?? '').toLowerCase())
-  .maybeSingle();
+const clientAccount = await findClientByEmail<{ id: string }>(user.email, 'id');
 
 const { data: notes } = clientAccount
   ? await supabaseAdmin

@@ -1,7 +1,6 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../lib/supabase';
 import { logAdminAction } from '../../../../lib/audit';
-import { recalcPump } from '../../../../lib/pump';
 
 export const POST: APIRoute = async ({ request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -42,67 +41,30 @@ export const POST: APIRoute = async ({ request, cookies }) => {
   const todayStr    = new Date().toISOString().slice(0, 10);
   const stockApplied = receivedAt >= todayStr; // today/future → also update stock
 
-  // Insert reception header with flags
-  const { data: reception, error: recErr } = await supabaseAdmin
-    .from('stock_receptions')
-    .insert({ supplier_name: supplierName, received_at: receivedAt, notes, stock_applied: stockApplied })
-    .select('id')
-    .single();
-
-  if (recErr || !reception) {
-    console.error('reception insert error:', recErr);
-    return Response.redirect(new URL('/admin/reception/new', request.url), 303);
-  }
-
-  // Insert line items
-  const { error: itemErr } = await supabaseAdmin
-    .from('stock_reception_items')
-    .insert(rows.map(r => ({
-      reception_id: reception.id,
+  // Atomic RPC: header + items + PUMP recalc + stock increment in one
+  // transaction — a mid-way failure rolls everything back.
+  const { data: receptionId, error: rpcErr } = await supabaseAdmin.rpc('reception_create', {
+    p_supplier_name: supplierName,
+    p_received_at:   receivedAt,
+    p_notes:         notes,
+    p_stock_applied: stockApplied,
+    p_items: rows.map(r => ({
       product_id:   r.productId,
       quantity:     r.quantity,
       unit_cost_ht: r.unitCost,
-    })));
+    })),
+  });
 
-  if (itemErr) {
-    console.error('reception items insert error:', itemErr);
-    await supabaseAdmin.from('stock_receptions').delete().eq('id', reception.id);
+  if (rpcErr || !receptionId) {
+    console.error('reception_create RPC error:', rpcErr);
     return Response.redirect(new URL('/admin/reception/new', request.url), 303);
-  }
-
-  // Recalculate PUMP from scratch for every product in this reception.
-  // Items are already in DB, so recalcPump() sees the full picture.
-  // PUMP is always recalculated regardless of date (historical receptions count for cost tracking).
-  for (const row of rows) {
-    const pump = await recalcPump(row.productId);
-    await supabaseAdmin
-      .from('products')
-      .update({ prix_achat_moyen_ht: pump })
-      .eq('id', row.productId);
-  }
-
-  // Apply stock increment only for live (today/future) receptions
-  if (stockApplied) {
-    for (const row of rows) {
-      const { data: prod } = await supabaseAdmin
-        .from('products')
-        .select('stock_quantity')
-        .eq('id', row.productId)
-        .single();
-      if (!prod) continue;
-      const newQty = (prod.stock_quantity ?? 0) + row.quantity;
-      await supabaseAdmin
-        .from('products')
-        .update({ stock_quantity: newQty, in_stock: newQty > 0 })
-        .eq('id', row.productId);
-    }
   }
 
   await logAdminAction({
     adminEmail:   user.email ?? 'inconnu',
     action:       'reception.creation',
     targetType:   'reception',
-    targetId:     reception.id,
+    targetId:     receptionId as string,
     targetLabel:  supplierName,
     details: {
       received_at:    receivedAt,

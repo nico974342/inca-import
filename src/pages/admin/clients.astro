@@ -2,6 +2,7 @@
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { sanitizeText, sanitizeEmail } from '../../lib/sanitize';
+import { normalizeEmail } from '../../lib/clients';
 import { sendClientActivationEmail } from '../../lib/email';
 import { logAdminAction } from '../../lib/audit';
 
@@ -26,7 +27,7 @@ if (Astro.request.method === 'POST') {
         societe: contact.societe,
         points_de_vente: contact.societe,
         telephone: contact.telephone,
-        email: contact.email,
+        email: contact.email ? normalizeEmail(contact.email) : null,
         notes: contact.notes,
         status: 'actif',
       });

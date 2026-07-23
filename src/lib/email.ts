@@ -67,6 +67,8 @@ export async function sendOrderStatusEmail(params: {
   status: string;
   items: OrderStatusEmailItem[];
   totalHt?: number | null;
+  /** Exact TVA computed from per-item snapshot rates; falls back to flat 8.5% when absent. */
+  totalTva?: number | null;
   orderDate?: Date | string | null;
 }): Promise<void> {
   console.log('[email] sendOrderStatusEmail called', {
@@ -83,15 +85,15 @@ export async function sendOrderStatusEmail(params: {
     return;
   }
 
-  const { to, orderId, status, items, totalHt, orderDate } = params;
+  const { to, orderId, status, items, totalHt, totalTva, orderDate } = params;
   const label   = STATUS_LABEL[status] ?? status;
   const message = STATUS_MESSAGE[status] ?? '';
   const style   = STATUS_STYLE[status] ?? STATUS_STYLE['en_attente'];
   const shortId = orderId.slice(0, 8).toUpperCase();
   const dateStr = frenchDate(orderDate);
 
-  const tva = totalHt != null ? totalHt * TVA_RATE : null;
-  const ttc = totalHt != null ? totalHt + totalHt * TVA_RATE : null;
+  const tva = totalTva ?? (totalHt != null ? totalHt * TVA_RATE : null);
+  const ttc = totalHt != null && tva != null ? totalHt + tva : null;
 
   const itemRowsHtml = items.map(it => `
     <tr>
@@ -110,7 +112,7 @@ export async function sendOrderStatusEmail(params: {
         <td style="padding:12px 18px 5px;font-size:13px;font-weight:600;color:#1C1917;text-align:center;border-top:2px solid #E8E4DF;white-space:nowrap;">${fmt(totalHt)}&nbsp;€</td>
       </tr>
       <tr>
-        <td style="padding:3px 18px 10px;font-size:12px;color:#9CA3AF;text-align:right;">TVA&nbsp;8,5&nbsp;%</td>
+        <td style="padding:3px 18px 10px;font-size:12px;color:#9CA3AF;text-align:right;">TVA</td>
         <td style="padding:3px 18px 10px;font-size:12px;color:#9CA3AF;text-align:center;white-space:nowrap;">+&nbsp;${fmt(tva!)}&nbsp;€</td>
       </tr>
       <tr style="background:#F7F6F4;">

@@ -2,6 +2,7 @@
 import '../styles/global.css';
 import { createAuthClient, supabaseAdmin } from '../lib/supabase';
 import { sanitizeText } from '../lib/sanitize';
+import { findClientByEmail } from '../lib/clients';
 import Nav from '../components/Nav.astro';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
@@ -10,13 +11,13 @@ if (!user || user.user_metadata?.role !== 'client') {
   return Astro.redirect('/connexion/client');
 }
 
-const { data: accountData } = await supabaseAdmin
-  .from('client_accounts')
-  .select('nom, societe, telephone, points_de_vente, adresse_pdv, livraison_rue, livraison_ville, livraison_code_postal, facturation_same, facturation_rue, facturation_ville, facturation_code_postal')
-  .eq('email', user.email!)
-  .maybeSingle();
+const accountData = await findClientByEmail<Account & { id: string }>(
+  user.email,
+  'id, nom, societe, telephone, points_de_vente, adresse_pdv, livraison_rue, livraison_ville, livraison_code_postal, facturation_same, facturation_rue, facturation_ville, facturation_code_postal'
+);
 
 type Account = {
+  id?: string;
   nom?: string; societe?: string; telephone?: string;
   points_de_vente?: string; adresse_pdv?: string;
   livraison_rue?: string; livraison_ville?: string; livraison_code_postal?: string;
@@ -49,23 +50,25 @@ if (Astro.request.method === 'POST') {
     errorMessage = 'Le nom est obligatoire.';
     account = { ...account, nom, societe, telephone, points_de_vente: nom_pdv, adresse_pdv, livraison_rue, livraison_ville, livraison_code_postal, facturation_same, facturation_rue: facturation_rue ?? undefined, facturation_ville: facturation_ville ?? undefined, facturation_code_postal: facturation_code_postal ?? undefined };
   } else {
-    const { error: dbError } = await supabaseAdmin
-      .from('client_accounts')
-      .update({
-        nom,
-        societe: societe || null,
-        telephone: telephone || null,
-        points_de_vente: nom_pdv || null,
-        adresse_pdv: adresse_pdv || null,
-        livraison_rue: livraison_rue || null,
-        livraison_ville: livraison_ville || null,
-        livraison_code_postal: livraison_code_postal || null,
-        facturation_same,
-        facturation_rue,
-        facturation_ville,
-        facturation_code_postal,
-      })
-      .eq('email', user.email!);
+    const { error: dbError } = account.id
+      ? await supabaseAdmin
+          .from('client_accounts')
+          .update({
+            nom,
+            societe: societe || null,
+            telephone: telephone || null,
+            points_de_vente: nom_pdv || null,
+            adresse_pdv: adresse_pdv || null,
+            livraison_rue: livraison_rue || null,
+            livraison_ville: livraison_ville || null,
+            livraison_code_postal: livraison_code_postal || null,
+            facturation_same,
+            facturation_rue,
+            facturation_ville,
+            facturation_code_postal,
+          })
+          .eq('id', account.id)
+      : { error: null };
 
     if (dbError) {
       errorMessage = 'Erreur lors de la sauvegarde. Veuillez réessayer.';

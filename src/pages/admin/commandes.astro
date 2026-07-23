@@ -25,11 +25,15 @@ if (Astro.request.method === 'POST') {
     if (current && current.status !== new_status && current.email) {
       const { data: statusItems } = await supabaseAdmin
         .from('order_items')
-        .select('product_name, quantity, unit, price_ht_snapshot')
+        .select('product_name, quantity, unit, price_ht_snapshot, tva_rate_snapshot')
         .eq('order_id', order_id);
 
       const totalHt = (statusItems ?? []).reduce(
         (sum, it) => sum + Number(it.price_ht_snapshot ?? 0) * it.quantity,
+        0
+      );
+      const totalTva = (statusItems ?? []).reduce(
+        (sum, it) => sum + Number(it.price_ht_snapshot ?? 0) * it.quantity * Number(it.tva_rate_snapshot ?? 0.085),
         0
       );
 
@@ -40,63 +44,37 @@ if (Astro.request.method === 'POST') {
         status: new_status,
         items: (statusItems ?? []).map(it => ({ name: it.product_name, quantity: it.quantity, unit: it.unit })),
         totalHt,
+        totalTva,
         orderDate: current.created_at,
       }).catch(err => console.error('[commandes] sendOrderStatusEmail threw:', err));
     }
 
-    // Restore stock when cancelling a livree order (stock was decremented on livree)
+    // Restore stock when cancelling a livree order — the RPC restores exactly
+    // what was decremented (order_items.stock_decremented), atomically.
     if (current?.status === 'livree' && new_status === 'annulee') {
-      const { data: cancelItems } = await supabaseAdmin
-        .from('order_items')
-        .select('product_id, quantity')
-        .eq('order_id', order_id);
-
-      for (const item of cancelItems ?? []) {
-        if (!item.product_id) continue;
-        const { data: prod } = await supabaseAdmin
-          .from('products')
-          .select('stock_quantity')
-          .eq('id', item.product_id)
-          .single();
-        if (!prod) continue;
-        const restoredQty = prod.stock_quantity + item.quantity;
-        await supabaseAdmin
-          .from('products')
-          .update({ stock_quantity: restoredQty, in_stock: true })
-          .eq('id', item.product_id);
-      }
+      const { error: cancelErr } = await supabaseAdmin
+        .rpc('order_cancel_livree', { p_order_id: order_id });
+      if (cancelErr) console.error('[commandes] order_cancel_livree failed:', cancelErr.message);
     }
 
-    // Decrement stock only on first transition to livree
+    // Decrement stock only on first transition to livree — atomic RPC that
+    // clamps at 0, records the actual decrement, and skips already-decremented
+    // lines (livree → X → livree never double-decrements).
     if (current?.status !== 'livree' && new_status === 'livree') {
-      const { data: items } = await supabaseAdmin
-        .from('order_items')
-        .select('product_id, product_name, quantity, unit, price_ht_snapshot')
-        .eq('order_id', order_id);
+      const { data: touched, error: livreeErr } = await supabaseAdmin
+        .rpc('order_mark_livree', { p_order_id: order_id });
+      if (livreeErr) console.error('[commandes] order_mark_livree failed:', livreeErr.message);
 
-      for (const item of items ?? []) {
-        if (!item.product_id) continue;
-
-        const { data: prod } = await supabaseAdmin
-          .from('products')
-          .select('stock_quantity, name')
-          .eq('id', item.product_id)
-          .single();
-
-        if (!prod) continue;
-
-        const newQty     = Math.max(0, prod.stock_quantity - item.quantity);
-        const newInStock = newQty > 0;
-
-        await supabaseAdmin
-          .from('products')
-          .update({ stock_quantity: newQty, in_stock: newInStock })
-          .eq('id', item.product_id);
-
-        if (newQty < 5) {
-          sendLowStockAlert(prod.name, newQty).catch(() => {});
+      for (const t of (touched ?? []) as { r_product_id: string; r_name: string; r_new_qty: number }[]) {
+        if (t.r_new_qty < 5) {
+          sendLowStockAlert(t.r_name, t.r_new_qty).catch(() => {});
         }
       }
+
+      const { data: items } = await supabaseAdmin
+        .from('order_items')
+        .select('product_id, product_name, quantity, unit, price_ht_snapshot, tva_rate_snapshot')
+        .eq('order_id', order_id);
 
       // Notify Make.com — fire-and-forget, never blocks the status update
       if (current) {
@@ -122,7 +100,10 @@ if (Astro.request.method === 'POST') {
         });
 
         const totalHt  = products.reduce((s, p) => s + p.total_ht, 0);
-        const tva      = totalHt * 0.085;
+        const tva      = (items ?? []).reduce(
+          (s, it) => s + Number((it as any).price_ht_snapshot ?? 0) * it.quantity * Number((it as any).tva_rate_snapshot ?? 0.085),
+          0
+        );
         const totalTtc = totalHt + tva;
 
         sendOrderConfirmedWebhook({
@@ -177,7 +158,7 @@ const orderIds = orders.map(o => o.id);
 const { data: allItems } = orderIds.length
   ? await supabaseAdmin
       .from('order_items')
-      .select('order_id, product_name, quantity, unit, price_ht_snapshot, pump_snapshot')
+      .select('order_id, product_name, quantity, unit, price_ht_snapshot, tva_rate_snapshot, pump_snapshot')
       .in('order_id', orderIds)
   : { data: [] };
 
@@ -225,7 +206,9 @@ function pennylaneSummary(order: (typeof orders)[number], items: any[], total: n
     return `- ${item.product_name}${item.unit ? ' (' + item.unit + ')' : ''} — Qté ${item.quantity} × ${puNum != null ? fmt(puNum) : '—'} = ${lineHt != null ? fmt(lineHt) : '—'}`;
   });
 
-  const tva = total != null ? total * 0.085 : null;
+  const tva = total != null
+    ? items.reduce((s, it) => s + Number(it.price_ht_snapshot ?? 0) * it.quantity * Number(it.tva_rate_snapshot ?? 0.085), 0)
+    : null;
   const ttc = total != null && tva != null ? total + tva : null;
 
   return [
@@ -238,7 +221,7 @@ function pennylaneSummary(order: (typeof orders)[number], items: any[], total: n
     ...(lines.length ? lines : ['(aucun article)']),
     '',
     `Total HT : ${total != null ? fmt(total) : '—'}`,
-    `TVA (8,5%) : ${tva != null ? fmt(tva) : '—'}`,
+    `TVA : ${tva != null ? fmt(tva) : '—'}`,
     `Total TTC : ${ttc != null ? fmt(ttc) : '—'}`,
   ].filter((l): l is string => l !== null).join('\n');
 }

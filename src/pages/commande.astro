@@ -6,6 +6,7 @@ import { supabaseAdmin, createAuthClient } from '../lib/supabase';
 import { Resend } from 'resend';
 import { generateOrderPDF } from '../lib/pdf';
 import { sanitizeText } from '../lib/sanitize';
+import { normalizeEmail } from '../lib/clients';
 
 const user = Astro.locals.user;
 if (!user) return Astro.redirect('/connexion');
@@ -44,7 +45,7 @@ if (Astro.request.method === 'POST') {
       nom:       user.user_metadata?.nom ?? '',
       societe:   user.user_metadata?.societe ?? '',
       telephone: user.user_metadata?.telephone ?? '',
-      email:     user.email ?? '',
+      email:     normalizeEmail(user.email),
       notes,
       status:    'en_attente',
     })
@@ -103,7 +104,7 @@ if (Astro.request.method === 'POST') {
       notes,
       items: items.map(item => {
         const p = item.products as any;
-        return { product_name: p?.name ?? '?', quantity: item.quantity, unit: p?.unit, price_ht: p?.price_ht };
+        return { product_name: p?.name ?? '?', quantity: item.quantity, unit: p?.unit, price_ht: p?.price_ht, tva_rate: p?.tva_rate };
       }),
       totalHT: orderTotalHT,
       date: new Date().toLocaleDateString('fr-FR'),
@@ -185,14 +186,14 @@ if (success && orderId) {
 
 type CartItem = {
   quantity: number;
-  products: { id: string; name: string; category: string; unit: string | null; units_per_carton: number | null; price_ht: number | null; stock_quantity: number | null } | null;
+  products: { id: string; name: string; category: string; unit: string | null; units_per_carton: number | null; price_ht: number | null; tva_rate: number | null; stock_quantity: number | null } | null;
 };
 
 let cartItems: CartItem[] = [];
 if (!success) {
   const { data } = await supabaseAdmin
     .from('cart_items')
-    .select('quantity, products(id, name, category, unit, units_per_carton, price_ht, stock_quantity)')
+    .select('quantity, products(id, name, category, unit, units_per_carton, price_ht, tva_rate, stock_quantity)')
     .eq('user_id', user.id)
     .order('updated_at', { ascending: true });
 
@@ -204,7 +205,9 @@ const nom     = user.user_metadata?.nom ?? user.email ?? '';
 const societe = user.user_metadata?.societe ?? '';
 const totalQty = cartItems.reduce((s, i) => s + i.quantity, 0);
 const totalHT  = cartItems.reduce((s, i) => s + i.quantity * Number(i.products?.price_ht ?? 0), 0);
-const totalTVA = totalHT * 0.085;
+const totalTVA = cartItems.reduce(
+  (s, i) => s + i.quantity * Number(i.products?.price_ht ?? 0) * Number(i.products?.tva_rate ?? 0.085), 0
+);
 const totalTTC = totalHT + totalTVA;
 const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
 ---
@@ -362,7 +365,7 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
                       <td class="col-price price-cell total-price-cell">{fmtHT(totalHT)}</td>
                     </tr>
                     <tr class="tva-row">
-                      <td colspan="3" class="tva-label-cell">TVA&nbsp;8,5&nbsp;%</td>
+                      <td colspan="3" class="tva-label-cell">TVA</td>
                       <td class="col-price tva-price-cell">+&nbsp;{fmtHT(totalTVA)}</td>
                     </tr>
                     <tr class="ttc-row">

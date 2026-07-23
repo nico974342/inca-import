@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../lib/supabase';
 import { generateInvoicePDF } from '../../../../lib/pdf';
+import { findClientByEmail } from '../../../../lib/clients';
 
 export const GET: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -36,14 +37,12 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
 
   const { data: items } = await supabaseAdmin
     .from('order_items')
-    .select('product_name, quantity, unit, price_ht_snapshot')
+    .select('product_name, quantity, unit, price_ht_snapshot, tva_rate_snapshot')
     .eq('order_id', id);
 
-  const { data: clientAcc } = await supabaseAdmin
-    .from('client_accounts')
-    .select('points_de_vente')
-    .eq('email', user.email!)
-    .maybeSingle();
+  const clientAcc = await findClientByEmail<{ points_de_vente: string | null }>(
+    user.email, 'points_de_vente'
+  );
 
   let totalHT = 0;
   const pdfItems = (items ?? []).map(item => {
@@ -54,6 +53,7 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
       quantity: item.quantity,
       unit: item.unit ?? null,
       price_ht: price_ht != null ? Number(price_ht) : null,
+      tva_rate: item.tva_rate_snapshot != null ? Number(item.tva_rate_snapshot) : null,
     };
   });
 

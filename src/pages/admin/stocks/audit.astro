@@ -8,10 +8,14 @@ const { data: products } = await supabaseAdmin
   .select('id, name, sku, category, stock_quantity')
   .order('name');
 
-// ── 2. Total received per product (from receptions) ───────────────────
+// ── 2. Total received per product — only receptions that actually
+//    applied stock. Historical receptions (stock_applied = false) count
+//    for PUMP but never touched stock, so including them would create
+//    a permanent false discrepancy for every product they contain. ────
 const { data: receptionItems } = await supabaseAdmin
   .from('stock_reception_items')
-  .select('product_id, quantity');
+  .select('product_id, quantity, stock_receptions!inner(stock_applied)')
+  .eq('stock_receptions.stock_applied', true);
 
 // ── 3. Total delivered per product — only currently-"livree" orders ───
 //    Orders cancelled AFTER being marked livree already had their

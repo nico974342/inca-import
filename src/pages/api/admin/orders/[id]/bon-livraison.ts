@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
 import { generatePDVDeliveryPDF } from '../../../../../lib/pdf';
+import { findClientByEmail } from '../../../../../lib/clients';
 
 export const GET: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -34,14 +35,9 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
     await supabaseAdmin.from('orders').update({ bl_number: blNumber }).eq('id', id);
   }
 
-  // Robust client lookup: email (trimmed) → nom → societe
+  // Robust client lookup: email (normalized, case-insensitive) → nom → societe
   const CLIENT_SELECT = 'nom, societe, points_de_vente, livraison_rue, livraison_ville, livraison_code_postal, adresse_pdv, facturation_same, facturation_rue, facturation_code_postal, facturation_ville';
-  let client: any = null;
-  if (order.email) {
-    const { data } = await supabaseAdmin.from('client_accounts').select(CLIENT_SELECT)
-      .eq('email', order.email.trim()).maybeSingle();
-    client = data;
-  }
+  let client: any = await findClientByEmail(order.email, CLIENT_SELECT);
   if (!client && order.nom) {
     const { data } = await supabaseAdmin.from('client_accounts').select(CLIENT_SELECT)
       .ilike('nom', order.nom.trim()).maybeSingle();

@@ -4,6 +4,7 @@ import { supabaseAdmin } from '../../lib/supabase';
 import { Resend } from 'resend';
 import { generateOrderPDF } from '../../lib/pdf';
 import { sanitizeText } from '../../lib/sanitize';
+import { normalizeEmail } from '../../lib/clients';
 
 const adminUser = Astro.locals.user;
 
@@ -72,7 +73,7 @@ if (Astro.request.method === 'POST') {
       nom:       client.nom,
       societe:   client.societe ?? '',
       telephone: client.telephone ?? '',
-      email:     client.email,
+      email:     client.email ? normalizeEmail(client.email) : null,
       notes,
       status:    'en_attente',
     })

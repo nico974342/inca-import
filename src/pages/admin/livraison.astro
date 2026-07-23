@@ -2,6 +2,7 @@
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { generateDeliverySummaryPDF, generatePDVDeliveryPDF } from '../../lib/pdf';
+import { normalizeEmail } from '../../lib/clients';
 import { Resend } from 'resend';
 
 const FROM = import.meta.env.RESEND_FROM ?? 'onboarding@resend.dev';
@@ -37,11 +38,11 @@ const clientPDVs = (clients ?? []).map(c => ({
   clientLabel: c.nom + (c.societe ? ` · ${c.societe}` : ''),
 }));
 
-// Email → pdvKey (trimmed + lowercased on both sides to tolerate whitespace drift)
+// Email → pdvKey (normalized on both sides to tolerate case/whitespace drift)
 const emailToClientKey = new Map(
   (clients ?? [])
     .filter(c => c.email)
-    .map(c => [(c.email as string).trim().toLowerCase(), `client_${c.id}`])
+    .map(c => [normalizeEmail(c.email as string), `client_${c.id}`])
 );
 // nom fallback — catches orders where email is null or was stored differently
 const nomToClientKey = new Map(
@@ -232,7 +233,7 @@ const societeToClientKey = new Map(
 
 const orderToPdvKey = new Map<string, string>();
 for (const order of confirmedOrders ?? []) {
-  const byEmail   = order.email   ? emailToClientKey.get(order.email.trim().toLowerCase())     : undefined;
+  const byEmail   = order.email   ? emailToClientKey.get(normalizeEmail(order.email))          : undefined;
   const byNom     = order.nom     ? nomToClientKey.get(order.nom.trim().toLowerCase())         : undefined;
   const bySociete = (order as any).societe ? societeToClientKey.get((order as any).societe.trim().toLowerCase()) : undefined;
   const key = byEmail ?? byNom ?? bySociete;

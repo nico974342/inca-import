@@ -5,6 +5,17 @@ export interface PdfOrderItem {
   quantity: number;
   unit?: string | null;
   price_ht?: number | null;
+  tva_rate?: number | null;
+}
+
+const DEFAULT_TVA_RATE = 0.085;
+
+// Per-item TVA using each line's snapshot rate; missing rates fall back to 8.5%.
+function computeTva(items: PdfOrderItem[]): number {
+  return items.reduce(
+    (s, it) => s + it.quantity * Number(it.price_ht ?? 0) * Number(it.tva_rate ?? DEFAULT_TVA_RATE),
+    0,
+  );
 }
 
 export interface PdfOrderData {
@@ -69,8 +80,7 @@ export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-    const TVA_RATE = 0.085;
-    const tva = order.totalHT * TVA_RATE;
+    const tva = computeTva(order.items);
     const ttc = order.totalHT + tva;
 
     // ── Brand header ──────────────────────────────────
@@ -193,7 +203,7 @@ export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
       .text(`${order.totalHT.toFixed(2)} EUR`, cols.hx, ry + 12, { width: 82, align: 'right' });
 
     doc.fontSize(8).font('Helvetica').fillColor(MUTED)
-      .text('TVA 8,5 %', 360, ry + 30)
+      .text('TVA', 360, ry + 30)
       .text(`${tva.toFixed(2)} EUR`, cols.hx, ry + 30, { width: 82, align: 'right' });
 
     doc.moveTo(360, ry + 46).lineTo(535, ry + 46).lineWidth(0.5).strokeColor(BORDER).stroke();
@@ -231,8 +241,7 @@ export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-    const TVA_RATE = 0.085;
-    const tva = order.totalHT * TVA_RATE;
+    const tva = computeTva(order.items);
     const ttc = order.totalHT + tva;
 
     // ── Brand header ──────────────────────────────────
@@ -349,7 +358,7 @@ export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
       .text(`${order.totalHT.toFixed(2)} EUR`, cols.hx, ry + 12, { width: 82, align: 'right' });
 
     doc.fontSize(8).font('Helvetica').fillColor(MUTED)
-      .text('TVA 8,5 %', 360, ry + 30)
+      .text('TVA', 360, ry + 30)
       .text(`${tva.toFixed(2)} EUR`, cols.hx, ry + 30, { width: 82, align: 'right' });
 
     doc.moveTo(360, ry + 46).lineTo(535, ry + 46).lineWidth(0.5).strokeColor(BORDER).stroke();
