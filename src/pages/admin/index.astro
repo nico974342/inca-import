@@ -1,6 +1,7 @@
 ---
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
+import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, CONTACT_STATUS_LABEL, CONTACT_STATUS_COLOR, marginColorClass } from '../../lib/constants';
 
 const now = new Date();
 const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
@@ -61,37 +62,8 @@ function formatCA(amount: number): string {
   }).format(amount);
 }
 
-const ORDER_STATUS_LABEL: Record<string, string> = {
-  en_attente:     'En attente',
-  confirmee:      'Confirmée',
-  en_preparation: 'En prépa.',
-  expediee:       'Expédiée',
-  livree:         'Livrée',
-  annulee:        'Annulée',
-};
-
-const ORDER_STATUS_COLOR: Record<string, string> = {
-  en_attente:     'blue',
-  confirmee:      'amber',
-  en_preparation: 'purple',
-  expediee:       'coral',
-  livree:         'green',
-  annulee:        'muted',
-};
-
-const CONTACT_LABEL: Record<string, string> = {
-  nouveau:  'Nouveau',
-  contacte: 'Contacté',
-  converti: 'Converti',
-  rejete:   'Rejeté',
-};
-
-const CONTACT_COLOR: Record<string, string> = {
-  nouveau:  'blue',
-  contacte: 'amber',
-  converti: 'green',
-  rejete:   'muted',
-};
+const CONTACT_LABEL = CONTACT_STATUS_LABEL;
+const CONTACT_COLOR = CONTACT_STATUS_COLOR;
 
 const hasLowStock          = (lowStockItems ?? []).length > 0;
 const hasPendingDelivery   = (livraisonsEnAttente ?? 0) > 0;
@@ -150,7 +122,7 @@ const hasPendingClients    = (clientsEnAttente ?? 0) > 0;
         <span class="stat-value stat-value--ca">{formatCA(caMonth)}</span>
         <span class="stat-label">CA du mois (HT)</span>
         {margeMonth != null ? (
-          <span class={`stat-marge ${margeMonth >= 30 ? 'stat-marge--green' : margeMonth >= 15 ? 'stat-marge--amber' : 'stat-marge--red'}`}>
+          <span class={`stat-marge stat-marge--${marginColorClass(margeMonth)}`}>
             Marge {margeMonth.toFixed(1)} %
           </span>
         ) : caMonth > 0 ? (
@@ -601,7 +573,6 @@ a.stat-card--urgent:hover { border-color: var(--color-primary); }
 .badge--blue   { background: oklch(0.93 0.05 220);        color: oklch(0.33 0.12 220); }
 .badge--amber  { background: oklch(0.95 0.07 80);         color: oklch(0.40 0.14 80); }
 .badge--purple { background: oklch(0.93 0.05 295);        color: oklch(0.38 0.12 295); }
-.badge--coral  { background: oklch(0.568 0.149 45.9 / 0.12); color: var(--color-primary-deep); }
 .badge--green  { background: oklch(0.92 0.08 150);        color: oklch(0.32 0.12 150); }
 .badge--red    { background: oklch(0.95 0.04 25);         color: oklch(0.46 0.18 25); }
 

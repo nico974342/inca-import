@@ -1,6 +1,7 @@
 ---
 import AdminLayout from '../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../lib/supabase';
+import { marginColorClass } from '../../../lib/constants';
 
 const { data: products, error } = await supabaseAdmin
   .from('products')
@@ -21,10 +22,7 @@ function formatPrice(p: number | null) {
 }
 
 function margeClass(marge: number | null): string {
-  if (marge == null) return 'marge--none';
-  if (marge >= 30) return 'marge--green';
-  if (marge >= 15) return 'marge--amber';
-  return 'marge--red';
+  return `marge--${marginColorClass(marge)}`;
 }
 
 function margeInfo(pump: number | null, prix: number | null): { label: string; cls: string } {

@@ -2,8 +2,14 @@
 import '../styles/global.css';
 import { createAuthClient } from '../lib/supabase';
 import { sanitizeEmail } from '../lib/sanitize';
+import { getClientIp, isRateLimited } from '../lib/rateLimit';
 
 if (Astro.request.method === 'POST') {
+  const ip = getClientIp(Astro.request);
+  if (isRateLimited(`reset:${ip}`, 3, 60_000)) {
+    return Astro.redirect('/mot-de-passe-oublie?error=rate_limit');
+  }
+
   const form  = await Astro.request.formData();
   const email = sanitizeEmail(form.get('email') as string);
 
@@ -18,7 +24,8 @@ if (Astro.request.method === 'POST') {
   return Astro.redirect('/mot-de-passe-oublie?envoye=1');
 }
 
-const envoye = !!Astro.url.searchParams.get('envoye');
+const envoye    = !!Astro.url.searchParams.get('envoye');
+const rateLimit = Astro.url.searchParams.get('error') === 'rate_limit';
 ---
 <!doctype html>
 <html lang="fr">
@@ -63,6 +70,9 @@ const envoye = !!Astro.url.searchParams.get('envoye');
         </div>
       ) : (
         <form method="POST" class="auth-form" novalidate>
+          {rateLimit && (
+            <p class="auth-error" role="alert">Trop de tentatives. Patientez une minute avant de réessayer.</p>
+          )}
           <p class="auth-hint">Indiquez votre adresse email, nous vous envoyons un lien pour créer un nouveau mot de passe.</p>
           <div class="field">
             <label for="email">Adresse email</label>
@@ -90,6 +100,16 @@ const envoye = !!Astro.url.searchParams.get('envoye');
 </html>
 
 <style>
+.auth-error {
+  font-size: var(--text-sm);
+  color: oklch(0.50 0.19 25);
+  background: oklch(0.97 0.04 25);
+  border: 1px solid oklch(0.88 0.07 25);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
 .auth-body {
   font-family: var(--font-body);
   background: var(--color-surface);

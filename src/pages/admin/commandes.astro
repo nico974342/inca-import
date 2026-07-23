@@ -4,13 +4,14 @@ import { supabaseAdmin } from '../../lib/supabase';
 import { sendLowStockAlert, sendOrderStatusEmail } from '../../lib/email';
 import { sendOrderConfirmedWebhook } from '../../lib/webhooks';
 import { logAdminAction } from '../../lib/audit';
+import { ORDER_STATUSES, ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, marginColorClass } from '../../lib/constants';
 
 // Handle POST: update order status
 if (Astro.request.method === 'POST') {
   const data       = await Astro.request.formData();
   const order_id   = data.get('order_id') as string;
   const new_status = data.get('status')   as string;
-  const VALID = ['en_attente', 'confirmee', 'en_preparation', 'expediee', 'livree', 'annulee'];
+  const VALID: readonly string[] = ORDER_STATUSES;
 
   if (order_id && VALID.includes(new_status)) {
     // Fetch current status to detect first-time confirmation
@@ -136,22 +137,34 @@ if (Astro.request.method === 'POST') {
   return Astro.redirect('/admin/commandes');
 }
 
+const PAGE_SIZE = 25;
+const page = Math.max(1, parseInt(Astro.url.searchParams.get('page') ?? '1', 10));
 const filterStatus = Astro.url.searchParams.get('status') ?? '';
 
-// Fetch all orders (filter applied in DB only when set)
-let query = supabaseAdmin
+// Paginated fetch — filtered by status when set
+let ordersQuery = supabaseAdmin
   .from('orders')
-  .select('id, status, created_at, nom, societe, email, telephone, notes, user_id, invoice_path')
-  .order('created_at', { ascending: false });
+  .select('id, status, created_at, nom, societe, email, telephone, notes, user_id, invoice_path', { count: 'exact' })
+  .order('created_at', { ascending: false })
+  .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
 
-const { data: allOrders } = await supabaseAdmin
-  .from('orders')
-  .select('id, status, created_at, nom, societe, email, telephone, notes, user_id, invoice_path')
-  .order('created_at', { ascending: false });
+if (filterStatus) ordersQuery = ordersQuery.eq('status', filterStatus);
 
-const orders = filterStatus
-  ? (allOrders ?? []).filter(o => o.status === filterStatus)
-  : (allOrders ?? []);
+const { data: ordersData, count: filteredCount } = await ordersQuery;
+const orders = ordersData ?? [];
+const totalPages = Math.ceil((filteredCount ?? 0) / PAGE_SIZE);
+
+// Lightweight counts for the filter tabs — head-only, no row data
+const { count: totalCount } = await supabaseAdmin
+  .from('orders').select('*', { count: 'exact', head: true });
+
+const statusCountEntries = await Promise.all(
+  ORDER_STATUSES.map(async (key) => {
+    const { count } = await supabaseAdmin
+      .from('orders').select('*', { count: 'exact', head: true }).eq('status', key);
+    return [key, count ?? 0] as const;
+  })
+);
 
 // Fetch items for displayed orders
 const orderIds = orders.map(o => o.id);
@@ -226,29 +239,11 @@ function pennylaneSummary(order: (typeof orders)[number], items: any[], total: n
   ].filter((l): l is string => l !== null).join('\n');
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  en_attente:     'En attente',
-  confirmee:      'Confirmée',
-  en_preparation: 'En préparation',
-  expediee:       'Expédiée',
-  livree:         'Livrée',
-  annulee:        'Annulée',
-};
-
-const STATUS_COLOR: Record<string, string> = {
-  en_attente:     'muted',
-  confirmee:      'blue',
-  en_preparation: 'amber',
-  expediee:       'purple',
-  livree:         'green',
-  annulee:        'red',
-};
+const STATUS_LABEL = ORDER_STATUS_LABEL;
+const STATUS_COLOR = ORDER_STATUS_COLOR;
 
 // Counts per status across ALL orders
-const counts: Record<string, number> = {};
-for (const key of Object.keys(STATUS_LABEL)) {
-  counts[key] = (allOrders ?? []).filter(o => o.status === key).length;
-}
+const counts: Record<string, number> = Object.fromEntries(statusCountEntries);
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
@@ -264,7 +259,7 @@ function shortId(id: string) {
   <div class="filter-bar">
     <a href="/admin/commandes" class={`filter-tab ${!filterStatus ? 'filter-tab--active' : ''}`}>
       Toutes
-      <span class="filter-count">{allOrders?.length ?? 0}</span>
+      <span class="filter-count">{totalCount ?? 0}</span>
     </a>
     {Object.entries(STATUS_LABEL).map(([key, label]) => (
       <a href={`/admin/commandes?status=${key}`} class={`filter-tab filter-tab--${STATUS_COLOR[key]} ${filterStatus === key ? 'filter-tab--active' : ''}`}>
@@ -372,7 +367,7 @@ function shortId(id: string) {
                 )}
 
                 {margin !== null && (
-                  <div class={`margin-bar ${margin.pct >= 30 ? 'margin-bar--green' : margin.pct >= 15 ? 'margin-bar--amber' : 'margin-bar--red'}`}>
+                  <div class={`margin-bar margin-bar--${marginColorClass(margin.pct)}`}>
                     <span class="margin-label">
                       Marge{margin.partial ? '*' : ''} :
                     </span>
@@ -474,6 +469,18 @@ function shortId(id: string) {
     </ul>
   )}
 
+  {totalPages > 1 && (
+    <nav class="pagination" aria-label="Pagination">
+      {page > 1 && (
+        <a href={`/admin/commandes?page=${page - 1}${filterStatus ? `&status=${filterStatus}` : ''}`} class="page-btn">← Précédent</a>
+      )}
+      <span class="page-info">Page {page} / {totalPages}</span>
+      {page < totalPages && (
+        <a href={`/admin/commandes?page=${page + 1}${filterStatus ? `&status=${filterStatus}` : ''}`} class="page-btn">Suivant →</a>
+      )}
+    </nav>
+  )}
+
 </AdminLayout>
 
 <style>
@@ -517,6 +524,33 @@ function shortId(id: string) {
   border: 1px solid var(--color-border);
   min-width: 18px;
   text-align: center;
+}
+
+/* ── Pagination ───────────────────────────────── */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+
+.page-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+  text-decoration: none;
+  background: var(--color-bg);
+  transition: border-color var(--dur-fast), background var(--dur-fast);
+}
+.page-btn:hover { border-color: var(--color-border-strong); background: var(--color-surface); }
+
+.page-info {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
 }
 
 /* ── Empty state ─────────────────────────────── */

@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../lib/supabase';
 import { generateInvoicePDF } from '../../../../lib/pdf';
-import { findClientByEmail } from '../../../../lib/clients';
+import { findClientByEmail, normalizeEmail } from '../../../../lib/clients';
 
 export const GET: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -14,12 +14,23 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
   const { id } = params;
   if (!id) return new Response('Non trouvé', { status: 404 });
 
-  const { data: order } = await supabaseAdmin
+  // Ownership check without .or() string interpolation: try user_id first,
+  // then fall back to the normalized email match.
+  let { data: order } = await supabaseAdmin
     .from('orders')
     .select('*')
     .eq('id', id)
-    .or(`user_id.eq.${user.id},email.eq.${user.email}`)
-    .single();
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (!order && user.email) {
+    ({ data: order } = await supabaseAdmin
+      .from('orders')
+      .select('*')
+      .eq('id', id)
+      .eq('email', normalizeEmail(user.email))
+      .maybeSingle());
+  }
 
   if (!order) return new Response('Non trouvé', { status: 404 });
 

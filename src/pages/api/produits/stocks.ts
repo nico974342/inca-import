@@ -89,24 +89,17 @@ export const POST: APIRoute = async ({ request, cookies }) => {
 
   if (body?.action === 'zero-all') {
     await zeroAllStock();
-  } else if (body?.id && (typeof body.delta === 'number' || typeof body.value === 'number')) {
-    const { id } = body;
-    const { data: prod, error } = await supabaseAdmin
-      .from('products')
-      .select('stock_quantity')
-      .eq('id', id)
-      .single();
-
-    if (error) console.error('fetch product error:', error);
-
-    if (prod) {
-      const newQty =
-        typeof body.value === 'number'
-          ? Math.max(0, Math.trunc(body.value))
-          : Math.max(0, prod.stock_quantity + (body.delta ?? 0));
-
-      await touchStock(id, { stock_quantity: newQty, in_stock: newQty > 0 });
-    }
+  } else if (body?.id && typeof body.value === 'number') {
+    // Absolute set — no read needed, single atomic update
+    const newQty = Math.max(0, Math.trunc(body.value));
+    await touchStock(body.id, { stock_quantity: newQty, in_stock: newQty > 0 });
+  } else if (body?.id && typeof body.delta === 'number') {
+    // Relative adjust — atomic in Postgres, no read-then-write race
+    const { error } = await supabaseAdmin.rpc('product_adjust_stock', {
+      p_product_id: body.id,
+      p_delta: Math.trunc(body.delta),
+    });
+    if (error) console.error('product_adjust_stock error:', error);
   }
 
   const products = await listProducts();

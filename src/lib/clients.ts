@@ -27,3 +27,10 @@ export async function findClientByEmail<T = Record<string, unknown>>(
     .maybeSingle();
   return (data as T | null) ?? null;
 }
+
+/** Applies a client's negotiated discount (percent, 0-100) to a HT price. */
+export function applyRemise(priceHt: number | null | undefined, remisePct: number | null | undefined): number | null {
+  if (priceHt == null) return null;
+  if (!remisePct) return priceHt;
+  return Math.round(priceHt * (1 - remisePct / 100) * 10000) / 10000;
+}

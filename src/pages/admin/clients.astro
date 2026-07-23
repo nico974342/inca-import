@@ -21,7 +21,7 @@ if (Astro.request.method === 'POST') {
       .single();
 
     if (contact) {
-      await supabaseAdmin.from('client_accounts').insert({
+      const { error: insertErr } = await supabaseAdmin.from('client_accounts').insert({
         contact_request_id: contact.id,
         nom: contact.nom,
         societe: contact.societe,
@@ -31,6 +31,13 @@ if (Astro.request.method === 'POST') {
         notes: contact.notes,
         status: 'actif',
       });
+
+      if (insertErr) {
+        console.error('[admin/clients] convert insert error:', insertErr.code, insertErr.message);
+        const reason = insertErr.code === '23505' ? 'email_existe' : 'erreur';
+        return Astro.redirect(`/admin/clients?client_error=${reason}`);
+      }
+
       await supabaseAdmin.from('contact_requests').update({ status: 'converti' }).eq('id', contact.id);
       await logAdminAction({
         adminEmail,
@@ -95,10 +102,17 @@ if (Astro.request.method === 'POST') {
     const notes         = sanitizeText(data.get('notes')          as string, 500);
     const status        = (data.get('status') as string) || 'actif';
     if (nom && email) {
-      await supabaseAdmin.from('client_accounts').insert({
+      const { error: insertErr } = await supabaseAdmin.from('client_accounts').insert({
         nom, societe: societe || null, telephone: telephone || null, email,
         points_de_vente: pointsDeVente || null, notes: notes || null, status,
       });
+
+      if (insertErr) {
+        console.error('[admin/clients] create_client insert error:', insertErr.code, insertErr.message);
+        const reason = insertErr.code === '23505' ? 'email_existe' : 'erreur';
+        return Astro.redirect(`/admin/clients?client_error=${reason}`);
+      }
+
       await logAdminAction({
         adminEmail,
         action: 'client.creation',
@@ -106,6 +120,8 @@ if (Astro.request.method === 'POST') {
         targetLabel: societe || nom,
         details: { email, status },
       });
+    } else {
+      return Astro.redirect('/admin/clients?client_error=champs_requis');
     }
   } else if (action === 'update_contact_notes') {
     const id    = data.get('id') as string;
@@ -141,6 +157,13 @@ const adminEmailSet = new Set(
 const pendingCount = clients.filter(c => c.status === 'en_attente').length;
 const deleted      = !!Astro.url.searchParams.get('deleted');
 const convertedContactIds = new Set(clients.map(c => c.contact_request_id).filter(Boolean));
+
+const clientError = Astro.url.searchParams.get('client_error');
+const CLIENT_ERROR_MSG: Record<string, string> = {
+  email_existe:  'Cette adresse email est déjà utilisée par un autre client.',
+  champs_requis: 'Nom et email sont obligatoires.',
+  erreur:        "Une erreur est survenue lors de l'enregistrement du client.",
+};
 
 const CLIENT_STATUS_LABELS: Record<string, string> = {
   en_attente: 'Client en attente',
@@ -195,6 +218,13 @@ const rows: Row[] = [
       isAdmin: false,
     })),
 ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+// Clients and contact requests are two tables merged and globally sorted
+// above, so pagination happens on the merged list rather than in the DB.
+const PAGE_SIZE = 30;
+const page = Math.max(1, parseInt(Astro.url.searchParams.get('page') ?? '1', 10));
+const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
@@ -260,6 +290,15 @@ function formatDate(iso: string) {
       Client supprimé avec succès.
     </div>
   )}
+  {clientError && (
+    <div class="error-alert" role="alert">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M8 5v3.5M8 11h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      {CLIENT_ERROR_MSG[clientError] ?? CLIENT_ERROR_MSG.erreur}
+    </div>
+  )}
   {pendingCount > 0 && (
     <div class="pending-alert">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -287,7 +326,7 @@ function formatDate(iso: string) {
           </tr>
         </thead>
         <tbody>
-          {rows.map(r => (
+          {pageRows.map(r => (
             <tr
               class={r.kind === 'client' ? 'client-row' : ''}
               data-href={r.kind === 'client' ? `/admin/clients/${r.id}` : undefined}
@@ -388,6 +427,18 @@ function formatDate(iso: string) {
       <p class="empty-body">Les demandes du formulaire de contact et les inscriptions apparaîtront ici.</p>
     </div>
   )}
+
+  {totalPages > 1 && (
+    <nav class="pagination" aria-label="Pagination">
+      {page > 1 && (
+        <a href={`/admin/clients?page=${page - 1}`} class="page-btn">← Précédent</a>
+      )}
+      <span class="page-info">Page {page} / {totalPages}</span>
+      {page < totalPages && (
+        <a href={`/admin/clients?page=${page + 1}`} class="page-btn">Suivant →</a>
+      )}
+    </nav>
+  )}
 </AdminLayout>
 
 <script>
@@ -415,6 +466,46 @@ function formatDate(iso: string) {
   margin-bottom: var(--space-5);
 }
 .success-alert svg { flex-shrink: 0; }
+
+.error-alert {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: oklch(0.97 0.03 25);
+  border: 1px solid oklch(0.88 0.07 25);
+  border-radius: var(--radius-md);
+  color: oklch(0.46 0.18 25);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-5);
+}
+.error-alert svg { flex-shrink: 0; }
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+
+.page-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-ink);
+  text-decoration: none;
+  background: var(--color-bg);
+  transition: border-color var(--dur-fast), background var(--dur-fast);
+}
+.page-btn:hover { border-color: var(--color-border-strong); background: var(--color-surface); }
+
+.page-info {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
 
 .pending-alert {
   display: flex;

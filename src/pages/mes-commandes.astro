@@ -3,6 +3,8 @@ import Base from '../layouts/Base.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import { supabaseAdmin, createAuthClient } from '../lib/supabase';
+import { normalizeEmail } from '../lib/clients';
+import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR } from '../lib/constants';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -11,12 +13,25 @@ if (!user || user.user_metadata?.role !== 'client') {
   return Astro.redirect('/connexion?from=/mes-commandes');
 }
 
-// Fetch orders for this user, newest first
-const { data: orders } = await supabaseAdmin
-  .from('orders')
-  .select('id, status, created_at, notes')
-  .or(`user_id.eq.${user.id},email.eq.${user.email}`)
-  .order('created_at', { ascending: false });
+// Fetch orders for this user (by user_id and by normalized email — two safe
+// queries instead of .or() string interpolation), newest first
+const [byUser, byEmail] = await Promise.all([
+  supabaseAdmin
+    .from('orders')
+    .select('id, status, created_at, notes')
+    .eq('user_id', user.id),
+  user.email
+    ? supabaseAdmin
+        .from('orders')
+        .select('id, status, created_at, notes')
+        .eq('email', normalizeEmail(user.email))
+    : Promise.resolve({ data: [] as { id: string; status: string; created_at: string; notes: string | null }[] }),
+]);
+
+const orderById = new Map<string, { id: string; status: string; created_at: string; notes: string | null }>();
+for (const o of [...(byUser.data ?? []), ...(byEmail.data ?? [])]) orderById.set(o.id, o);
+const orders = Array.from(orderById.values())
+  .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
 // Fetch all order items for those orders in one query
 const orderIds = (orders ?? []).map(o => o.id);
@@ -50,33 +65,8 @@ function orderTotal(orderId: string): number | null {
   return hasPrice ? total : null;
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  en_attente:     'En attente',
-  confirmee:      'Confirmée',
-  en_preparation: 'En préparation',
-  expediee:       'Expédiée',
-  livree:         'Livrée',
-  annulee:        'Annulée',
-  // legacy fallbacks
-  recu:    'Reçu',
-  confirme: 'Confirmé',
-  livre:   'Livré',
-  annule:  'Annulé',
-};
-
-const STATUS_COLOR: Record<string, string> = {
-  en_attente:     'muted',
-  confirmee:      'blue',
-  en_preparation: 'amber',
-  expediee:       'purple',
-  livree:         'green',
-  annulee:        'red',
-  // legacy fallbacks
-  recu:    'muted',
-  confirme: 'blue',
-  livre:   'green',
-  annule:  'red',
-};
+const STATUS_LABEL = ORDER_STATUS_LABEL;
+const STATUS_COLOR = ORDER_STATUS_COLOR;
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('fr-FR', {

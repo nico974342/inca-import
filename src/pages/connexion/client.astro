@@ -10,8 +10,10 @@ const error = Astro.url.searchParams.get('error');
 const reinitialise = !!Astro.url.searchParams.get('reinitialise');
 
 const ERRORS: Record<string, string> = {
-  champs_requis:        'Email et mot de passe sont obligatoires.',
+  champs_requis:          'Email et mot de passe sont obligatoires.',
   identifiants_invalides: 'Email ou mot de passe incorrect.',
+  trop_de_tentatives:     'Trop de tentatives échouées. Réessayez dans 15 minutes.',
+  rate_limit:             'Trop de tentatives. Patientez une minute avant de réessayer.',
 };
 ---
 <!doctype html>

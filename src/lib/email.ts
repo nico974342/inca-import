@@ -1,19 +1,13 @@
 import { Resend } from 'resend';
+import { COMPANY, RESEND_DEFAULT_FROM, DEFAULT_TVA_RATE, ORDER_STATUS_LABEL } from './constants';
 
 const API_KEY  = import.meta.env.RESEND_API_KEY as string | undefined;
-const FROM     = (import.meta.env.RESEND_FROM as string | undefined) ?? 'Inca Import <noreply@inca-import.re>';
-const ADMIN    = 'inca-import@hotmail.com';
-const SITE_URL = 'https://www.inca-import.re';
-const TVA_RATE = 0.085;
+const FROM     = (import.meta.env.RESEND_FROM as string | undefined) ?? RESEND_DEFAULT_FROM;
+const ADMIN    = COMPANY.contactEmail;
+const SITE_URL = COMPANY.siteUrl;
+const TVA_RATE = DEFAULT_TVA_RATE;
 
-const STATUS_LABEL: Record<string, string> = {
-  en_attente:     'En attente',
-  confirmee:      'Confirmée',
-  en_preparation: 'En préparation',
-  expediee:       'Expédiée',
-  livree:         'Livrée',
-  annulee:        'Annulée',
-};
+const STATUS_LABEL = ORDER_STATUS_LABEL;
 
 const STATUS_MESSAGE: Record<string, string> = {
   en_attente:
@@ -217,17 +211,17 @@ export async function sendOrderStatusEmail(params: {
               <tr>
                 <td style="padding-right:28px;padding-bottom:4px;">
                   <span style="font-size:13px;color:#78716C;">📞</span>&nbsp;
-                  <a href="tel:+262692478941" style="font-size:13px;color:#E55A2B;text-decoration:none;font-weight:500;">0692&nbsp;47&nbsp;89&nbsp;41</a>
+                  <a href="tel:${COMPANY.phoneHref}" style="font-size:13px;color:#E55A2B;text-decoration:none;font-weight:500;">${COMPANY.phoneDisplay.replace(/ /g, '&nbsp;')}</a>
                 </td>
                 <td style="padding-bottom:4px;">
                   <span style="font-size:13px;color:#78716C;">✉️</span>&nbsp;
-                  <a href="mailto:inca-import@hotmail.com" style="font-size:13px;color:#E55A2B;text-decoration:none;font-weight:500;">inca-import@hotmail.com</a>
+                  <a href="mailto:${COMPANY.contactEmail}" style="font-size:13px;color:#E55A2B;text-decoration:none;font-weight:500;">${COMPANY.contactEmail}</a>
                 </td>
               </tr>
             </table>
             <p style="margin:18px 0 0;font-size:11px;color:#C4BAB1;line-height:1.8;">
-              Inca Import · 29 Route des Premiers Français · 97460 Saint-Paul, La Réunion<br>
-              SIRET&nbsp;945&nbsp;112&nbsp;753 · Disponible 7j/7
+              ${COMPANY.name} · ${COMPANY.addressLine} · ${COMPANY.postalCode} ${COMPANY.city}, ${COMPANY.region}<br>
+              SIRET&nbsp;${COMPANY.siret.replace(/ /g, '&nbsp;')} · Disponible 7j/7
             </p>
           </td>
         </tr>
@@ -318,17 +312,17 @@ export async function sendClientActivationEmail(params: {
               <tr>
                 <td style="padding-right:28px;padding-bottom:4px;">
                   <span style="font-size:13px;color:#78716C;">📞</span>&nbsp;
-                  <a href="tel:+262692478941" style="font-size:13px;color:#E55A2B;text-decoration:none;font-weight:500;">0692&nbsp;47&nbsp;89&nbsp;41</a>
+                  <a href="tel:${COMPANY.phoneHref}" style="font-size:13px;color:#E55A2B;text-decoration:none;font-weight:500;">${COMPANY.phoneDisplay.replace(/ /g, '&nbsp;')}</a>
                 </td>
                 <td style="padding-bottom:4px;">
                   <span style="font-size:13px;color:#78716C;">✉️</span>&nbsp;
-                  <a href="mailto:inca-import@hotmail.com" style="font-size:13px;color:#E55A2B;text-decoration:none;font-weight:500;">inca-import@hotmail.com</a>
+                  <a href="mailto:${COMPANY.contactEmail}" style="font-size:13px;color:#E55A2B;text-decoration:none;font-weight:500;">${COMPANY.contactEmail}</a>
                 </td>
               </tr>
             </table>
             <p style="margin:18px 0 0;font-size:11px;color:#C4BAB1;line-height:1.8;">
-              Inca Import · 29 Route des Premiers Français · 97460 Saint-Paul, La Réunion<br>
-              SIRET&nbsp;945&nbsp;112&nbsp;753 · Disponible 7j/7
+              ${COMPANY.name} · ${COMPANY.addressLine} · ${COMPANY.postalCode} ${COMPANY.city}, ${COMPANY.region}<br>
+              SIRET&nbsp;${COMPANY.siret.replace(/ /g, '&nbsp;')} · Disponible 7j/7
             </p>
           </td>
         </tr>

@@ -6,10 +6,15 @@ import { supabaseAdmin, createAuthClient } from '../lib/supabase';
 import { Resend } from 'resend';
 import { generateOrderPDF } from '../lib/pdf';
 import { sanitizeText } from '../lib/sanitize';
-import { normalizeEmail } from '../lib/clients';
+import { normalizeEmail, findClientByEmail, applyRemise } from '../lib/clients';
+import { COMPANY, RESEND_DEFAULT_FROM } from '../lib/constants';
 
 const user = Astro.locals.user;
 if (!user) return Astro.redirect('/connexion');
+
+// Negotiated discount, if any — applied to every line at order time
+const clientAccount = await findClientByEmail<{ remise: number | null }>(user.email, 'remise');
+const remisePct = clientAccount?.remise ?? null;
 
 const CAT_LABEL: Record<string, string> = {
   boissons:    'Boissons',
@@ -54,7 +59,8 @@ if (Astro.request.method === 'POST') {
 
   if (orderError || !order) return Astro.redirect('/commande?error=1');
 
-  // Snapshot order items (including price/TVA/PUMP at order time)
+  // Snapshot order items (price/TVA/PUMP at order time — price includes the
+  // client's negotiated remise; PUMP stays the real cost for margin math)
   const { error: itemsError } = await supabaseAdmin.from('order_items').insert(
     items.map(item => {
       const p = item.products as any;
@@ -64,7 +70,7 @@ if (Astro.request.method === 'POST') {
         product_name:      p?.name ?? 'Produit inconnu',
         quantity:          item.quantity,
         unit:              p?.unit ?? null,
-        price_ht_snapshot: p?.price_ht ?? null,
+        price_ht_snapshot: applyRemise(p?.price_ht ?? null, remisePct),
         tva_rate_snapshot: p?.tva_rate ?? null,
         pump_snapshot:     p?.prix_achat_moyen_ht ?? null,
       };
@@ -88,7 +94,7 @@ if (Astro.request.method === 'POST') {
   const tel            = user.user_metadata?.telephone ?? '';
   const points_de_vente = user.user_metadata?.points_de_vente ?? null;
   const orderTotalHT = items.reduce(
-    (s, item) => s + item.quantity * Number((item.products as any)?.price_ht ?? 0), 0
+    (s, item) => s + item.quantity * Number(applyRemise((item.products as any)?.price_ht ?? null, remisePct) ?? 0), 0
   );
 
   // Generate PDF — non-blocking on error
@@ -104,7 +110,7 @@ if (Astro.request.method === 'POST') {
       notes,
       items: items.map(item => {
         const p = item.products as any;
-        return { product_name: p?.name ?? '?', quantity: item.quantity, unit: p?.unit, price_ht: p?.price_ht, tva_rate: p?.tva_rate };
+        return { product_name: p?.name ?? '?', quantity: item.quantity, unit: p?.unit, price_ht: applyRemise(p?.price_ht ?? null, remisePct), tva_rate: p?.tva_rate };
       }),
       totalHT: orderTotalHT,
       date: new Date().toLocaleDateString('fr-FR'),
@@ -119,13 +125,13 @@ if (Astro.request.method === 'POST') {
     const lignes = items.map(item => {
       const p      = item.products as any;
       const unit   = p?.unit ? ` (${p.unit})` : '';
-      const lineHT = (item.quantity * Number(p?.price_ht ?? 0)).toFixed(2).replace('.', ',');
+      const lineHT = (item.quantity * Number(applyRemise(p?.price_ht ?? null, remisePct) ?? 0)).toFixed(2).replace('.', ',');
       return `• ${p?.name ?? '?'} × ${item.quantity}${unit} — ${lineHT} € HT`;
     }).join('\n');
 
     const emailPayload: Parameters<typeof resend.emails.send>[0] = {
-      from:    'onboarding@resend.dev',
-      to:      'inca-import@hotmail.com',
+      from:    (import.meta.env.RESEND_FROM as string | undefined) ?? RESEND_DEFAULT_FROM,
+      to:      COMPANY.contactEmail,
       subject: `Nouvelle commande — ${nom}${societe ? ` (${societe})` : ''}`,
       text: [
         '=== Nouvelle commande Inca Import ===',
@@ -204,9 +210,9 @@ if (!success) {
 const nom     = user.user_metadata?.nom ?? user.email ?? '';
 const societe = user.user_metadata?.societe ?? '';
 const totalQty = cartItems.reduce((s, i) => s + i.quantity, 0);
-const totalHT  = cartItems.reduce((s, i) => s + i.quantity * Number(i.products?.price_ht ?? 0), 0);
+const totalHT  = cartItems.reduce((s, i) => s + i.quantity * Number(applyRemise(i.products?.price_ht ?? null, remisePct) ?? 0), 0);
 const totalTVA = cartItems.reduce(
-  (s, i) => s + i.quantity * Number(i.products?.price_ht ?? 0) * Number(i.products?.tva_rate ?? 0.085), 0
+  (s, i) => s + i.quantity * Number(applyRemise(i.products?.price_ht ?? null, remisePct) ?? 0) * Number(i.products?.tva_rate ?? 0.085), 0
 );
 const totalTTC = totalHT + totalTVA;
 const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
@@ -305,7 +311,7 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
                   <tbody>
                     {cartItems.map(item => {
                       const p          = item.products;
-                      const lineHT     = item.quantity * Number(p?.price_ht ?? 0);
+                      const lineHT     = item.quantity * Number(applyRemise(p?.price_ht ?? null, remisePct) ?? 0);
                       const unit       = p?.unit ?? 'carton';
                       const upc        = p?.units_per_carton;
                       const totalUnits = upc ? item.quantity * upc : null;

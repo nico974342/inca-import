@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit';
+import { COMPANY, COMPANY_ADDRESS_LINE, DEFAULT_TVA_RATE } from './constants';
 
 export interface PdfOrderItem {
   product_name: string;
@@ -7,8 +8,6 @@ export interface PdfOrderItem {
   price_ht?: number | null;
   tva_rate?: number | null;
 }
-
-const DEFAULT_TVA_RATE = 0.085;
 
 // Per-item TVA using each line's snapshot rate; missing rates fall back to 8.5%.
 function computeTva(items: PdfOrderItem[]): number {
@@ -68,8 +67,8 @@ const LIVR_BG   = '#FFF0E6';  // warm tint for livraison block
 const LIVR_BORD = '#E8A87C';  // orange border for livraison block
 const LIVR_LBL  = '#9B4D1E';  // darker orange for livraison label
 
-const FOOTER_L1 = 'Inca Import · 29 Route des Premiers Français · 97460 Saint-Paul · SIRET 945 112 753';
-const FOOTER_L2 = 'contact@inca-import.re · 0692 47 89 41';
+const FOOTER_L1 = `${COMPANY.name} · ${COMPANY.addressLine} · ${COMPANY.postalCode} ${COMPANY.city} · SIRET ${COMPANY.siret}`;
+const FOOTER_L2 = `${COMPANY.contactEmail} · ${COMPANY.phoneDisplay}`;
 
 export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -85,7 +84,7 @@ export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
 
     // ── Brand header ──────────────────────────────────
     doc.fontSize(22).font('Helvetica-Bold').fillColor(PRIMARY).text('Inca Import', 50, 50);
-    doc.fontSize(9).font('Helvetica').fillColor(MUTED).text('Grossiste B2B · La Reunion, 974', 50, 78);
+    doc.fontSize(9).font('Helvetica').fillColor(MUTED).text('Grossiste B2B · La Réunion', 50, 78);
 
     // Order ref (top right)
     doc.fontSize(8).font('Helvetica').fillColor(MUTED)
@@ -225,7 +224,7 @@ export function generateOrderPDF(order: PdfOrderData): Promise<Buffer> {
     for (let p = 0; p < totalPages; p++) {
       doc.switchToPage(p);
       doc.fontSize(7).font('Helvetica').fillColor(MUTED)
-        .text('Inca Import · inca-import@hotmail.com · 0692 47 89 41 · La Reunion, 974', 50, 775, { width: 495, align: 'center', lineBreak: false });
+        .text(`${COMPANY.name} · ${COMPANY.contactEmail} · ${COMPANY.phoneDisplay} · ${COMPANY.region}`, 50, 775, { width: 495, align: 'center', lineBreak: false });
     }
     doc.flushPages();
     doc.end();
@@ -248,8 +247,8 @@ export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
     doc.fontSize(22).font('Helvetica-Bold').fillColor(PRIMARY).text('Inca Import', 50, 50);
     doc.fontSize(9).font('Helvetica').fillColor(MUTED)
       .text('Grossiste B2B · La Réunion', 50, 78)
-      .text('29 Route des Premiers Français — 97400 Saint-Paul', 50, 93)
-      .text('SIRET 945 112 753', 50, 108);
+      .text(`${COMPANY.addressLine} — ${COMPANY.postalCode} ${COMPANY.city}`, 50, 93)
+      .text(`SIRET ${COMPANY.siret}`, 50, 108);
 
     // Document title + ref (top right)
     doc.fontSize(16).font('Helvetica-Bold').fillColor(INK)
@@ -380,8 +379,8 @@ export function generateInvoicePDF(order: PdfOrderData): Promise<Buffer> {
     for (let p = 0; p < totalPagesInv; p++) {
       doc.switchToPage(p);
       doc.fontSize(7).font('Helvetica').fillColor(MUTED)
-        .text('Inca Import · SIRET 945 112 753 · 29 Route des Premiers Français, 97400 Saint-Paul, La Réunion', 50, 760, { width: 495, align: 'center', lineBreak: false })
-        .text('inca-import@hotmail.com · 0692 47 89 41', 50, 772, { width: 495, align: 'center', lineBreak: false });
+        .text(`${COMPANY.name} · SIRET ${COMPANY.siret} · ${COMPANY_ADDRESS_LINE}`, 50, 760, { width: 495, align: 'center', lineBreak: false })
+        .text(`${COMPANY.contactEmail} · ${COMPANY.phoneDisplay}`, 50, 772, { width: 495, align: 'center', lineBreak: false });
     }
     doc.flushPages();
     doc.end();
@@ -404,8 +403,8 @@ function drawHeader(doc: InstanceType<typeof PDFDocument>, opts: {
 
   if (opts.withAddress) {
     doc.fontSize(8.5).font('Helvetica').fillColor(MUTED)
-      .text('29 Route des Premiers Français — 97460 Saint-Paul', 50, 90)
-      .text('SIRET 945 112 753', 50, 103);
+      .text(`${COMPANY.addressLine} — ${COMPANY.postalCode} ${COMPANY.city}`, 50, 90)
+      .text(`SIRET ${COMPANY.siret}`, 50, 103);
     doc.moveTo(50, 120).lineTo(545, 120).lineWidth(0.5).strokeColor(BORDER).stroke();
     doc.fontSize(15).font('Helvetica-Bold').fillColor(INK).text(opts.title, 50, 134);
     return 134 + 32;
@@ -604,9 +603,9 @@ export function generatePDVDeliveryPDF(
     doc.fontSize(10).font('Helvetica-Bold').fillColor(INK)
       .text('Inca Import', 62, infoY + 22, { lineBreak: false });
     doc.fontSize(8).font('Helvetica').fillColor(MUTED)
-      .text('29 Route des Premiers Français', 62, infoY + 37, { lineBreak: false })
-      .text('97460 Saint-Paul, La Réunion', 62, infoY + 50, { lineBreak: false })
-      .text('SIRET : 945 112 753', 62, infoY + 63, { lineBreak: false });
+      .text(COMPANY.addressLine, 62, infoY + 37, { lineBreak: false })
+      .text(`${COMPANY.postalCode} ${COMPANY.city}, ${COMPANY.region}`, 62, infoY + 50, { lineBreak: false })
+      .text(`SIRET : ${COMPANY.siret}`, 62, infoY + 63, { lineBreak: false });
 
     // Row 1 right: Client — société as primary name, nom as contact line
     const displayName = pdv.client_societe ?? pdv.client_nom ?? pdv.name;
@@ -742,8 +741,8 @@ export function generatePDVDeliveryPDF(
           .text(`Page ${p + 1} / ${totalPages}`, 400, 755, { width: 145, align: 'right', lineBreak: false });
       }
       doc.fontSize(7).font('Helvetica').fillColor(MUTED)
-        .text('Inca Import · SIRET 945 112 753 · 29 Route des Premiers Français, 97460 Saint-Paul, La Réunion', 50, 760, { width: 495, align: 'center', lineBreak: false })
-        .text('inca-import@hotmail.com · 0692 47 89 41', 50, 772, { width: 495, align: 'center', lineBreak: false });
+        .text(`${COMPANY.name} · SIRET ${COMPANY.siret} · ${COMPANY_ADDRESS_LINE}`, 50, 760, { width: 495, align: 'center', lineBreak: false })
+        .text(`${COMPANY.contactEmail} · ${COMPANY.phoneDisplay}`, 50, 772, { width: 495, align: 'center', lineBreak: false });
     }
     doc.flushPages();
     doc.end();

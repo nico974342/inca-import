@@ -1,6 +1,7 @@
 ---
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
+import { marginColorClass } from '../../lib/constants';
 
 // Last 12 months (full calendar months, oldest first)
 const now = new Date();
@@ -88,11 +89,10 @@ function fmtEur(n: number) {
   return n.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
 
-function margeClass(pct: number | null) {
-  if (pct == null) return 'muted';
-  if (pct >= 30) return 'green';
-  if (pct >= 15) return 'amber';
-  return 'red';
+// This page's CSS keys the null case as "muted" (not the shared "none")
+function margeClass(pct: number | null): string {
+  const cls = marginColorClass(pct);
+  return cls === 'none' ? 'muted' : cls;
 }
 ---
 <AdminLayout title="Historique des marges" activeNav="marges">

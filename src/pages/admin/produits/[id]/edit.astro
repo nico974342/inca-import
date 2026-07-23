@@ -2,6 +2,7 @@
 import AdminLayout from '../../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../../lib/supabase';
 import { logAdminAction } from '../../../../lib/audit';
+import { marginColorClass } from '../../../../lib/constants';
 
 const { id } = Astro.params;
 let formError = '';
@@ -208,7 +209,7 @@ if (Astro.request.method === 'POST') {
       {pump != null && (product as any).price_ht != null && (
         (() => {
           const marge = ((Number((product as any).price_ht) - pump) / Number((product as any).price_ht)) * 100;
-          const cls   = marge >= 30 ? 'green' : marge >= 15 ? 'amber' : 'red';
+          const cls   = marginColorClass(marge);
           return (
             <div class="pump-stat">
               <span class="pump-stat-label">Marge</span>

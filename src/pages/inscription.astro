@@ -2,6 +2,7 @@
 import '../styles/global.css';
 import { createAuthClient, supabaseAdmin } from '../lib/supabase';
 import { sanitizeText, sanitizeEmail } from '../lib/sanitize';
+import { getClientIp, isRateLimited } from '../lib/rateLimit';
 import { sendClientRegisteredWebhook } from '../lib/webhooks';
 import { sendAdminNewClientEmail } from '../lib/email';
 
@@ -14,6 +15,11 @@ if (existing?.user_metadata?.role === 'client') {
 
 // Handle registration
 if (Astro.request.method === 'POST') {
+  const ip = getClientIp(Astro.request);
+  if (isRateLimited(`inscription:${ip}`, 3, 60_000)) {
+    return Astro.redirect('/inscription?error=rate_limit');
+  }
+
   const form      = await Astro.request.formData();
   const nom            = sanitizeText(form.get('nom') as string, 120);
   const societe        = sanitizeText(form.get('societe') as string, 120);
@@ -88,6 +94,7 @@ const ERRORS: Record<string, string> = {
   champs_requis:       'Nom, email et mot de passe sont obligatoires.',
   mot_de_passe_court:  'Le mot de passe doit contenir au moins 8 caractères.',
   email_existe:        'Cette adresse email est déjà associée à un compte.',
+  rate_limit:          'Trop de tentatives. Patientez une minute avant de réessayer.',
   erreur:              'Une erreur est survenue. Veuillez réessayer.',
 };
 ---

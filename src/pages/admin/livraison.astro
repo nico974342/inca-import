@@ -3,9 +3,10 @@ import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { generateDeliverySummaryPDF, generatePDVDeliveryPDF } from '../../lib/pdf';
 import { normalizeEmail } from '../../lib/clients';
+import { COMPANY, RESEND_DEFAULT_FROM } from '../../lib/constants';
 import { Resend } from 'resend';
 
-const FROM = import.meta.env.RESEND_FROM ?? 'onboarding@resend.dev';
+const FROM = (import.meta.env.RESEND_FROM as string | undefined) ?? RESEND_DEFAULT_FROM;
 
 function slugPDV(name: string): string {
   return name
@@ -155,7 +156,7 @@ if (Astro.request.method === 'POST') {
         const resend = new Resend(import.meta.env.RESEND_API_KEY);
         const { error: sendError } = await resend.emails.send({
           from: FROM,
-          to: ['inca-import@hotmail.com'],
+          to: [COMPANY.contactEmail],
           subject: `${blNumbers.join(', ')} · ${dateStr}`,
           html: `<p>Bonjour,</p>
 <p>${deliveryPDVs.length} bon${deliveryPDVs.length > 1 ? 's' : ''} de livraison du ${dateStr}.</p>
@@ -169,7 +170,7 @@ if (Astro.request.method === 'POST') {
           console.error('[livraison] Resend error:', sendError);
           errorMessage = `PDF générés mais l'envoi a échoué : ${sendError.message}`;
         } else {
-          successMessage = `${attachments.length} PDF envoyés (${blNumbers.join(', ')}) → inca-import@hotmail.com`;
+          successMessage = `${attachments.length} PDF envoyés (${blNumbers.join(', ')}) → ${COMPANY.contactEmail}`;
           if (loadedOrderIds.length > 0) {
             await supabaseAdmin
               .from('orders')

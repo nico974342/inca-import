@@ -1,6 +1,7 @@
 ﻿---
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
+import { ORDER_STATUS_LABEL, CLIENT_STATUS_LABEL } from '../../lib/constants';
 
 const PAGE_SIZE = 50;
 const page = Math.max(1, parseInt(Astro.url.searchParams.get('page') ?? '1', 10));
@@ -19,8 +20,9 @@ const { data: logs, count } = await query;
 const totalPages = Math.ceil((count ?? 0) / PAGE_SIZE);
 
 const ACTION_LABELS: Record<string, string> = {
-  'commande.suppression':   'Commande supprimée',
-  'commande.statut':        'Statut commande',
+  'commande.suppression':      'Commande supprimée',
+  'commande.statut':           'Statut commande',
+  'commande.creation_admin':   'Commande créée (admin)',
   'client.suppression':     'Client supprimé',
   'client.activation':      'Client activé',
   'client.statut':          'Statut client',
@@ -38,8 +40,9 @@ const ACTION_LABELS: Record<string, string> = {
 };
 
 const ACTION_COLOR: Record<string, string> = {
-  'commande.suppression':   'red',
-  'commande.statut':        'blue',
+  'commande.suppression':      'red',
+  'commande.statut':           'blue',
+  'commande.creation_admin':   'green',
   'client.suppression':     'red',
   'client.activation':      'green',
   'client.statut':          'amber',
@@ -71,16 +74,10 @@ function formatDetails(details: Record<string, unknown> | null, action: string):
   if (!details) return '';
   if (action === 'commande.statut' || action === 'client.statut') {
     const STATUS_FR: Record<string, string> = {
-      en_attente:     'En attente',
-      actif:          'Actif',
-      suspendu:       'Suspendu',
-      confirmee:      'Confirmée',
-      en_preparation: 'En préparation',
-      expediee:       'Expédiée',
-      livree:         'Livrée',
-      annulee:        'Annulée',
-      client:         'Client',
-      admin:          'Admin',
+      ...ORDER_STATUS_LABEL,
+      ...CLIENT_STATUS_LABEL,
+      client: 'Client',
+      admin:  'Admin',
     };
     const a = STATUS_FR[details.ancien as string] ?? details.ancien;
     const n = STATUS_FR[details.nouveau as string] ?? details.nouveau;
@@ -89,8 +86,17 @@ function formatDetails(details: Record<string, unknown> | null, action: string):
   if (action === 'client.promotion_admin' || action === 'client.retrogradation') {
     return `Rôle : ${details.nouveau_role ?? ''}`;
   }
-  if (action === 'commande.suppression' && details.orders_deleted != null) {
-    return `${details.orders_deleted} commande(s) supprimée(s)`;
+  if (action === 'commande.suppression' || action === 'client.suppression') {
+    const parts: string[] = [];
+    if (details.orders_deleted != null) parts.push(`${details.orders_deleted} commande(s) supprimée(s)`);
+    if (details.stock_restaure) parts.push('stock restauré');
+    if (typeof details.ca_ht_supprime === 'number' && details.ca_ht_supprime !== 0) {
+      parts.push(`CA HT retiré : ${details.ca_ht_supprime.toFixed(2).replace('.', ',')} €`);
+    }
+    if (typeof details.marge_ht_supprimee === 'number') {
+      parts.push(`marge retirée : ${details.marge_ht_supprimee.toFixed(2).replace('.', ',')} €`);
+    }
+    if (parts.length) return parts.join(' · ');
   }
   if (details.email) return `${details.email}`;
   return '';

@@ -3,6 +3,7 @@ import AdminLayout from '../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../lib/supabase';
 import { sanitizeText, sanitizeEmail } from '../../../lib/sanitize';
 import { logAdminAction } from '../../../lib/audit';
+import { CLIENT_STATUS_LABEL as SHARED_CLIENT_STATUS_LABEL, ORDER_STATUS_LABEL as SHARED_ORDER_STATUS_LABEL, ORDER_STATUS_COLOR as SHARED_ORDER_STATUS_COLOR } from '../../../lib/constants';
 
 const { id } = Astro.params;
 let formError = '';
@@ -132,29 +133,9 @@ const totalCA = ordersWithTotal
   .filter(o => o.status !== 'annulee')
   .reduce((sum, o) => sum + (o.total ?? 0), 0);
 
-const CLIENT_STATUS_LABEL: Record<string, string> = {
-  en_attente: 'En attente',
-  actif:      'Actif',
-  suspendu:   'Suspendu',
-};
-
-const ORDER_STATUS_LABEL: Record<string, string> = {
-  en_attente:     'En attente',
-  confirmee:      'Confirmée',
-  en_preparation: 'En préparation',
-  expediee:       'Expédiée',
-  livree:         'Livrée',
-  annulee:        'Annulée',
-};
-
-const ORDER_STATUS_COLOR: Record<string, string> = {
-  en_attente:     'muted',
-  confirmee:      'blue',
-  en_preparation: 'amber',
-  expediee:       'purple',
-  livree:         'green',
-  annulee:        'red',
-};
+const CLIENT_STATUS_LABEL = SHARED_CLIENT_STATUS_LABEL;
+const ORDER_STATUS_LABEL  = SHARED_ORDER_STATUS_LABEL;
+const ORDER_STATUS_COLOR  = SHARED_ORDER_STATUS_COLOR;
 
 const CONDITIONS_LABEL: Record<string, string> = {
   comptant: 'Comptant',

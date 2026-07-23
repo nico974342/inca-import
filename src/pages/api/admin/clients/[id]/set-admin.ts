@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
 import { logAdminAction } from '../../../../../lib/audit';
+import { normalizeEmail } from '../../../../../lib/clients';
 
 export const POST: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -30,11 +31,19 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
   }
 
   // Resolve auth user ID: prefer stored user_id, fallback to email search
+  // (paginated — Supabase caps each page, so loop until exhausted)
   let authUserId: string | null = (client as any).user_id ?? null;
   if (!authUserId) {
-    const { data: users } = await supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 });
-    const found = users?.users?.find((u: any) => u.email === client.email);
-    authUserId = found?.id ?? null;
+    const wanted = normalizeEmail(client.email);
+    let page = 1;
+    while (!authUserId) {
+      const { data: users } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: 1000 });
+      const batch = users?.users ?? [];
+      const found = batch.find((u: any) => normalizeEmail(u.email) === wanted);
+      authUserId = found?.id ?? null;
+      if (batch.length < 1000) break;
+      page++;
+    }
   }
 
   const base = new URL(request.url).origin;
