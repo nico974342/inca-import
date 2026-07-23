@@ -115,12 +115,12 @@ const clientOrders = Array.from(orderMap.values())
 
 const orderIds = clientOrders.map(o => o.id);
 const { data: allItems } = orderIds.length
-  ? await supabaseAdmin.from('order_items').select('order_id, quantity, products(price_ht)').in('order_id', orderIds)
+  ? await supabaseAdmin.from('order_items').select('order_id, quantity, price_ht_snapshot').in('order_id', orderIds)
   : { data: [] };
 
 const totalsByOrder: Record<string, number | null> = {};
 for (const item of allItems ?? []) {
-  const price = (item as any).products?.price_ht;
+  const price = (item as any).price_ht_snapshot;
   if (price != null) {
     totalsByOrder[item.order_id] = (totalsByOrder[item.order_id] ?? 0) + Number(price) * item.quantity;
   }

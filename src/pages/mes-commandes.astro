@@ -23,7 +23,7 @@ const orderIds = (orders ?? []).map(o => o.id);
 const { data: allItems } = orderIds.length
   ? await supabaseAdmin
       .from('order_items')
-      .select('order_id, product_name, quantity, unit, product_id, products(price_ht)')
+      .select('order_id, product_name, quantity, unit, product_id, price_ht_snapshot')
       .in('order_id', orderIds)
   : { data: [] };
 
@@ -34,14 +34,14 @@ for (const item of allItems ?? []) {
   itemsByOrder[item.order_id].push(item);
 }
 
-// Compute order total HT from current product prices (best effort)
+// Compute order total HT from the prices captured at order time
 function orderTotal(orderId: string): number | null {
   const items = itemsByOrder[orderId] ?? [];
   if (!items.length) return null;
   let total = 0;
   let hasPrice = false;
   for (const item of items) {
-    const price = (item.products as any)?.price_ht;
+    const price = (item as any).price_ht_snapshot;
     if (price != null) {
       total += Number(price) * item.quantity;
       hasPrice = true;
@@ -172,7 +172,7 @@ function shortId(id: string): string {
                         </thead>
                         <tbody>
                           {items.map(item => {
-                            const pu    = (item.products as any)?.price_ht;
+                            const pu    = (item as any).price_ht_snapshot;
                             const puFmt = pu != null ? Number(pu).toFixed(2).replace('.', ',') : '—';
                             const lineFmt = pu != null
                               ? (Number(pu) * item.quantity).toFixed(2).replace('.', ',')

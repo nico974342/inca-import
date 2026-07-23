@@ -18,7 +18,7 @@ const rangeStart = months[0].start;
 // One query for all orders in the 12-month window
 const { data: orders } = await supabaseAdmin
   .from('orders')
-  .select('id, created_at, order_items(quantity, products(price_ht, prix_achat_moyen_ht))')
+  .select('id, created_at, order_items(quantity, price_ht_snapshot, pump_snapshot)')
   .in('status', ['confirmee', 'en_preparation', 'expediee', 'livree'])
   .gte('created_at', rangeStart);
 
@@ -52,8 +52,8 @@ for (const order of (orders ?? [])) {
 
   for (const item of ((order as any).order_items ?? [])) {
     const qty  = item.quantity ?? 0;
-    const prix = item.products?.price_ht != null ? Number(item.products.price_ht) : null;
-    const pump = item.products?.prix_achat_moyen_ht != null ? Number(item.products.prix_achat_moyen_ht) : null;
+    const prix = item.price_ht_snapshot != null ? Number(item.price_ht_snapshot) : null;
+    const pump = item.pump_snapshot != null ? Number(item.pump_snapshot) : null;
     if (prix == null) continue;
     rows[mi].caHt += prix * qty;
     if (pump != null) {

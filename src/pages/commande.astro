@@ -24,7 +24,7 @@ if (Astro.request.method === 'POST') {
 
   const { data: items } = await supabaseAdmin
     .from('cart_items')
-    .select('quantity, products(id, name, category, unit, units_per_carton, price_ht, stock_quantity)')
+    .select('quantity, products(id, name, category, unit, units_per_carton, price_ht, tva_rate, prix_achat_moyen_ht, stock_quantity)')
     .eq('user_id', user.id);
 
   if (!items?.length) return Astro.redirect('/catalogue');
@@ -53,19 +53,30 @@ if (Astro.request.method === 'POST') {
 
   if (orderError || !order) return Astro.redirect('/commande?error=1');
 
-  // Snapshot order items
-  await supabaseAdmin.from('order_items').insert(
+  // Snapshot order items (including price/TVA/PUMP at order time)
+  const { error: itemsError } = await supabaseAdmin.from('order_items').insert(
     items.map(item => {
       const p = item.products as any;
       return {
-        order_id:     order.id,
-        product_id:   p?.id ?? null,
-        product_name: p?.name ?? 'Produit inconnu',
-        quantity:     item.quantity,
-        unit:         p?.unit ?? null,
+        order_id:          order.id,
+        product_id:        p?.id ?? null,
+        product_name:      p?.name ?? 'Produit inconnu',
+        quantity:          item.quantity,
+        unit:              p?.unit ?? null,
+        price_ht_snapshot: p?.price_ht ?? null,
+        tva_rate_snapshot: p?.tva_rate ?? null,
+        pump_snapshot:     p?.prix_achat_moyen_ht ?? null,
       };
     })
   );
+
+  // If the items insert failed, remove the orphan order and keep the cart
+  // so the client can retry — never leave an order without its lines.
+  if (itemsError) {
+    console.error('[commande] order_items insert failed:', JSON.stringify(itemsError));
+    await supabaseAdmin.from('orders').delete().eq('id', order.id);
+    return Astro.redirect('/commande?error=1');
+  }
 
   // Clear cart
   await supabaseAdmin.from('cart_items').delete().eq('user_id', user.id);
@@ -159,7 +170,7 @@ let successTotalHT = 0;
 if (success && orderId) {
   const { data: orderItems } = await supabaseAdmin
     .from('order_items')
-    .select('product_name, quantity, unit, products(price_ht)')
+    .select('product_name, quantity, unit, price_ht_snapshot')
     .eq('order_id', orderId);
 
   successItems = (orderItems ?? []).map(it => ({
@@ -168,7 +179,7 @@ if (success && orderId) {
     unit: it.unit,
   }));
   successTotalHT = (orderItems ?? []).reduce(
-    (s, it) => s + it.quantity * Number((it as any).products?.price_ht ?? 0), 0
+    (s, it) => s + it.quantity * Number(it.price_ht_snapshot ?? 0), 0
   );
 }
 

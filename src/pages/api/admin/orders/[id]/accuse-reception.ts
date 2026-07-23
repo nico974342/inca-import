@@ -23,7 +23,7 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
 
   const { data: items } = await supabaseAdmin
     .from('order_items')
-    .select('product_name, quantity, unit, products(price_ht)')
+    .select('product_name, quantity, unit, price_ht_snapshot')
     .eq('order_id', id);
 
   const { data: clientAcc } = await supabaseAdmin
@@ -34,7 +34,7 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
 
   let totalHT = 0;
   const pdfItems = (items ?? []).map(item => {
-    const price_ht = (item.products as any)?.price_ht ?? null;
+    const price_ht = item.price_ht_snapshot ?? null;
     if (price_ht != null) totalHT += Number(price_ht) * item.quantity;
     return {
       product_name: item.product_name,

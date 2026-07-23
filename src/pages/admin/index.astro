@@ -24,7 +24,7 @@ const [
   supabaseAdmin.from('orders').select('id, nom, societe, status, created_at').order('created_at', { ascending: false }).limit(5),
   supabaseAdmin.from('contact_requests').select('id, nom, societe, status, created_at').order('created_at', { ascending: false }).limit(5),
   supabaseAdmin.from('products').select('id, name, stock_quantity').lt('stock_quantity', 5).order('stock_quantity', { ascending: true }).limit(6),
-  supabaseAdmin.from('orders').select('id, order_items(quantity, products(price_ht, prix_achat_moyen_ht))').in('status', ['confirmee', 'en_preparation', 'expediee', 'livree']).gte('created_at', monthStart),
+  supabaseAdmin.from('orders').select('id, order_items(quantity, price_ht_snapshot, pump_snapshot)').in('status', ['confirmee', 'en_preparation', 'expediee', 'livree']).gte('created_at', monthStart),
 ]);
 
 let caMonth = 0;
@@ -35,8 +35,8 @@ let totalUnits = 0;
 for (const order of (monthOrders ?? [])) {
   for (const item of ((order as any).order_items ?? [])) {
     const qty  = item.quantity ?? 0;
-    const prix = Number(item.products?.price_ht ?? 0);
-    const pump = item.products?.prix_achat_moyen_ht != null ? Number(item.products.prix_achat_moyen_ht) : null;
+    const prix = Number(item.price_ht_snapshot ?? 0);
+    const pump = item.pump_snapshot != null ? Number(item.pump_snapshot) : null;
     caMonth += prix * qty;
     totalUnits += qty;
     if (pump != null) {

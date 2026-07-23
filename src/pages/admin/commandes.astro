@@ -25,11 +25,11 @@ if (Astro.request.method === 'POST') {
     if (current && current.status !== new_status && current.email) {
       const { data: statusItems } = await supabaseAdmin
         .from('order_items')
-        .select('product_name, quantity, unit, products(price_ht)')
+        .select('product_name, quantity, unit, price_ht_snapshot')
         .eq('order_id', order_id);
 
       const totalHt = (statusItems ?? []).reduce(
-        (sum, it) => sum + Number((it as any).products?.price_ht ?? 0) * it.quantity,
+        (sum, it) => sum + Number(it.price_ht_snapshot ?? 0) * it.quantity,
         0
       );
 
@@ -71,7 +71,7 @@ if (Astro.request.method === 'POST') {
     if (current?.status !== 'livree' && new_status === 'livree') {
       const { data: items } = await supabaseAdmin
         .from('order_items')
-        .select('product_id, product_name, quantity, unit, products(price_ht)')
+        .select('product_id, product_name, quantity, unit, price_ht_snapshot')
         .eq('order_id', order_id);
 
       for (const item of items ?? []) {
@@ -111,7 +111,7 @@ if (Astro.request.method === 'POST') {
         }
 
         const products = (items ?? []).map(item => {
-          const priceHt = Number((item as any).products?.price_ht ?? 0);
+          const priceHt = Number((item as any).price_ht_snapshot ?? 0);
           return {
             name: item.product_name,
             qty: item.quantity,
@@ -177,7 +177,7 @@ const orderIds = orders.map(o => o.id);
 const { data: allItems } = orderIds.length
   ? await supabaseAdmin
       .from('order_items')
-      .select('order_id, product_name, quantity, unit, products(price_ht, prix_achat_moyen_ht)')
+      .select('order_id, product_name, quantity, unit, price_ht_snapshot, pump_snapshot')
       .in('order_id', orderIds)
   : { data: [] };
 
@@ -191,7 +191,7 @@ function orderTotal(orderId: string): number | null {
   const items = itemsByOrder[orderId] ?? [];
   let total = 0, hasPrice = false;
   for (const item of items) {
-    const price = (item as any).products?.price_ht;
+    const price = (item as any).price_ht_snapshot;
     if (price != null) { total += Number(price) * item.quantity; hasPrice = true; }
   }
   return hasPrice ? total : null;
@@ -201,8 +201,8 @@ function orderMargin(orderId: string): { margeHt: number; pct: number; partial: 
   const items = itemsByOrder[orderId] ?? [];
   let margeHt = 0, caHt = 0, hasPump = false, missingPump = false;
   for (const item of items) {
-    const prix = (item as any).products?.price_ht;
-    const pump = (item as any).products?.prix_achat_moyen_ht;
+    const prix = (item as any).price_ht_snapshot;
+    const pump = (item as any).pump_snapshot;
     if (prix == null) continue;
     caHt += Number(prix) * item.quantity;
     if (pump != null) {
@@ -219,7 +219,7 @@ function orderMargin(orderId: string): { margeHt: number; pct: number; partial: 
 function pennylaneSummary(order: (typeof orders)[number], items: any[], total: number | null): string {
   const fmt = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
   const lines = items.map(item => {
-    const pu     = item.products?.price_ht;
+    const pu     = item.price_ht_snapshot;
     const puNum  = pu != null ? Number(pu) : null;
     const lineHt = puNum != null ? puNum * item.quantity : null;
     return `- ${item.product_name}${item.unit ? ' (' + item.unit + ')' : ''} — Qté ${item.quantity} × ${puNum != null ? fmt(puNum) : '—'} = ${lineHt != null ? fmt(lineHt) : '—'}`;
@@ -361,7 +361,7 @@ function shortId(id: string) {
                     </thead>
                     <tbody>
                       {items.map(item => {
-                        const pu = (item as any).products?.price_ht;
+                        const pu = (item as any).price_ht_snapshot;
                         return (
                           <tr>
                             <td>

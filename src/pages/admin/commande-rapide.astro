@@ -38,14 +38,15 @@ if (Astro.request.method === 'POST') {
   // Build product map for price lookup
   const { data: allProducts } = await supabaseAdmin
     .from('products')
-    .select('id, name, unit, price_ht');
-  const productMap: Record<string, { name: string; unit: string | null; price_ht: number | null }> = {};
+    .select('id, name, unit, price_ht, tva_rate, prix_achat_moyen_ht');
+  const productMap: Record<string, { name: string; unit: string | null; price_ht: number | null; tva_rate: number | null; prix_achat_moyen_ht: number | null }> = {};
   for (const p of allProducts ?? []) productMap[p.id] = p;
 
   // Parse qty_<id> fields
   const orderItems: Array<{
     product_id: string; product_name: string;
     quantity: number; unit: string | null; price_ht: number | null;
+    tva_rate: number | null; pump: number | null;
   }> = [];
 
   for (const [key, val] of form.entries()) {
@@ -54,7 +55,10 @@ if (Astro.request.method === 'POST') {
     const qty       = parseInt(val as string, 10);
     if (qty > 0 && productMap[productId]) {
       const p = productMap[productId];
-      orderItems.push({ product_id: productId, product_name: p.name, quantity: qty, unit: p.unit, price_ht: p.price_ht });
+      orderItems.push({
+        product_id: productId, product_name: p.name, quantity: qty, unit: p.unit,
+        price_ht: p.price_ht, tva_rate: p.tva_rate, pump: p.prix_achat_moyen_ht,
+      });
     }
   }
 
@@ -82,14 +86,21 @@ if (Astro.request.method === 'POST') {
 
   const { error: itemsErr } = await supabaseAdmin.from('order_items').insert(
     orderItems.map(item => ({
-      order_id:     order.id,
-      product_id:   item.product_id,
-      product_name: item.product_name,
-      quantity:     item.quantity,
-      unit:         item.unit,
+      order_id:          order.id,
+      product_id:        item.product_id,
+      product_name:      item.product_name,
+      quantity:          item.quantity,
+      unit:              item.unit,
+      price_ht_snapshot: item.price_ht,
+      tva_rate_snapshot: item.tva_rate,
+      pump_snapshot:     item.pump,
     }))
   );
-  if (itemsErr) console.error('[commande-rapide] order_items insert error:', JSON.stringify(itemsErr));
+  if (itemsErr) {
+    console.error('[commande-rapide] order_items insert error:', JSON.stringify(itemsErr));
+    await supabaseAdmin.from('orders').delete().eq('id', order.id);
+    return Astro.redirect('/admin/commande-rapide?error=order');
+  }
 
   const totalHT = orderItems.reduce((s, i) => s + i.quantity * Number(i.price_ht ?? 0), 0);
   const today   = new Date().toLocaleDateString('fr-FR');
