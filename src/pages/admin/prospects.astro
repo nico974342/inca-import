@@ -1,0 +1,640 @@
+---
+import AdminLayout from '../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../lib/supabase';
+import { sanitizeText, sanitizeEmail } from '../../lib/sanitize';
+import { logAdminAction } from '../../lib/audit';
+import {
+  PROSPECT_TYPES, PROSPECT_TYPE_LABEL,
+  PROSPECT_STATUSES, PROSPECT_STATUS_LABEL, PROSPECT_STATUS_COLOR,
+} from '../../lib/constants';
+
+const adminEmail = (Astro.locals as any).user?.email ?? 'inconnu';
+const todayStr = new Date().toISOString().slice(0, 10);
+
+if (Astro.request.method === 'POST') {
+  const form   = await Astro.request.formData();
+  const action = form.get('action') as string;
+
+  if (action === 'create') {
+    const nom       = sanitizeText(form.get('nom') as string, 120);
+    const societe   = sanitizeText(form.get('societe') as string, 120);
+    const typeRaw   = (form.get('type') as string) ?? '';
+    const type      = (PROSPECT_TYPES as readonly string[]).includes(typeRaw) ? typeRaw : null;
+    const commune   = sanitizeText(form.get('commune') as string, 100);
+    const telephone = sanitizeText(form.get('telephone') as string, 30);
+    const email     = sanitizeEmail(form.get('email') as string);
+    const notes     = sanitizeText(form.get('notes') as string, 1000);
+    const nextFollowupRaw = (form.get('next_followup_at') as string)?.trim();
+
+    if (!nom) {
+      return Astro.redirect('/admin/prospects?error=nom_requis');
+    }
+
+    const { data: prospect, error } = await supabaseAdmin
+      .from('prospects')
+      .insert({
+        nom, societe: societe || null, type, commune: commune || null,
+        telephone: telephone || null, email: email || null, notes: notes || null,
+        status: 'a_contacter',
+        next_followup_at: nextFollowupRaw || null,
+      })
+      .select('id')
+      .single();
+
+    if (error) {
+      console.error('[prospects] create error:', error.code, error.message);
+      return Astro.redirect('/admin/prospects?error=creation');
+    }
+
+    await logAdminAction({
+      adminEmail, action: 'prospect.creation', targetType: 'prospect',
+      targetId: prospect.id, targetLabel: societe || nom,
+    });
+
+    return Astro.redirect('/admin/prospects?success=created');
+  }
+
+  if (action === 'mark_contacted') {
+    const id = form.get('id') as string;
+    const { data: prospect } = await supabaseAdmin.from('prospects').select('status, nom, societe').eq('id', id).single();
+    if (prospect) {
+      const updates: Record<string, unknown> = { last_contact_at: todayStr };
+      if (prospect.status === 'a_contacter') updates.status = 'contacte';
+      await supabaseAdmin.from('prospects').update(updates).eq('id', id);
+      await logAdminAction({
+        adminEmail, action: 'prospect.contact', targetType: 'prospect',
+        targetId: id, targetLabel: prospect.societe ?? prospect.nom,
+      });
+    }
+    return Astro.redirect('/admin/prospects?success=contacted');
+  }
+
+  if (action === 'update') {
+    const id        = form.get('id') as string;
+    const nom       = sanitizeText(form.get('nom') as string, 120);
+    const societe   = sanitizeText(form.get('societe') as string, 120);
+    const typeRaw   = (form.get('type') as string) ?? '';
+    const type      = (PROSPECT_TYPES as readonly string[]).includes(typeRaw) ? typeRaw : null;
+    const commune   = sanitizeText(form.get('commune') as string, 100);
+    const telephone = sanitizeText(form.get('telephone') as string, 30);
+    const email     = sanitizeEmail(form.get('email') as string);
+    const notes     = sanitizeText(form.get('notes') as string, 1000);
+    const status    = (form.get('status') as string) ?? '';
+    const nextFollowupRaw = (form.get('next_followup_at') as string)?.trim();
+
+    if (id && nom && (PROSPECT_STATUSES as readonly string[]).includes(status)) {
+      const { data: prev } = await supabaseAdmin.from('prospects').select('status, nom, societe').eq('id', id).single();
+
+      const { error } = await supabaseAdmin
+        .from('prospects')
+        .update({
+          nom, societe: societe || null, type, commune: commune || null,
+          telephone: telephone || null, email: email || null, notes: notes || null,
+          status, next_followup_at: nextFollowupRaw || null,
+        })
+        .eq('id', id);
+
+      if (!error && prev && prev.status !== status) {
+        await logAdminAction({
+          adminEmail, action: 'prospect.statut', targetType: 'prospect',
+          targetId: id, targetLabel: prev.societe ?? prev.nom,
+          details: { ancien: prev.status, nouveau: status },
+        });
+      }
+    }
+    return Astro.redirect('/admin/prospects?success=updated');
+  }
+
+  if (action === 'delete') {
+    const id = form.get('id') as string;
+    const { data: prospect } = await supabaseAdmin.from('prospects').select('nom, societe').eq('id', id).single();
+    await supabaseAdmin.from('prospects').delete().eq('id', id);
+    await logAdminAction({
+      adminEmail, action: 'prospect.suppression', targetType: 'prospect',
+      targetId: id, targetLabel: prospect ? (prospect.societe ?? prospect.nom) : id,
+    });
+    return Astro.redirect('/admin/prospects?success=deleted');
+  }
+}
+
+// ── GET: filters + sort ──────────────────────────────────────────────────
+const filterStatus  = Astro.url.searchParams.get('status') ?? '';
+const filterCommune = (Astro.url.searchParams.get('commune') ?? '').trim();
+const dueOnly       = Astro.url.searchParams.get('due') === '1';
+const sortDir       = Astro.url.searchParams.get('sort') === 'desc' ? 'desc' : 'asc';
+
+let query = supabaseAdmin.from('prospects').select('*');
+if (filterStatus) query = query.eq('status', filterStatus);
+if (filterCommune) query = query.ilike('commune', `%${filterCommune}%`);
+if (dueOnly) {
+  query = query.lte('next_followup_at', todayStr).not('status', 'in', '(converti,pas_interesse)');
+}
+query = query.order('next_followup_at', { ascending: sortDir === 'asc', nullsFirst: false });
+
+const { data: prospectsRaw } = await query;
+const prospects = prospectsRaw ?? [];
+
+const { data: allForCounts } = await supabaseAdmin.from('prospects').select('status, commune');
+const counts: Record<string, number> = {};
+for (const s of PROSPECT_STATUSES) counts[s] = (allForCounts ?? []).filter(p => p.status === s).length;
+const totalCount = (allForCounts ?? []).length;
+const communes = Array.from(new Set((allForCounts ?? []).map(p => p.commune).filter(Boolean) as string[])).sort();
+
+const successParam = Astro.url.searchParams.get('success');
+const errorParam    = Astro.url.searchParams.get('error');
+
+const SUCCESS_MSG: Record<string, string> = {
+  created:   'Prospect ajouté.',
+  updated:   'Prospect mis à jour.',
+  contacted: 'Contact enregistré.',
+  deleted:   'Prospect supprimé.',
+};
+const ERROR_MSG: Record<string, string> = {
+  nom_requis: 'Le nom est obligatoire.',
+  creation:   "Erreur lors de la création du prospect.",
+};
+
+function formatDate(iso: string | null): string {
+  if (!iso) return '—';
+  return new Date(iso + 'T00:00:00').toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+function isOverdue(iso: string | null, status: string): boolean {
+  return !!iso && iso <= todayStr && status !== 'converti' && status !== 'pas_interesse';
+}
+
+function qs(params: Record<string, string | undefined>): string {
+  const merged = { status: filterStatus, commune: filterCommune, due: dueOnly ? '1' : '', sort: sortDir, ...params };
+  const usp = new URLSearchParams();
+  for (const [k, v] of Object.entries(merged)) if (v) usp.set(k, v);
+  const s = usp.toString();
+  return s ? `?${s}` : '';
+}
+---
+<AdminLayout title="Prospects" activeNav="prospects">
+
+  <details class="new-client-panel">
+    <summary class="new-client-toggle">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+        <path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+      </svg>
+      Nouveau prospect
+    </summary>
+    <form method="post" class="new-client-form">
+      <input type="hidden" name="action" value="create" />
+      <div class="ncf-grid">
+        <div class="ncf-field">
+          <label for="np-nom">Nom <span class="ncf-req" aria-hidden="true">*</span></label>
+          <input type="text" id="np-nom" name="nom" required placeholder="Jean Dupont" autocomplete="off" />
+        </div>
+        <div class="ncf-field">
+          <label for="np-societe">Société</label>
+          <input type="text" id="np-societe" name="societe" placeholder="Ma Supérette" autocomplete="off" />
+        </div>
+        <div class="ncf-field">
+          <label for="np-type">Type</label>
+          <select id="np-type" name="type">
+            <option value="">—</option>
+            {PROSPECT_TYPES.map(t => <option value={t}>{PROSPECT_TYPE_LABEL[t]}</option>)}
+          </select>
+        </div>
+        <div class="ncf-field">
+          <label for="np-commune">Commune</label>
+          <input type="text" id="np-commune" name="commune" placeholder="Saint-Paul" autocomplete="off" />
+        </div>
+        <div class="ncf-field">
+          <label for="np-telephone">Téléphone</label>
+          <input type="tel" id="np-telephone" name="telephone" placeholder="+262 692 00 00 00" autocomplete="off" />
+        </div>
+        <div class="ncf-field">
+          <label for="np-email">Email</label>
+          <input type="email" id="np-email" name="email" placeholder="jean@exemple.re" autocomplete="off" />
+        </div>
+        <div class="ncf-field">
+          <label for="np-followup">Prochaine relance</label>
+          <input type="date" id="np-followup" name="next_followup_at" />
+        </div>
+        <div class="ncf-field ncf-field--full">
+          <label for="np-notes">Notes</label>
+          <input type="text" id="np-notes" name="notes" placeholder="Contexte, échange précédent…" autocomplete="off" />
+        </div>
+      </div>
+      <div class="ncf-footer">
+        <button type="submit" class="btn-create">Ajouter le prospect</button>
+      </div>
+    </form>
+  </details>
+
+  {successParam && (
+    <div class="success-alert" role="status">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M5 8l2 2 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      {SUCCESS_MSG[successParam] ?? 'Fait.'}
+    </div>
+  )}
+  {errorParam && (
+    <div class="error-alert" role="alert">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M8 5v3.5M8 11h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      {ERROR_MSG[errorParam] ?? 'Une erreur est survenue.'}
+    </div>
+  )}
+
+  <!-- Filter tabs -->
+  <div class="filter-bar">
+    <a href={`/admin/prospects${qs({ status: '' })}`} class={`filter-tab ${!filterStatus ? 'filter-tab--active' : ''}`}>
+      Tous
+      <span class="filter-count">{totalCount}</span>
+    </a>
+    {PROSPECT_STATUSES.map(s => (
+      <a href={`/admin/prospects${qs({ status: s })}`} class={`filter-tab filter-tab--${PROSPECT_STATUS_COLOR[s]} ${filterStatus === s ? 'filter-tab--active' : ''}`}>
+        {PROSPECT_STATUS_LABEL[s]}
+        {counts[s] > 0 && <span class="filter-count">{counts[s]}</span>}
+      </a>
+    ))}
+  </div>
+
+  <!-- Secondary filters -->
+  <form method="get" class="secondary-filters">
+    {filterStatus && <input type="hidden" name="status" value={filterStatus} />}
+    {dueOnly && <input type="hidden" name="due" value="1" />}
+    <input type="hidden" name="sort" value={sortDir} />
+    <input
+      type="text" name="commune" value={filterCommune}
+      placeholder="Filtrer par commune…" list="communesList" class="commune-input"
+    />
+    <datalist id="communesList">
+      {communes.map(c => <option value={c} />)}
+    </datalist>
+    <button type="submit" class="btn-filter">Filtrer</button>
+    <a href={`/admin/prospects${qs({ due: dueOnly ? '' : '1' })}`} class={`due-toggle ${dueOnly ? 'due-toggle--active' : ''}`}>
+      À recontacter aujourd'hui
+    </a>
+    <a href={`/admin/prospects${qs({ sort: sortDir === 'asc' ? 'desc' : 'asc' })}`} class="sort-toggle">
+      Relance {sortDir === 'asc' ? '↑' : '↓'}
+    </a>
+  </form>
+
+  {prospects.length === 0 ? (
+    <div class="empty-state">
+      <p class="empty-title">Aucun prospect{filterStatus || filterCommune || dueOnly ? ' pour ce filtre' : ''}.</p>
+    </div>
+  ) : (
+    <ul class="prospect-list">
+      {prospects.map(p => {
+        const overdue = isOverdue(p.next_followup_at, p.status);
+        return (
+          <li class={`prospect-card ${overdue ? 'prospect-card--overdue' : ''}`}>
+            <details class="prospect-details">
+              <summary class="prospect-summary">
+                <div class="summary-main">
+                  <span class="client-name">{p.nom}</span>
+                  {p.societe && <span class="client-co">{p.societe}</span>}
+                  {p.commune && <span class="order-meta">{p.commune}</span>}
+                  {p.type && <span class="order-meta">{PROSPECT_TYPE_LABEL[p.type as keyof typeof PROSPECT_TYPE_LABEL] ?? p.type}</span>}
+                </div>
+                <div class="summary-mid">
+                  {p.next_followup_at && (
+                    <span class={`followup-chip ${overdue ? 'followup-chip--overdue' : ''}`}>
+                      Relance {formatDate(p.next_followup_at)}
+                    </span>
+                  )}
+                  <span class="order-meta">Dernier contact : {formatDate(p.last_contact_at)}</span>
+                </div>
+                <div class="summary-right">
+                  <span class={`badge badge--${PROSPECT_STATUS_COLOR[p.status as keyof typeof PROSPECT_STATUS_COLOR] ?? 'muted'}`}>
+                    {PROSPECT_STATUS_LABEL[p.status as keyof typeof PROSPECT_STATUS_LABEL] ?? p.status}
+                  </span>
+                  <svg class="chevron" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                    <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </div>
+              </summary>
+
+              <div class="prospect-body">
+                <form method="post" class="quick-actions-row">
+                  <input type="hidden" name="action" value="mark_contacted" />
+                  <input type="hidden" name="id" value={p.id} />
+                  <button type="submit" class="btn-quick">Marquer contacté aujourd'hui</button>
+                </form>
+
+                {p.status === 'converti' && (
+                  <a
+                    href={`/admin/clients?from_prospect=${p.id}`}
+                    class="btn-quick btn-quick--convert"
+                  >
+                    Convertir en client →
+                  </a>
+                )}
+
+                <form method="post" class="edit-form">
+                  <input type="hidden" name="action" value="update" />
+                  <input type="hidden" name="id" value={p.id} />
+                  <div class="ef-grid">
+                    <div class="ef-field">
+                      <label>Nom</label>
+                      <input type="text" name="nom" value={p.nom} required />
+                    </div>
+                    <div class="ef-field">
+                      <label>Société</label>
+                      <input type="text" name="societe" value={p.societe ?? ''} />
+                    </div>
+                    <div class="ef-field">
+                      <label>Type</label>
+                      <select name="type">
+                        <option value="" selected={!p.type}>—</option>
+                        {PROSPECT_TYPES.map(t => (
+                          <option value={t} selected={p.type === t}>{PROSPECT_TYPE_LABEL[t]}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div class="ef-field">
+                      <label>Commune</label>
+                      <input type="text" name="commune" value={p.commune ?? ''} />
+                    </div>
+                    <div class="ef-field">
+                      <label>Téléphone</label>
+                      <input type="tel" name="telephone" value={p.telephone ?? ''} />
+                    </div>
+                    <div class="ef-field">
+                      <label>Email</label>
+                      <input type="email" name="email" value={p.email ?? ''} />
+                    </div>
+                    <div class="ef-field">
+                      <label>Statut</label>
+                      <select name="status">
+                        {PROSPECT_STATUSES.map(s => (
+                          <option value={s} selected={p.status === s}>{PROSPECT_STATUS_LABEL[s]}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div class="ef-field">
+                      <label>Prochaine relance</label>
+                      <input type="date" name="next_followup_at" value={p.next_followup_at ?? ''} />
+                    </div>
+                    <div class="ef-field ef-field--full">
+                      <label>Notes</label>
+                      <textarea name="notes" rows="2">{p.notes ?? ''}</textarea>
+                    </div>
+                  </div>
+                  <button type="submit" class="btn-save">Enregistrer</button>
+                </form>
+
+                <form
+                  method="post"
+                  class="delete-form"
+                  onsubmit={`return confirm('Supprimer ce prospect ?')`}
+                >
+                  <input type="hidden" name="action" value="delete" />
+                  <input type="hidden" name="id" value={p.id} />
+                  <button type="submit" class="btn-delete-order">Supprimer ce prospect</button>
+                </form>
+              </div>
+            </details>
+          </li>
+        );
+      })}
+    </ul>
+  )}
+
+</AdminLayout>
+
+<style>
+/* ── New prospect panel (mirrors admin/clients.astro) ─────────── */
+.new-client-panel {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-5);
+}
+.new-client-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-primary-deep);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.new-client-toggle::-webkit-details-marker { display: none; }
+.new-client-panel[open] .new-client-toggle { border-bottom: 1px solid var(--color-border); }
+
+.new-client-form { padding: var(--space-5); }
+.ncf-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.ncf-field { display: flex; flex-direction: column; gap: var(--space-1); }
+.ncf-field--full { grid-column: 1 / -1; }
+.ncf-field label { font-size: var(--text-xs); font-weight: 600; color: var(--color-muted); }
+.ncf-req { color: var(--color-danger); }
+.ncf-field input, .ncf-field select {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  min-height: 38px;
+}
+.ncf-footer { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
+.btn-create {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: white;
+  background: var(--color-primary);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-5);
+  cursor: pointer;
+  transition: opacity var(--dur-fast);
+}
+.btn-create:hover { opacity: 0.88; }
+
+/* ── Alerts ───────────────────────────────────────── */
+.success-alert {
+  display: flex; align-items: center; gap: var(--space-2);
+  background: oklch(0.96 0.04 145); border: 1px solid oklch(0.88 0.08 145);
+  border-radius: var(--radius-md); color: oklch(0.35 0.12 145);
+  padding: var(--space-3) var(--space-4); font-size: var(--text-sm); margin-bottom: var(--space-5);
+}
+.error-alert {
+  display: flex; align-items: center; gap: var(--space-2);
+  background: oklch(0.97 0.03 25); border: 1px solid oklch(0.88 0.07 25);
+  border-radius: var(--radius-md); color: oklch(0.46 0.18 25);
+  padding: var(--space-3) var(--space-4); font-size: var(--text-sm); margin-bottom: var(--space-5);
+}
+
+/* ── Filter bar (mirrors admin/commandes.astro) ────── */
+.filter-bar {
+  display: flex; flex-wrap: wrap; gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.filter-tab {
+  display: inline-flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-1) var(--space-3); font-size: var(--text-xs); font-weight: 500;
+  color: var(--color-muted); text-decoration: none;
+  border: 1px solid var(--color-border); border-radius: var(--radius-full);
+  background: var(--color-bg); transition: all var(--dur-fast);
+}
+.filter-tab:hover { color: var(--color-ink); border-color: var(--color-border-strong); }
+.filter-tab--active {
+  color: var(--color-ink); background: var(--color-surface-2);
+  border-color: var(--color-border-strong); font-weight: 600;
+}
+.filter-count {
+  font-size: 0.6875rem; font-weight: 700; color: var(--color-muted);
+  background: var(--color-surface); padding: 1px 5px; border-radius: 99px;
+  border: 1px solid var(--color-border); min-width: 18px; text-align: center;
+}
+
+.secondary-filters {
+  display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;
+  margin-bottom: var(--space-5);
+}
+.commune-input {
+  font-family: var(--font-body); font-size: var(--text-sm); color: var(--color-ink);
+  background: var(--color-bg); border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3);
+  min-height: 36px; min-width: 200px;
+}
+.btn-filter {
+  font-family: var(--font-body); font-size: var(--text-sm); font-weight: 500;
+  color: var(--color-ink); background: var(--color-surface);
+  border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-4); min-height: 36px; cursor: pointer;
+}
+.btn-filter:hover { background: var(--color-surface-2); }
+.due-toggle, .sort-toggle {
+  font-size: var(--text-xs); font-weight: 600; color: var(--color-muted);
+  text-decoration: none; padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border); border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+.due-toggle:hover, .sort-toggle:hover { border-color: var(--color-border-strong); color: var(--color-ink); }
+.due-toggle--active {
+  color: oklch(0.40 0.13 45.9); background: oklch(0.96 0.04 45.9);
+  border-color: oklch(0.85 0.09 45.9);
+}
+
+/* ── Empty state ─────────────────────────────────── */
+.empty-state { padding: var(--space-16) 0; text-align: center; }
+.empty-title { font-size: var(--text-sm); color: var(--color-muted); }
+
+/* ── Prospect list (mirrors admin/commandes.astro order-list) ─── */
+.prospect-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+
+.prospect-card {
+  border: 1px solid var(--color-border); border-radius: var(--radius-md);
+  overflow: hidden; background: var(--color-bg); transition: border-color var(--dur-fast);
+}
+.prospect-card:has(details[open]) { border-color: var(--color-border-strong); }
+.prospect-card--overdue { border-color: oklch(0.80 0.10 45.9); }
+
+.prospect-details summary { list-style: none; }
+.prospect-details summary::-webkit-details-marker { display: none; }
+
+.prospect-summary {
+  display: flex; align-items: center; gap: var(--space-4);
+  padding: var(--space-3) var(--space-4); cursor: pointer; user-select: none;
+  transition: background var(--dur-fast); flex-wrap: wrap;
+}
+.prospect-summary:hover { background: var(--color-surface); }
+
+.summary-main { flex: 1; min-width: 160px; display: flex; flex-direction: column; gap: 2px; }
+.client-name { font-size: var(--text-sm); font-weight: 600; color: var(--color-ink); }
+.client-co, .order-meta { font-size: var(--text-xs); color: var(--color-muted); }
+
+.summary-mid { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex-shrink: 0; }
+
+.followup-chip {
+  font-size: var(--text-xs); font-weight: 600; padding: 2px 8px; border-radius: var(--radius-full);
+  background: var(--color-surface-2); color: var(--color-muted);
+}
+.followup-chip--overdue { background: oklch(0.95 0.07 45.9); color: oklch(0.40 0.13 45.9); }
+
+.summary-right { display: flex; align-items: center; gap: var(--space-3); flex-shrink: 0; }
+.chevron { color: var(--color-muted); flex-shrink: 0; transition: transform 0.2s var(--ease-out-expo); }
+details[open] .chevron { transform: rotate(180deg); }
+
+.badge {
+  display: inline-block; padding: 2px 8px; border-radius: var(--radius-full);
+  font-size: var(--text-xs); font-weight: 500; white-space: nowrap;
+}
+.badge--muted  { background: var(--color-surface-2); color: var(--color-muted); }
+.badge--blue   { background: oklch(0.93 0.05 220); color: oklch(0.33 0.12 220); }
+.badge--amber  { background: oklch(0.95 0.07 80);  color: oklch(0.40 0.14 80); }
+.badge--green  { background: oklch(0.92 0.08 150); color: oklch(0.32 0.12 150); }
+.badge--red    { background: oklch(0.95 0.04 25);  color: oklch(0.46 0.18 25); }
+
+.prospect-body {
+  padding: var(--space-4); border-top: 1px solid var(--color-border);
+  background: var(--color-surface); display: flex; flex-direction: column; gap: var(--space-4);
+}
+
+.quick-actions-row { display: flex; gap: var(--space-3); flex-wrap: wrap; }
+.btn-quick {
+  display: inline-flex; align-items: center; font-size: var(--text-sm); font-weight: 600;
+  color: var(--color-primary-deep); background: oklch(0.97 0.02 250);
+  border: 1px solid oklch(0.88 0.04 250); border-radius: var(--radius-md);
+  padding: 6px 14px; cursor: pointer; text-decoration: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+.btn-quick:hover { background: oklch(0.93 0.04 250); border-color: oklch(0.80 0.07 250); }
+.btn-quick--convert {
+  color: oklch(0.34 0.14 145); background: oklch(0.94 0.06 145); border-color: oklch(0.82 0.09 145);
+}
+.btn-quick--convert:hover { background: oklch(0.89 0.08 145); }
+
+.edit-form {
+  background: var(--color-bg); border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); padding: var(--space-4);
+}
+.ef-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-3); margin-bottom: var(--space-3); }
+.ef-field { display: flex; flex-direction: column; gap: 4px; }
+.ef-field--full { grid-column: 1 / -1; }
+.ef-field label { font-size: var(--text-xs); font-weight: 600; color: var(--color-muted); }
+.ef-field input, .ef-field select, .ef-field textarea {
+  font-family: var(--font-body); font-size: var(--text-sm); color: var(--color-ink);
+  background: var(--color-bg); border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm); padding: var(--space-2); min-height: 34px;
+}
+.ef-field textarea { resize: vertical; min-height: 60px; }
+
+.btn-save {
+  font-family: var(--font-body); font-size: var(--text-sm); font-weight: 600; color: white;
+  background: var(--color-primary); border: none; border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-5); cursor: pointer; transition: opacity var(--dur-fast);
+}
+.btn-save:hover { opacity: 0.88; }
+
+.delete-form { display: flex; justify-content: flex-end; }
+.btn-delete-order {
+  padding: 5px 12px; background: none; border: 1px solid oklch(0.88 0.07 25);
+  border-radius: var(--radius-sm); color: oklch(0.50 0.19 25); cursor: pointer;
+  font-size: var(--text-xs); font-weight: 500; font-family: inherit; white-space: nowrap;
+  transition: background var(--dur-fast);
+}
+.btn-delete-order:hover { background: oklch(0.97 0.04 25); }
+
+/* ── Responsive ──────────────────────────────────── */
+@media (max-width: 900px) {
+  .ncf-grid { grid-template-columns: repeat(2, 1fr); }
+  .ef-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+  .ncf-grid { grid-template-columns: 1fr; }
+  .ef-grid { grid-template-columns: 1fr; }
+  .summary-mid { display: none; }
+}
+</style>

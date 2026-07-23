@@ -19,10 +19,13 @@ for (let i = MONTHS_BACK - 1; i >= 0; i--) {
 }
 const rangeStart = monthDefs[0].start.toISOString();
 
+const todayStr = now.toISOString().slice(0, 10);
+
 const [
   { count: commandesEnAttente },
   { count: livraisonsEnAttente },
   { count: clientsEnAttente },
+  { count: prospectsARecontacter },
   { data: recentOrders },
   { data: recentContacts },
   { data: lowStockItems },
@@ -31,6 +34,8 @@ const [
   supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }).eq('status', 'en_attente'),
   supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }).in('status', ['confirmee', 'en_preparation', 'expediee']),
   supabaseAdmin.from('client_accounts').select('*', { count: 'exact', head: true }).eq('status', 'en_attente'),
+  supabaseAdmin.from('prospects').select('*', { count: 'exact', head: true })
+    .lte('next_followup_at', todayStr).not('status', 'in', '(converti,pas_interesse)'),
   supabaseAdmin.from('orders').select('id, nom, societe, status, created_at').order('created_at', { ascending: false }).limit(5),
   supabaseAdmin.from('contact_requests').select('id, nom, societe, status, created_at').order('created_at', { ascending: false }).limit(5),
   supabaseAdmin.from('products').select('id, name, stock_quantity').lt('stock_quantity', 5).order('stock_quantity', { ascending: true }).limit(6),
@@ -199,6 +204,7 @@ const hasLowStock        = (lowStockItems ?? []).length > 0;
 const hasPendingDelivery = (livraisonsEnAttente ?? 0) > 0;
 const hasPendingClients  = (clientsEnAttente ?? 0) > 0;
 const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
+const hasPendingProspects = (prospectsARecontacter ?? 0) > 0;
 ---
 <AdminLayout title="Tableau de bord" activeNav="dashboard">
 
@@ -417,8 +423,22 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
   </div>
 
   <!-- ── Alerts ─────────────────────────────────────── -->
-  {(hasPendingOrders || hasLowStock || hasPendingDelivery || hasPendingClients) && (
+  {(hasPendingOrders || hasLowStock || hasPendingDelivery || hasPendingClients || hasPendingProspects) && (
     <div class="alerts-row">
+      {hasPendingProspects && (
+        <a href="/admin/prospects?due=1" class="alert-card alert-card--prospects">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="6.5" cy="5.5" r="2.5" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M2 13c0-2.3 2.02-4 4.5-4s4.5 1.7 4.5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M11.5 4v4M9.5 6h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span>
+            <strong>{prospectsARecontacter}</strong>
+            {(prospectsARecontacter ?? 0) > 1 ? ' prospects à recontacter aujourd\'hui' : ' prospect à recontacter aujourd\'hui'}
+          </span>
+          <span class="alert-cta">Recontacter →</span>
+        </a>
+      )}
       {hasPendingOrders && (
         <a href="/admin/commandes?status=en_attente" class="alert-card alert-card--orders">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -1011,6 +1031,15 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
 }
 .alert-card--orders:hover { background: oklch(0.91 0.07 45.9); }
 .alert-card--orders svg { flex-shrink: 0; }
+
+.alert-card--prospects {
+  background: oklch(0.95 0.04 295);
+  border: 1px solid oklch(0.85 0.07 295);
+  color: oklch(0.38 0.12 295);
+  transition: background var(--dur-fast);
+}
+.alert-card--prospects:hover { background: oklch(0.90 0.06 295); }
+.alert-card--prospects svg { flex-shrink: 0; }
 
 .alert-card--clients {
   background: oklch(0.96 0.04 75);

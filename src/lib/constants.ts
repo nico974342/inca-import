@@ -80,3 +80,33 @@ export function marginColorClass(pct: number | null): 'green' | 'amber' | 'red' 
   if (pct >= 15) return 'amber';
   return 'red';
 }
+
+// ── Prospect type ────────────────────────────────────────────────────────
+export const PROSPECT_TYPES = ['station_service', 'superette', 'autre'] as const;
+export type ProspectType = (typeof PROSPECT_TYPES)[number];
+
+export const PROSPECT_TYPE_LABEL: Record<ProspectType, string> = {
+  station_service: 'Station-service',
+  superette:       'Supérette',
+  autre:           'Autre',
+};
+
+// ── Prospect status ──────────────────────────────────────────────────────
+export const PROSPECT_STATUSES = ['a_contacter', 'contacte', 'interesse', 'converti', 'pas_interesse'] as const;
+export type ProspectStatus = (typeof PROSPECT_STATUSES)[number];
+
+export const PROSPECT_STATUS_LABEL: Record<ProspectStatus, string> = {
+  a_contacter:   'À contacter',
+  contacte:      'Contacté',
+  interesse:     'Intéressé',
+  converti:      'Converti',
+  pas_interesse: 'Pas intéressé',
+};
+
+export const PROSPECT_STATUS_COLOR: Record<ProspectStatus, string> = {
+  a_contacter:   'muted',
+  contacte:      'blue',
+  interesse:     'amber',
+  converti:      'green',
+  pas_interesse: 'red',
+};

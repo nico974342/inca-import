@@ -5,6 +5,7 @@ import { sanitizeText, sanitizeEmail } from '../../lib/sanitize';
 import { normalizeEmail } from '../../lib/clients';
 import { sendClientActivationEmail } from '../../lib/email';
 import { logAdminAction } from '../../lib/audit';
+import { PROSPECT_TYPE_LABEL } from '../../lib/constants';
 
 if (Astro.request.method === 'POST') {
   const data   = await Astro.request.formData();
@@ -101,6 +102,7 @@ if (Astro.request.method === 'POST') {
     const pointsDeVente = sanitizeText(data.get('points_de_vente') as string, 120);
     const notes         = sanitizeText(data.get('notes')          as string, 500);
     const status        = (data.get('status') as string) || 'actif';
+    const prospectId    = (data.get('prospect_id') as string) || null;
     if (nom && email) {
       const { error: insertErr } = await supabaseAdmin.from('client_accounts').insert({
         nom, societe: societe || null, telephone: telephone || null, email,
@@ -120,6 +122,18 @@ if (Astro.request.method === 'POST') {
         targetLabel: societe || nom,
         details: { email, status },
       });
+
+      // Created via "Convertir en client" from a prospect — close the loop
+      if (prospectId) {
+        await supabaseAdmin.from('prospects').update({ status: 'converti' }).eq('id', prospectId);
+        await logAdminAction({
+          adminEmail,
+          action: 'prospect.conversion',
+          targetType: 'prospect',
+          targetId: prospectId,
+          targetLabel: societe || nom,
+        });
+      }
     } else {
       return Astro.redirect('/admin/clients?client_error=champs_requis');
     }
@@ -133,18 +147,38 @@ if (Astro.request.method === 'POST') {
   return Astro.redirect('/admin/clients');
 }
 
+const fromProspectId = Astro.url.searchParams.get('from_prospect');
 const [
   { data: clientsRaw },
   { data: contactsRaw },
   { data: authUsersData },
+  { data: prefillProspect },
 ] = await Promise.all([
   supabaseAdmin.from('client_accounts').select('*').order('created_at', { ascending: false }),
   supabaseAdmin.from('contact_requests').select('*').order('created_at', { ascending: false }),
   supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 }),
+  fromProspectId
+    ? supabaseAdmin.from('prospects').select('*').eq('id', fromProspectId).single()
+    : Promise.resolve({ data: null }),
 ]);
 
 const clients  = clientsRaw  ?? [];
 const contacts = contactsRaw ?? [];
+
+// client_accounts has no type/commune columns — fold them into the notes
+// prefill so nothing from the prospect record is lost on conversion.
+const prospectPrefill = prefillProspect ? {
+  id:        prefillProspect.id as string,
+  nom:       prefillProspect.nom as string,
+  societe:   (prefillProspect.societe as string | null) ?? '',
+  telephone: (prefillProspect.telephone as string | null) ?? '',
+  email:     (prefillProspect.email as string | null) ?? '',
+  notes: [
+    prefillProspect.type ? `Type : ${PROSPECT_TYPE_LABEL[prefillProspect.type as keyof typeof PROSPECT_TYPE_LABEL] ?? prefillProspect.type}` : null,
+    prefillProspect.commune ? `Commune : ${prefillProspect.commune}` : null,
+    prefillProspect.notes ? `Notes prospect : ${prefillProspect.notes}` : null,
+  ].filter(Boolean).join(' — '),
+} : null;
 
 // Build a set of emails that have admin role in Supabase auth
 const adminEmailSet = new Set(
@@ -231,31 +265,37 @@ function formatDate(iso: string) {
 }
 ---
 <AdminLayout title="Clients" activeNav="clients">
-  <details class="new-client-panel">
+  <details class="new-client-panel" open={!!prospectPrefill}>
     <summary class="new-client-toggle">
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
         <path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
       </svg>
       Nouveau client
     </summary>
+    {prospectPrefill && (
+      <p class="prospect-prefill-hint">
+        Pré-rempli depuis le prospect <strong>{prospectPrefill.nom}</strong> — vérifiez les champs avant de créer le client.
+      </p>
+    )}
     <form method="post" class="new-client-form">
       <input type="hidden" name="action" value="create_client" />
+      {prospectPrefill && <input type="hidden" name="prospect_id" value={prospectPrefill.id} />}
       <div class="ncf-grid">
         <div class="ncf-field">
           <label for="ncf-nom">Nom <span class="ncf-req" aria-hidden="true">*</span></label>
-          <input type="text" id="ncf-nom" name="nom" required placeholder="Jean Dupont" autocomplete="off" />
+          <input type="text" id="ncf-nom" name="nom" required placeholder="Jean Dupont" autocomplete="off" value={prospectPrefill?.nom ?? ''} />
         </div>
         <div class="ncf-field">
           <label for="ncf-societe">Société</label>
-          <input type="text" id="ncf-societe" name="societe" placeholder="Ma Supérette" autocomplete="off" />
+          <input type="text" id="ncf-societe" name="societe" placeholder="Ma Supérette" autocomplete="off" value={prospectPrefill?.societe ?? ''} />
         </div>
         <div class="ncf-field">
           <label for="ncf-email">Email <span class="ncf-req" aria-hidden="true">*</span></label>
-          <input type="email" id="ncf-email" name="email" required placeholder="jean@exemple.re" autocomplete="off" />
+          <input type="email" id="ncf-email" name="email" required placeholder="jean@exemple.re" autocomplete="off" value={prospectPrefill?.email ?? ''} />
         </div>
         <div class="ncf-field">
           <label for="ncf-telephone">Téléphone</label>
-          <input type="tel" id="ncf-telephone" name="telephone" placeholder="+262 692 00 00 00" autocomplete="off" />
+          <input type="tel" id="ncf-telephone" name="telephone" placeholder="+262 692 00 00 00" autocomplete="off" value={prospectPrefill?.telephone ?? ''} />
         </div>
         <div class="ncf-field">
           <label for="ncf-pdv">Point de vente</label>
@@ -271,7 +311,7 @@ function formatDate(iso: string) {
         </div>
         <div class="ncf-field ncf-field--full">
           <label for="ncf-notes">Notes</label>
-          <input type="text" id="ncf-notes" name="notes" placeholder="Informations complémentaires…" autocomplete="off" />
+          <input type="text" id="ncf-notes" name="notes" placeholder="Informations complémentaires…" autocomplete="off" value={prospectPrefill?.notes ?? ''} />
         </div>
       </div>
       <div class="ncf-footer">
@@ -709,6 +749,13 @@ tr[data-pending="true"]:hover td {
 .new-client-form {
   padding: var(--space-5) var(--space-4);
 }
+
+.prospect-prefill-hint {
+  padding: var(--space-3) var(--space-5) 0;
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
+.prospect-prefill-hint strong { color: var(--color-ink); }
 
 .ncf-grid {
   display: grid;
