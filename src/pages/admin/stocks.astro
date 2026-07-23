@@ -27,6 +27,7 @@ const CAT_LABEL: Record<string, string> = {
   boissons: 'Boissons',
   snacks: 'Snacks',
   confiseries: 'Confiseries',
+  divers: 'Divers',
 };
 ---
 <AdminLayout title="Stocks" activeNav="stocks">
@@ -54,6 +55,7 @@ const CAT_LABEL: Record<string, string> = {
       <option value="boissons">Boissons</option>
       <option value="snacks">Snacks</option>
       <option value="confiseries">Confiseries</option>
+      <option value="divers">Divers</option>
     </select>
     <input
       id="filterSearch"
@@ -127,6 +129,7 @@ const CAT_LABEL: Record<string, string> = {
       boissons:    'background:oklch(0.93 0.05 220);color:oklch(0.35 0.10 220);',
       snacks:      'background:oklch(0.94 0.05 60);color:oklch(0.40 0.12 60);',
       confiseries: 'background:oklch(0.93 0.06 330);color:oklch(0.40 0.12 330);',
+      divers:      'background:oklch(0.93 0.05 275);color:oklch(0.40 0.12 275);',
     };
     return map[category] ?? 'background:var(--color-surface-2);color:var(--color-muted);';
   }

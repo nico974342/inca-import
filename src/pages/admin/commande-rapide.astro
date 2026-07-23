@@ -197,7 +197,7 @@ const products = (productsRaw ?? []).map(p => ({
 }));
 
 const CAT_LABEL: Record<string, string> = {
-  boissons: 'Boissons', snacks: 'Snacks', confiseries: 'Confiseries',
+  boissons: 'Boissons', snacks: 'Snacks', confiseries: 'Confiseries', divers: 'Divers',
 };
 const CATS = ['tous', ...Array.from(new Set(products.map(p => p.category)))];
 

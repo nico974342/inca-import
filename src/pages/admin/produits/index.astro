@@ -12,6 +12,7 @@ const CAT_LABEL: Record<string, string> = {
   boissons: 'Boissons',
   snacks: 'Snacks',
   confiseries: 'Confiseries',
+  divers: 'Divers',
 };
 
 function formatPrice(p: number | null) {
@@ -167,6 +168,7 @@ function margeInfo(pump: number | null, prix: number | null): { label: string; c
 .badge--boissons    { background: oklch(0.93 0.05 220); color: oklch(0.35 0.10 220); }
 .badge--snacks      { background: oklch(0.94 0.05 60);  color: oklch(0.40 0.12 60);  }
 .badge--confiseries { background: oklch(0.93 0.06 330); color: oklch(0.40 0.12 330); }
+.badge--divers      { background: oklch(0.93 0.05 275); color: oklch(0.40 0.12 275); }
 
 .marge-chip {
   display: inline-flex;

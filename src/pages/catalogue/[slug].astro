@@ -33,12 +33,14 @@ const CAT_LABEL: Record<string, string> = {
   boissons:    'Boissons',
   snacks:      'Snacks',
   confiseries: 'Confiseries',
+  divers:      'Divers',
 };
 
 const CAT_BG: Record<string, string> = {
   boissons:    'oklch(0.72 0.10 210)',
   snacks:      'oklch(0.78 0.10 60)',
   confiseries: 'oklch(0.76 0.10 330)',
+  divers:      'oklch(0.74 0.10 275)',
 };
 
 const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
@@ -360,6 +362,7 @@ const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
 .cat-badge--boissons    { background: oklch(0.93 0.05 220); color: oklch(0.33 0.10 220); }
 .cat-badge--snacks      { background: oklch(0.94 0.05 60);  color: oklch(0.38 0.12 60);  }
 .cat-badge--confiseries { background: oklch(0.93 0.06 330); color: oklch(0.36 0.12 330); }
+.cat-badge--divers      { background: oklch(0.93 0.05 275); color: oklch(0.36 0.12 275); }
 
 .stock-dot {
   display: inline-flex;

@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS products (
   id          UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   name        TEXT NOT NULL,
   slug        TEXT UNIQUE NOT NULL,
-  category    TEXT NOT NULL CHECK (category IN ('boissons', 'snacks', 'confiseries')),
+  category    TEXT NOT NULL CHECK (category IN ('boissons', 'snacks', 'confiseries', 'divers')),
   description TEXT,
   sku         TEXT,
   price_ht    NUMERIC(10, 2),
