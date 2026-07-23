@@ -51,7 +51,7 @@ const [
 type MonthBucket = { label: string; caHt: number; margeHt: number; hasPump: boolean; orderCount: number };
 const buckets: MonthBucket[] = monthDefs.map(m => ({ label: m.label, caHt: 0, margeHt: 0, hasPump: false, orderCount: 0 }));
 
-const productAgg = new Map<string, { name: string; unit: string | null; qty: number; ca: number }>();
+const productAgg = new Map<string, { name: string; unit: string | null; qty: number; ca: number; marge: number; hasPump: boolean }>();
 const categoryAgg = new Map<string, number>();
 const CURRENT_IDX = MONTHS_BACK - 1;
 
@@ -76,9 +76,13 @@ for (const order of (sixMonthOrders ?? [])) {
 
     if (isCurrentMonth) {
       const key  = item.product_id ?? item.product_name ?? 'inconnu';
-      const prev = productAgg.get(key) ?? { name: item.product_name ?? 'Produit', unit: item.unit ?? null, qty: 0, ca: 0 };
+      const prev = productAgg.get(key) ?? { name: item.product_name ?? 'Produit', unit: item.unit ?? null, qty: 0, ca: 0, marge: 0, hasPump: false };
       prev.qty += qty;
       prev.ca  += prix * qty;
+      if (pump != null) {
+        prev.marge += (prix - pump) * qty;
+        prev.hasPump = true;
+      }
       productAgg.set(key, prev);
 
       const cat = (item as any).products?.category ?? null;
@@ -126,9 +130,9 @@ const margeTrend: Trend = margeMonthPct != null && margePrevPct != null
       : { dir: margeMonthPct > margePrevPct ? 'up' : 'down', pct: margeMonthPct - margePrevPct })
   : { dir: 'none', pct: null };
 
-// ── Top 5 products this month, by CA ──────────────────────────────────────
+// ── Top 5 products this month, by margin HT generated ──────────────────────
 const top5Products = Array.from(productAgg.values())
-  .sort((a, b) => b.ca - a.ca)
+  .sort((a, b) => b.marge - a.marge)
   .slice(0, 5);
 
 // ── Category split this month ──────────────────────────────────────────
@@ -401,7 +405,7 @@ const hasPendingProspects = (prospectsARecontacter ?? 0) > 0;
         {top5Products.length > 0 ? (
           <table class="top5-table">
             <thead>
-              <tr><th>Produit</th><th class="th-r">Qté</th><th class="th-r">CA HT</th></tr>
+              <tr><th>Produit</th><th class="th-r">Qté</th><th class="th-r">CA HT</th><th class="th-r">Marge HT</th></tr>
             </thead>
             <tbody>
               {top5Products.map(p => (
@@ -409,6 +413,7 @@ const hasPendingProspects = (prospectsARecontacter ?? 0) > 0;
                   <td class="top5-name">{p.name}</td>
                   <td class="th-r top5-qty">{p.qty}{p.unit ? <span class="top5-unit"> {p.unit}{p.qty > 1 ? 's' : ''}</span> : null}</td>
                   <td class="th-r top5-ca">{formatCA(p.ca)}</td>
+                  <td class="th-r top5-marge">{p.hasPump ? formatCA(p.marge) : '—'}</td>
                 </tr>
               ))}
             </tbody>
@@ -975,7 +980,7 @@ const hasPendingProspects = (prospectsARecontacter ?? 0) > 0;
   font-size: var(--text-sm);
 }
 .top5-table th {
-  padding: var(--space-2) var(--space-5);
+  padding: var(--space-2) var(--space-3);
   font-size: var(--text-xs);
   font-weight: 600;
   color: var(--color-muted);
@@ -984,7 +989,7 @@ const hasPendingProspects = (prospectsARecontacter ?? 0) > 0;
 }
 .top5-table th.th-r { text-align: right; }
 .top5-table td {
-  padding: var(--space-3) var(--space-5);
+  padding: var(--space-3);
   border-bottom: 1px solid var(--color-border);
   vertical-align: middle;
 }
@@ -1002,7 +1007,8 @@ const hasPendingProspects = (prospectsARecontacter ?? 0) > 0;
 }
 .top5-qty { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .top5-unit { color: var(--color-muted); font-size: var(--text-xs); }
-.top5-ca { font-weight: 700; color: var(--color-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.top5-ca { font-weight: 500; color: var(--color-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.top5-marge { font-weight: 700; color: oklch(0.40 0.13 150); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* ── Alerts ───────────────────────────────────────── */
 .alerts-row {
