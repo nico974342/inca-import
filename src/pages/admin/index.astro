@@ -1,7 +1,7 @@
 ---
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
-import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, CONTACT_STATUS_LABEL, CONTACT_STATUS_COLOR, computeGmroi, gmroiColorClass } from '../../lib/constants';
+import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, CONTACT_STATUS_LABEL, CONTACT_STATUS_COLOR, computeGmroi, gmroiColorClass, computeStockRotation, rotationColorClass } from '../../lib/constants';
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'] as const;
 
@@ -55,6 +55,7 @@ const buckets: MonthBucket[] = monthDefs.map(m => ({ label: m.label, caHt: 0, ma
 const productAgg = new Map<string, { productId: string | null; name: string; unit: string | null; qty: number; ca: number; marge: number; hasPump: boolean }>();
 const categoryAgg = new Map<string, number>();
 const margin12moByProduct = new Map<string, number>();
+const cogs12moByProduct = new Map<string, number>();
 const CURRENT_IDX = MONTHS_BACK - 1;
 
 for (const order of (twelveMonthOrders ?? [])) {
@@ -71,6 +72,7 @@ for (const order of (twelveMonthOrders ?? [])) {
 
     if (item.product_id != null && pump != null) {
       margin12moByProduct.set(item.product_id, (margin12moByProduct.get(item.product_id) ?? 0) + (prix - pump) * qty);
+      cogs12moByProduct.set(item.product_id, (cogs12moByProduct.get(item.product_id) ?? 0) + pump * qty);
     }
 
     if (idx === -1) continue; // outside the 6-month chart window
@@ -113,6 +115,22 @@ const produitsASurveiller = productGmroiList
   .slice(0, 5);
 
 const gmroiById = new Map(productGmroiList.map(p => [p.id, p.gmroi]));
+
+// ── Taux de rotation moyen (weighted by stock value, not a plain average of
+//    each product's own ratio — a product with a large stock investment
+//    should move the needle more than a marginal one). Products with no
+//    stock or no PUMP are excluded from both sums (can't value their stock
+//    at all); a product that IS valued but never sold correctly drags the
+//    average down since its stock value still counts in the denominator. ──
+let totalCogs12mo = 0;
+let totalStockValue = 0;
+for (const p of allProducts) {
+  if (!p.stock_quantity || p.stock_quantity <= 0) continue;
+  if (p.prix_achat_moyen_ht == null || p.prix_achat_moyen_ht <= 0) continue;
+  totalStockValue += p.stock_quantity * p.prix_achat_moyen_ht;
+  totalCogs12mo += cogs12moByProduct.get(p.id) ?? 0;
+}
+const avgRotation = totalStockValue > 0 ? totalCogs12mo / totalStockValue : null;
 
 const caMonth         = buckets[CURRENT_IDX].caHt;
 const margeMonthHt     = buckets[CURRENT_IDX].margeHt;
@@ -301,6 +319,24 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
         {trendLabel(panierTrend)}
         <span class="kpi-trend-caption">vs mois dernier</span>
       </span>
+    </div>
+
+    <div class="kpi-card">
+      <div class={`kpi-icon kpi-icon--${rotationColorClass(avgRotation)}`}>
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <path d="M3 9a6 6 0 0 1 10.5-3.9M15 9a6 6 0 0 1-10.5 3.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <path d="M13.5 3v3h-3M4.5 15v-3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <span class="kpi-label">
+        Rotation moyenne du stock
+        <span
+          class="help-icon"
+          tabindex="0"
+          title="Combien de fois votre stock se renouvelle par an, en moyenne pondérée par la valeur immobilisée. Rotation = coût des ventes sur 12 mois ÷ valeur du stock actuel. > 6x/an = excellent, 3-6x/an = correct, < 3x/an = stock qui tourne lentement."
+        >?</span>
+      </span>
+      <span class="kpi-value">{avgRotation != null ? avgRotation.toFixed(1) + 'x/an' : '—'}</span>
     </div>
 
   </div>
@@ -725,7 +761,7 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
 /* ── KPI row ──────────────────────────────────────── */
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: var(--space-4);
   margin-bottom: var(--space-5);
 }
@@ -754,6 +790,8 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
 .kpi-icon--coral { background: oklch(0.568 0.149 45.9 / 0.12); color: var(--color-primary-deep); }
 .kpi-icon--blue  { background: oklch(0.93 0.05 220); color: oklch(0.38 0.12 220); }
 .kpi-icon--amber { background: oklch(0.95 0.07 80);  color: oklch(0.42 0.14 80);  }
+.kpi-icon--red   { background: oklch(0.95 0.04 25);  color: oklch(0.46 0.18 25);  }
+.kpi-icon--none  { background: var(--color-surface-2); color: var(--color-muted); }
 
 .kpi-label {
   font-size: var(--text-xs);
@@ -1324,6 +1362,10 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
 }
 
 /* ── Responsive ───────────────────────────────────── */
+@media (max-width: 1400px) {
+  .kpi-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
 @media (max-width: 1100px) {
   .visual-grid { grid-template-columns: 1fr; }
 }

@@ -122,3 +122,26 @@ export function gmroiColorClass(value: number | null): 'green' | 'amber' | 'red'
   if (value >= 1) return 'amber';
   return 'red';
 }
+
+// ── Taux de rotation des stocks (stock turnover rate) ───────────────────
+// Rotation = coût des ventes générées sur la période / valeur moyenne du
+// stock immobilisé. Same denominator and same null-handling rationale as
+// GMROI (see above) — only the numerator differs (cost of goods sold,
+// qty × PUMP, instead of gross margin).
+export function computeStockRotation(
+  stockQuantity: number | null | undefined,
+  pumpHt: number | null | undefined,
+  cogsOverPeriod: number | null | undefined,
+): number | null {
+  if (!stockQuantity || stockQuantity <= 0) return null;
+  if (pumpHt == null || pumpHt <= 0) return null;
+  if (cogsOverPeriod == null) return null;
+  return cogsOverPeriod / (stockQuantity * pumpHt);
+}
+
+export function rotationColorClass(value: number | null): 'green' | 'amber' | 'red' | 'none' {
+  if (value == null) return 'none';
+  if (value > 6) return 'green';
+  if (value >= 3) return 'amber';
+  return 'red';
+}

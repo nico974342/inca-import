@@ -1,7 +1,7 @@
 ---
 import AdminLayout from '../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../lib/supabase';
-import { marginColorClass, computeGmroi, gmroiColorClass } from '../../../lib/constants';
+import { marginColorClass, computeGmroi, gmroiColorClass, computeStockRotation, rotationColorClass } from '../../../lib/constants';
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'];
 
@@ -11,7 +11,9 @@ const { data: products, error } = await supabaseAdmin
   .order('position', { ascending: true })
   .order('name', { ascending: true });
 
-// ── GMROI: marge brute des 12 derniers mois / valeur du stock immobilisé ──
+// ── GMROI + rotation: both derive from the same 12-month order_items pull —
+//    GMROI's numerator is gross margin (qty × (price − PUMP)), rotation's
+//    is cost of goods sold (qty × PUMP) — same denominator (stock value). ──
 const twelveMonthsAgoIso = new Date(new Date().setMonth(new Date().getMonth() - 12)).toISOString();
 const { data: marginRows } = await supabaseAdmin
   .from('order_items')
@@ -20,16 +22,22 @@ const { data: marginRows } = await supabaseAdmin
   .gte('orders.created_at', twelveMonthsAgoIso);
 
 const margin12moByProduct = new Map<string, number>();
+const cogs12moByProduct = new Map<string, number>();
 for (const row of (marginRows ?? [])) {
   if (!row.product_id) continue;
   const prix = row.price_ht_snapshot != null ? Number(row.price_ht_snapshot) : null;
   const pump = row.pump_snapshot != null ? Number(row.pump_snapshot) : null;
   if (prix == null || pump == null) continue;
   margin12moByProduct.set(row.product_id, (margin12moByProduct.get(row.product_id) ?? 0) + (prix - pump) * row.quantity);
+  cogs12moByProduct.set(row.product_id, (cogs12moByProduct.get(row.product_id) ?? 0) + pump * row.quantity);
 }
 
 function productGmroi(p: { id: string; stock_quantity: number | null; prix_achat_moyen_ht: number | null }): number | null {
   return computeGmroi(p.stock_quantity, p.prix_achat_moyen_ht, margin12moByProduct.get(p.id) ?? null);
+}
+
+function productRotation(p: { id: string; stock_quantity: number | null; prix_achat_moyen_ht: number | null }): number | null {
+  return computeStockRotation(p.stock_quantity, p.prix_achat_moyen_ht, cogs12moByProduct.get(p.id) ?? null);
 }
 
 const CAT_LABEL: Record<string, string> = {
@@ -90,6 +98,14 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                 title="Combien vous rapporte chaque euro immobilisé en stock sur ce produit. GMROI = marge brute générée sur 12 mois ÷ valeur du stock actuel (stock × coût moyen). > 2 = excellent, 1-2 = correct, < 1 = ce produit immobilise plus de capital qu'il ne rapporte."
               >?</span>
             </th>
+            <th>
+              Rotation
+              <span
+                class="help-icon"
+                tabindex="0"
+                title="Combien de fois votre stock se renouvelle par an sur ce produit. Rotation = coût des ventes sur 12 mois ÷ valeur du stock actuel. > 6x/an = excellent, 3-6x/an = correct, < 3x/an = stock qui tourne lentement, capital immobilisé trop longtemps."
+              >?</span>
+            </th>
             <th>Stock</th>
             <th>Pos.</th>
             <th></th>
@@ -117,6 +133,16 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                   <td>
                     <span class={`marge-chip marge--${gmroiColorClass(g)}`}>
                       {g != null ? g.toFixed(1) + '×' : '—'}
+                    </span>
+                  </td>
+                );
+              })()}
+              {(() => {
+                const r = productRotation(p as any);
+                return (
+                  <td>
+                    <span class={`marge-chip marge--${rotationColorClass(r)}`}>
+                      {r != null ? r.toFixed(1) + 'x/an' : '—'}
                     </span>
                   </td>
                 );
