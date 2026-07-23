@@ -1,55 +1,185 @@
 ---
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
-import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, CONTACT_STATUS_LABEL, CONTACT_STATUS_COLOR, marginColorClass } from '../../lib/constants';
+import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, CONTACT_STATUS_LABEL, CONTACT_STATUS_COLOR } from '../../lib/constants';
+
+const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'] as const;
 
 const now = new Date();
 const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
+// ── 6 calendar months (oldest first, current month last) ────────────────
+const MONTHS_BACK = 6;
+const monthDefs: { label: string; start: Date; end: Date }[] = [];
+for (let i = MONTHS_BACK - 1; i >= 0; i--) {
+  const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+  const end   = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+  const label = start.toLocaleDateString('fr-FR', { month: 'short' }).replace('.', '');
+  monthDefs.push({ label: label.charAt(0).toUpperCase() + label.slice(1), start, end });
+}
+const rangeStart = monthDefs[0].start.toISOString();
+
 const [
-  { count: totalProduits },
   { count: commandesEnAttente },
-  { count: totalClients },
   { count: livraisonsEnAttente },
   { count: clientsEnAttente },
   { data: recentOrders },
   { data: recentContacts },
   { data: lowStockItems },
-  { data: monthOrders },
+  { data: sixMonthOrders },
 ] = await Promise.all([
-  supabaseAdmin.from('products').select('*', { count: 'exact', head: true }),
   supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }).eq('status', 'en_attente'),
-  supabaseAdmin.from('client_accounts').select('*', { count: 'exact', head: true }).eq('status', 'actif'),
   supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }).in('status', ['confirmee', 'en_preparation', 'expediee']),
   supabaseAdmin.from('client_accounts').select('*', { count: 'exact', head: true }).eq('status', 'en_attente'),
   supabaseAdmin.from('orders').select('id, nom, societe, status, created_at').order('created_at', { ascending: false }).limit(5),
   supabaseAdmin.from('contact_requests').select('id, nom, societe, status, created_at').order('created_at', { ascending: false }).limit(5),
   supabaseAdmin.from('products').select('id, name, stock_quantity').lt('stock_quantity', 5).order('stock_quantity', { ascending: true }).limit(6),
-  supabaseAdmin.from('orders').select('id, order_items(quantity, price_ht_snapshot, pump_snapshot)').in('status', ['confirmee', 'en_preparation', 'expediee', 'livree']).gte('created_at', monthStart),
+  supabaseAdmin
+    .from('orders')
+    .select('id, created_at, order_items(product_id, product_name, quantity, unit, price_ht_snapshot, pump_snapshot, products(category))')
+    .in('status', REVENUE_STATUSES)
+    .gte('created_at', rangeStart),
 ]);
 
-let caMonth = 0;
-let costMonth = 0;
-let costableUnits = 0;
-let totalUnits = 0;
+// ── Bucket the 6-month order set by month, and aggregate current-month
+//    products/categories in the same pass (one query serves everything). ──
+type MonthBucket = { label: string; caHt: number; margeHt: number; hasPump: boolean; orderCount: number };
+const buckets: MonthBucket[] = monthDefs.map(m => ({ label: m.label, caHt: 0, margeHt: 0, hasPump: false, orderCount: 0 }));
 
-for (const order of (monthOrders ?? [])) {
+const productAgg = new Map<string, { name: string; unit: string | null; qty: number; ca: number }>();
+const categoryAgg = new Map<string, number>();
+const CURRENT_IDX = MONTHS_BACK - 1;
+
+for (const order of (sixMonthOrders ?? [])) {
+  const ts = new Date(order.created_at).getTime();
+  const idx = monthDefs.findIndex(m => ts >= m.start.getTime() && ts < m.end.getTime());
+  if (idx === -1) continue;
+  buckets[idx].orderCount++;
+  const isCurrentMonth = idx === CURRENT_IDX;
+
   for (const item of ((order as any).order_items ?? [])) {
     const qty  = item.quantity ?? 0;
-    const prix = Number(item.price_ht_snapshot ?? 0);
+    const prix = item.price_ht_snapshot != null ? Number(item.price_ht_snapshot) : null;
     const pump = item.pump_snapshot != null ? Number(item.pump_snapshot) : null;
-    caMonth += prix * qty;
-    totalUnits += qty;
+    if (prix == null) continue;
+
+    buckets[idx].caHt += prix * qty;
     if (pump != null) {
-      costMonth    += pump * qty;
-      costableUnits += qty;
+      buckets[idx].margeHt += (prix - pump) * qty;
+      buckets[idx].hasPump = true;
+    }
+
+    if (isCurrentMonth) {
+      const key  = item.product_id ?? item.product_name ?? 'inconnu';
+      const prev = productAgg.get(key) ?? { name: item.product_name ?? 'Produit', unit: item.unit ?? null, qty: 0, ca: 0 };
+      prev.qty += qty;
+      prev.ca  += prix * qty;
+      productAgg.set(key, prev);
+
+      const cat = (item as any).products?.category ?? null;
+      if (cat) categoryAgg.set(cat, (categoryAgg.get(cat) ?? 0) + prix * qty);
     }
   }
 }
 
-const margeMonth = costableUnits > 0 && caMonth > 0
-  ? ((caMonth - costMonth) / caMonth) * 100
-  : null;
+const caMonth         = buckets[CURRENT_IDX].caHt;
+const margeMonthHt     = buckets[CURRENT_IDX].margeHt;
+const margeMonthPct    = buckets[CURRENT_IDX].hasPump && caMonth > 0 ? (margeMonthHt / caMonth) * 100 : null;
+const orderCountMonth  = buckets[CURRENT_IDX].orderCount;
+const panierMoyen      = orderCountMonth > 0 ? caMonth / orderCountMonth : 0;
+
+const caPrev           = buckets[CURRENT_IDX - 1].caHt;
+const margePrevPct     = buckets[CURRENT_IDX - 1].hasPump && caPrev > 0 ? (buckets[CURRENT_IDX - 1].margeHt / caPrev) * 100 : null;
+const orderCountPrev   = buckets[CURRENT_IDX - 1].orderCount;
+const panierMoyenPrev  = orderCountPrev > 0 ? caPrev / orderCountPrev : 0;
+
+const missingPumpSomeMonth = buckets.some(b => b.caHt > 0 && !b.hasPump);
+
+// ── Trend helper: direction + % change vs the prior month ────────────────
+type Trend = { dir: 'up' | 'down' | 'flat' | 'none'; pct: number | null };
+
+function trend(curr: number, prev: number): Trend {
+  if (!prev) return { dir: curr > 0 ? 'up' : 'none', pct: null };
+  const pct = ((curr - prev) / prev) * 100;
+  if (Math.abs(pct) < 0.5) return { dir: 'flat', pct: 0 };
+  return { dir: pct > 0 ? 'up' : 'down', pct };
+}
+
+function trendLabel(t: Trend, suffix = '%'): string {
+  if (t.pct == null) return t.dir === 'up' ? 'Nouveau' : '—';
+  const sign = t.pct > 0 ? '+' : '';
+  return `${sign}${t.pct.toFixed(1)}${suffix}`;
+}
+
+const caTrend     = trend(caMonth, caPrev);
+const orderTrend  = trend(orderCountMonth, orderCountPrev);
+const panierTrend = trend(panierMoyen, panierMoyenPrev);
+
+const margeTrend: Trend = margeMonthPct != null && margePrevPct != null
+  ? (Math.abs(margeMonthPct - margePrevPct) < 0.05
+      ? { dir: 'flat', pct: 0 }
+      : { dir: margeMonthPct > margePrevPct ? 'up' : 'down', pct: margeMonthPct - margePrevPct })
+  : { dir: 'none', pct: null };
+
+// ── Top 5 products this month, by CA ──────────────────────────────────────
+const top5Products = Array.from(productAgg.values())
+  .sort((a, b) => b.ca - a.ca)
+  .slice(0, 5);
+
+// ── Category split this month ──────────────────────────────────────────
+const CAT_ORDER = ['boissons', 'snacks', 'confiseries', 'divers'] as const;
+const CAT_LABEL: Record<string, string> = {
+  boissons: 'Boissons', snacks: 'Snacks', confiseries: 'Confiseries', divers: 'Divers',
+};
+// Chart-strength steps of the same hues used by the category badges elsewhere
+// in the app (boissons/snacks/confiseries/divers = 220/60/330/275), re-stepped
+// for CVD separation as solid marks (validated: adjacent ΔE 7.9, normal ΔE 16.6).
+const CAT_COLOR: Record<string, string> = {
+  boissons:    'oklch(0.60 0.14 220)',
+  snacks:      'oklch(0.68 0.15 55)',
+  confiseries: 'oklch(0.60 0.16 350)',
+  divers:      'oklch(0.50 0.13 285)',
+};
+const categoryTotal = Array.from(categoryAgg.values()).reduce((s, v) => s + v, 0);
+const categorySplit = CAT_ORDER
+  .map(cat => ({ cat, label: CAT_LABEL[cat], color: CAT_COLOR[cat], ca: categoryAgg.get(cat) ?? 0 }))
+  .filter(c => c.ca > 0)
+  .map(c => ({ ...c, pct: categoryTotal > 0 ? (c.ca / categoryTotal) * 100 : 0 }));
+
+// ── Trend chart geometry (plain SVG, computed server-side) ────────────────
+const CHART_W = 640, CHART_H = 200;
+const PAD_L = 8, PAD_R = 66, PAD_T = 14, PAD_B = 24;
+const plotW = CHART_W - PAD_L - PAD_R;
+const plotH = CHART_H - PAD_T - PAD_B;
+
+function niceMax(v: number): number {
+  if (v <= 0) return 100;
+  const exp  = Math.pow(10, Math.floor(Math.log10(v)));
+  const norm = v / exp;
+  const step = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+  return step * exp;
+}
+const maxCa = Math.max(1, ...buckets.map(b => b.caHt));
+const yMax  = niceMax(maxCa * 1.2);
+
+const xAt = (i: number) => PAD_L + (i / (MONTHS_BACK - 1)) * plotW;
+const yAt = (v: number) => PAD_T + plotH - (Math.max(0, v) / yMax) * plotH;
+
+const chartPoints = buckets.map((b, i) => ({
+  label: b.label, x: xAt(i), caY: yAt(b.caHt), margeY: yAt(b.margeHt),
+  ca: b.caHt, marge: b.margeHt, hasPump: b.hasPump,
+}));
+
+const caLinePath    = chartPoints.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.caY.toFixed(1)}`).join(' ');
+const margeLinePath = chartPoints.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.margeY.toFixed(1)}`).join(' ');
+const baselineY = (PAD_T + plotH).toFixed(1);
+const caAreaPath = `${caLinePath} L${xAt(MONTHS_BACK - 1).toFixed(1)},${baselineY} L${xAt(0).toFixed(1)},${baselineY} Z`;
+
+const gridLines = [0, yMax / 2, yMax].map(v => ({ v, y: yAt(v) }));
+const hitBandW = plotW / MONTHS_BACK;
+
+const lastPoint = chartPoints[CURRENT_IDX];
+const CHART_JSON = JSON.stringify({ points: chartPoints, width: CHART_W });
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
@@ -65,77 +195,242 @@ function formatCA(amount: number): string {
 const CONTACT_LABEL = CONTACT_STATUS_LABEL;
 const CONTACT_COLOR = CONTACT_STATUS_COLOR;
 
-const hasLowStock          = (lowStockItems ?? []).length > 0;
-const hasPendingDelivery   = (livraisonsEnAttente ?? 0) > 0;
-const hasPendingClients    = (clientsEnAttente ?? 0) > 0;
+const hasLowStock        = (lowStockItems ?? []).length > 0;
+const hasPendingDelivery = (livraisonsEnAttente ?? 0) > 0;
+const hasPendingClients  = (clientsEnAttente ?? 0) > 0;
+const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
 ---
 <AdminLayout title="Tableau de bord" activeNav="dashboard">
 
-  <!-- ── Stats row ─────────────────────────────────── -->
-  <div class="stats-grid">
+  <!-- ── KPI row ─────────────────────────────────────── -->
+  <div class="kpi-grid">
 
-    <a href="/admin/stocks" class="stat-card">
-      <div class="stat-icon stat-icon--slate">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-          <path d="M3 5.5 9 2l6 3.5v5L9 14l-6-3.5v-5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-          <path d="M3 5.5 9 9l6-3.5M9 9v5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-        </svg>
-      </div>
-      <div class="stat-body">
-        <span class="stat-value">{totalProduits ?? 0}</span>
-        <span class="stat-label">Produits en stock</span>
-      </div>
-    </a>
-
-    <a href="/admin/commandes?status=en_attente" class="stat-card stat-card--urgent">
-      <div class="stat-icon stat-icon--amber">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-          <circle cx="9" cy="9" r="7" stroke="currentColor" stroke-width="1.5"/>
-          <path d="M9 5v4l2.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </div>
-      <div class="stat-body">
-        <span class="stat-value">{commandesEnAttente ?? 0}</span>
-        <span class="stat-label">Commandes en attente</span>
-      </div>
-    </a>
-
-    <a href="/admin/clients" class="stat-card">
-      <div class="stat-icon stat-icon--blue">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-          <path d="M8.5 3a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5ZM14 4.5a2 2 0 1 1 0 4 2 2 0 0 1 0-4ZM1 13.5c0-2.5 3.36-4.5 7.5-4.5S16 11 16 13.5M14 11c1.94.37 3 1.38 3 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-      </div>
-      <div class="stat-body">
-        <span class="stat-value">{totalClients ?? 0}</span>
-        <span class="stat-label">Clients actifs</span>
-      </div>
-    </a>
-
-    <div class="stat-card stat-card--ca">
-      <div class="stat-icon stat-icon--green">
+    <div class="kpi-card">
+      <div class="kpi-icon kpi-icon--green">
         <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
           <path d="M2 13L6 9l3 3 4-5 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </div>
-      <div class="stat-body">
-        <span class="stat-value stat-value--ca">{formatCA(caMonth)}</span>
-        <span class="stat-label">CA du mois (HT)</span>
-        {margeMonth != null ? (
-          <span class={`stat-marge stat-marge--${marginColorClass(margeMonth)}`}>
-            Marge {margeMonth.toFixed(1)} %
-          </span>
-        ) : caMonth > 0 ? (
-          <span class="stat-marge stat-marge--none">Marge — (PUMP non défini)</span>
-        ) : null}
+      <span class="kpi-label">CA du mois (HT)</span>
+      <span class="kpi-value">{formatCA(caMonth)}</span>
+      <span class={`kpi-trend kpi-trend--${caTrend.dir}`}>
+        <span class="kpi-trend-arrow">{caTrend.dir === 'up' ? '▲' : caTrend.dir === 'down' ? '▼' : '–'}</span>
+        {trendLabel(caTrend)}
+        <span class="kpi-trend-caption">vs mois dernier</span>
+      </span>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-icon kpi-icon--coral">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <circle cx="5.5" cy="12.5" r="2" stroke="currentColor" stroke-width="1.5"/>
+          <circle cx="12.5" cy="5.5" r="2" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M13 4 5 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
       </div>
+      <span class="kpi-label">Marge du mois (HT)</span>
+      <span class="kpi-value">
+        {formatCA(margeMonthHt)}
+        {margeMonthPct != null && <span class="kpi-value-sub">{margeMonthPct.toFixed(1)} %</span>}
+      </span>
+      <span class={`kpi-trend kpi-trend--${margeTrend.dir}`}>
+        <span class="kpi-trend-arrow">{margeTrend.dir === 'up' ? '▲' : margeTrend.dir === 'down' ? '▼' : '–'}</span>
+        {trendLabel(margeTrend, ' pts')}
+        <span class="kpi-trend-caption">vs mois dernier</span>
+      </span>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-icon kpi-icon--blue">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <path d="M4 5h10M4 9h10M4 13h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <span class="kpi-label">Commandes ce mois</span>
+      <span class="kpi-value">{orderCountMonth}</span>
+      <span class={`kpi-trend kpi-trend--${orderTrend.dir}`}>
+        <span class="kpi-trend-arrow">{orderTrend.dir === 'up' ? '▲' : orderTrend.dir === 'down' ? '▼' : '–'}</span>
+        {trendLabel(orderTrend)}
+        <span class="kpi-trend-caption">vs mois dernier</span>
+      </span>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-icon kpi-icon--amber">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <path d="M3 6h12l-1.2 8.5a1.5 1.5 0 0 1-1.5 1.3H5.7a1.5 1.5 0 0 1-1.5-1.3L3 6Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+          <path d="M6.5 6 8 2.5M11.5 6 10 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <span class="kpi-label">Panier moyen (HT)</span>
+      <span class="kpi-value">{formatCA(panierMoyen)}</span>
+      <span class={`kpi-trend kpi-trend--${panierTrend.dir}`}>
+        <span class="kpi-trend-arrow">{panierTrend.dir === 'up' ? '▲' : panierTrend.dir === 'down' ? '▼' : '–'}</span>
+        {trendLabel(panierTrend)}
+        <span class="kpi-trend-caption">vs mois dernier</span>
+      </span>
+    </div>
+
+  </div>
+
+  <!-- ── Chart + side stack ──────────────────────────── -->
+  <div class="visual-grid">
+
+    <div class="panel chart-panel">
+      <div class="panel-header">
+        <h2 class="panel-title">CA &amp; Marge — 6 derniers mois</h2>
+        <div class="chart-legend">
+          <span class="legend-item"><span class="legend-swatch legend-swatch--ca"></span>CA HT</span>
+          <span class="legend-item"><span class="legend-swatch legend-swatch--marge"></span>Marge HT</span>
+        </div>
+      </div>
+      <div class="chart-body">
+        <div class="chart-wrap" id="chartWrap">
+          <svg id="trendChart" viewBox={`0 0 ${CHART_W} ${CHART_H}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Évolution du chiffre d'affaires et de la marge sur les 6 derniers mois">
+            {gridLines.map(g => (
+              <line x1={PAD_L} x2={PAD_L + plotW} y1={g.y} y2={g.y} class="chart-grid" />
+            ))}
+            <text x={PAD_L} y={yAt(0) + 12} class="chart-axis-label">0 €</text>
+            <text x={PAD_L} y={yAt(yMax) - 3} class="chart-axis-label">{formatCA(yMax)}</text>
+
+            <path d={caAreaPath} class="chart-area chart-area--ca" />
+            <path d={margeLinePath} class="chart-line chart-line--marge" />
+            <path d={caLinePath} class="chart-line chart-line--ca" />
+
+            {/* End-of-line emphasis + direct labels for the current month */}
+            <circle cx={lastPoint.x} cy={lastPoint.caY} r="5" class="chart-dot-ring" />
+            <circle cx={lastPoint.x} cy={lastPoint.caY} r="3.5" class="chart-dot chart-dot--ca" />
+            <circle cx={lastPoint.x} cy={lastPoint.margeY} r="5" class="chart-dot-ring" />
+            <circle cx={lastPoint.x} cy={lastPoint.margeY} r="3.5" class="chart-dot chart-dot--marge" />
+            <text x={lastPoint.x + 9} y={lastPoint.caY + 4} class="chart-end-label">{formatCA(lastPoint.ca)}</text>
+            <text x={lastPoint.x + 9} y={lastPoint.margeY + 4} class="chart-end-label chart-end-label--muted">{formatCA(lastPoint.marge)}</text>
+
+            {chartPoints.map(p => (
+              <text x={p.x} y={CHART_H - 4} class="chart-x-label">{p.label}</text>
+            ))}
+
+            {/* Hover layer */}
+            <line id="crosshairLine" x1="0" x2="0" y1={PAD_T} y2={PAD_T + plotH} class="chart-crosshair" />
+            <circle id="caHiDot" r="5" class="chart-dot chart-dot--ca chart-dot--hover" />
+            <circle id="margeHiDot" r="5" class="chart-dot chart-dot--marge chart-dot--hover" />
+
+            {chartPoints.map((p, i) => (
+              <rect
+                class="chart-hit"
+                x={PAD_L + i * hitBandW} y={PAD_T} width={hitBandW} height={plotH}
+                fill="transparent" tabindex="0" role="button"
+                aria-label={`${p.label} — CA ${formatCA(p.ca)}, marge ${formatCA(p.marge)}`}
+              />
+            ))}
+          </svg>
+          <div id="chartTooltip" class="chart-tooltip" role="status" aria-live="polite"></div>
+        </div>
+
+        {missingPumpSomeMonth && (
+          <p class="chart-footnote">* Marge partielle certains mois — PUMP non défini pour certains produits.</p>
+        )}
+
+        <details class="chart-table-toggle">
+          <summary>Voir le détail par mois</summary>
+          <table class="chart-data-table">
+            <thead>
+              <tr><th>Mois</th><th class="th-r">CA HT</th><th class="th-r">Marge HT</th><th class="th-r">Marge %</th></tr>
+            </thead>
+            <tbody>
+              {buckets.map((b, i) => (
+                <tr>
+                  <td>{monthDefs[i].label}</td>
+                  <td class="th-r">{formatCA(b.caHt)}</td>
+                  <td class="th-r">{formatCA(b.margeHt)}</td>
+                  <td class="th-r">{b.hasPump && b.caHt > 0 ? ((b.margeHt / b.caHt) * 100).toFixed(1) + ' %' : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      </div>
+    </div>
+
+    <div class="side-stack">
+
+      <!-- Category split -->
+      <div class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Répartition par catégorie</h2>
+        </div>
+        <div class="cat-split-body">
+          {categorySplit.length > 0 ? (
+            <>
+              <div class="cat-bar">
+                {categorySplit.map(c => (
+                  <div
+                    class="cat-bar-segment"
+                    style={`width:${c.pct}%; background:${c.color};`}
+                    title={`${c.label} — ${formatCA(c.ca)} (${c.pct.toFixed(1)} %)`}
+                  ></div>
+                ))}
+              </div>
+              <ul class="cat-legend">
+                {categorySplit.map(c => (
+                  <li class="cat-legend-item">
+                    <span class="cat-legend-swatch" style={`background:${c.color};`}></span>
+                    <span class="cat-legend-name">{c.label}</span>
+                    <span class="cat-legend-pct">{c.pct.toFixed(0)} %</span>
+                    <span class="cat-legend-ca">{formatCA(c.ca)}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p class="panel-empty">Aucune vente ce mois-ci.</p>
+          )}
+        </div>
+      </div>
+
+      <!-- Top 5 products -->
+      <div class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Top 5 produits du mois</h2>
+        </div>
+        {top5Products.length > 0 ? (
+          <table class="top5-table">
+            <thead>
+              <tr><th>Produit</th><th class="th-r">Qté</th><th class="th-r">CA HT</th></tr>
+            </thead>
+            <tbody>
+              {top5Products.map(p => (
+                <tr>
+                  <td class="top5-name">{p.name}</td>
+                  <td class="th-r top5-qty">{p.qty}{p.unit ? <span class="top5-unit"> {p.unit}{p.qty > 1 ? 's' : ''}</span> : null}</td>
+                  <td class="th-r top5-ca">{formatCA(p.ca)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p class="panel-empty">Aucune vente ce mois-ci.</p>
+        )}
+      </div>
+
     </div>
 
   </div>
 
   <!-- ── Alerts ─────────────────────────────────────── -->
-  {(hasLowStock || hasPendingDelivery || hasPendingClients) && (
+  {(hasPendingOrders || hasLowStock || hasPendingDelivery || hasPendingClients) && (
     <div class="alerts-row">
+      {hasPendingOrders && (
+        <a href="/admin/commandes?status=en_attente" class="alert-card alert-card--orders">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2 3h1.5l2 7h7l1.5-5H5.5M6 12.5a.5.5 0 1 1 1 0 .5.5 0 0 1-1 0Zm5 0a.5.5 0 1 1 1 0 .5.5 0 0 1-1 0Z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>
+            <strong>{commandesEnAttente}</strong>
+            {(commandesEnAttente ?? 0) > 1 ? ' commandes en attente de traitement' : ' commande en attente de traitement'}
+          </span>
+          <span class="alert-cta">Traiter →</span>
+        </a>
+      )}
       {hasPendingClients && (
         <a href="/admin/clients" class="alert-card alert-card--clients">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -295,90 +590,399 @@ const hasPendingClients    = (clientsEnAttente ?? 0) > 0;
 
 </AdminLayout>
 
+<script define:vars={{ CHART_JSON }}>
+  const chart = JSON.parse(CHART_JSON);
+  const crosshair  = document.getElementById('crosshairLine');
+  const caHiDot    = document.getElementById('caHiDot');
+  const margeHiDot = document.getElementById('margeHiDot');
+  const tooltip    = document.getElementById('chartTooltip');
+  const wrap       = document.getElementById('chartWrap');
+  const hitRects   = document.querySelectorAll('.chart-hit');
+
+  function fmtEUR(n) {
+    return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n);
+  }
+
+  function showPoint(i) {
+    const p = chart.points[i];
+    if (!p) return;
+
+    crosshair.setAttribute('x1', String(p.x));
+    crosshair.setAttribute('x2', String(p.x));
+    crosshair.style.opacity = '1';
+
+    caHiDot.setAttribute('cx', String(p.x));
+    caHiDot.setAttribute('cy', String(p.caY));
+    caHiDot.style.opacity = '1';
+
+    margeHiDot.setAttribute('cx', String(p.x));
+    margeHiDot.setAttribute('cy', String(p.margeY));
+    margeHiDot.style.opacity = '1';
+
+    tooltip.innerHTML =
+      '<div class="tt-month">' + p.label + '</div>' +
+      '<div class="tt-row"><span class="tt-swatch tt-swatch--ca"></span><span class="tt-label">CA</span><strong>' + fmtEUR(p.ca) + '</strong></div>' +
+      '<div class="tt-row"><span class="tt-swatch tt-swatch--marge"></span><span class="tt-label">Marge</span><strong>' + fmtEUR(p.marge) + (p.hasPump ? '' : ' *') + '</strong></div>';
+
+    const pct = p.x / chart.width;
+    tooltip.style.left = (pct * 100) + '%';
+    tooltip.style.transform = pct > 0.68 ? 'translate(-100%, -8px)' : 'translate(0, -8px)';
+    tooltip.style.opacity = '1';
+  }
+
+  function hideAll() {
+    crosshair.style.opacity = '0';
+    caHiDot.style.opacity = '0';
+    margeHiDot.style.opacity = '0';
+    tooltip.style.opacity = '0';
+  }
+
+  hitRects.forEach((rect, i) => {
+    rect.addEventListener('mouseenter', () => showPoint(i));
+    rect.addEventListener('focus', () => showPoint(i));
+  });
+  wrap?.addEventListener('mouseleave', hideAll);
+  wrap?.addEventListener('focusout', (e) => {
+    if (!wrap.contains(e.relatedTarget)) hideAll();
+  });
+</script>
+
 <style>
-/* ── Stats ────────────────────────────────────────── */
-.stats-grid {
+/* ── KPI row ──────────────────────────────────────── */
+.kpi-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: var(--space-4);
   margin-bottom: var(--space-5);
 }
 
-.stat-card {
+.kpi-card {
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   padding: var(--space-5);
   display: flex;
-  align-items: flex-start;
-  gap: var(--space-4);
-  text-decoration: none;
-  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
-}
-a.stat-card:hover {
-  border-color: var(--color-border-strong);
-  box-shadow: 0 2px 8px oklch(0.148 0.020 45.9 / 0.06);
+  flex-direction: column;
+  gap: var(--space-1);
+  box-shadow: 0 1px 3px oklch(0.148 0.020 45.9 / 0.04);
 }
 
-.stat-card--urgent { border-color: oklch(0.568 0.149 45.9 / 0.35); }
-a.stat-card--urgent:hover { border-color: var(--color-primary); }
-
-.stat-card--ca { cursor: default; }
-
-.stat-marge {
-  display: inline-block;
-  margin-top: var(--space-1);
-  font-size: var(--text-xs);
-  font-weight: 600;
-  padding: 2px 7px;
-  border-radius: var(--radius-full);
-}
-.stat-marge--green { background: oklch(0.92 0.08 145); color: oklch(0.32 0.14 145); }
-.stat-marge--amber { background: oklch(0.95 0.07 60);  color: oklch(0.38 0.15 55);  }
-.stat-marge--red   { background: oklch(0.95 0.04 25);  color: oklch(0.46 0.18 25);  }
-.stat-marge--none  { background: var(--color-surface-2); color: var(--color-muted); font-weight: 500; }
-
-.stat-icon {
-  width: 38px;
-  height: 38px;
+.kpi-icon {
+  width: 34px;
+  height: 34px;
   border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  margin-bottom: var(--space-2);
 }
-.stat-icon--slate  { background: var(--color-surface-2);       color: var(--color-muted); }
-.stat-icon--amber  { background: oklch(0.95 0.07 80);          color: oklch(0.42 0.14 80); }
-.stat-icon--blue   { background: oklch(0.93 0.05 220);         color: oklch(0.38 0.12 220); }
-.stat-icon--green  { background: oklch(0.92 0.07 150);         color: oklch(0.36 0.13 150); }
+.kpi-icon--green { background: oklch(0.92 0.07 150); color: oklch(0.36 0.13 150); }
+.kpi-icon--coral { background: oklch(0.568 0.149 45.9 / 0.12); color: var(--color-primary-deep); }
+.kpi-icon--blue  { background: oklch(0.93 0.05 220); color: oklch(0.38 0.12 220); }
+.kpi-icon--amber { background: oklch(0.95 0.07 80);  color: oklch(0.42 0.14 80);  }
 
-.stat-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
-.stat-value {
-  font-size: 1.875rem;
-  font-weight: 700;
-  line-height: 1;
-  color: var(--color-ink);
-  letter-spacing: -0.03em;
-}
-.stat-card--urgent .stat-value { color: var(--color-primary-deep); }
-
-.stat-value--ca {
-  font-size: 1.375rem;
-  letter-spacing: -0.02em;
-}
-
-.stat-label {
+.kpi-label {
   font-size: var(--text-xs);
   font-weight: 500;
   color: var(--color-muted);
+}
+
+.kpi-value {
+  font-size: 1.625rem;
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--color-ink);
+  letter-spacing: -0.02em;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.kpi-value-sub {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-muted);
+}
+
+.kpi-trend {
+  margin-top: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+.kpi-trend-arrow { font-size: 0.6rem; }
+.kpi-trend-caption { font-weight: 500; color: var(--color-muted); margin-left: 2px; }
+
+.kpi-trend--up    { color: oklch(0.38 0.14 145); }
+.kpi-trend--down  { color: oklch(0.50 0.19 25);  }
+.kpi-trend--flat  { color: var(--color-muted); }
+.kpi-trend--none  { color: var(--color-muted); }
+
+/* ── Chart + side stack ──────────────────────────── */
+.visual-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(260px, 1fr);
+  gap: var(--space-5);
+  margin-bottom: var(--space-5);
+  align-items: start;
+}
+
+.panel {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: 0 1px 3px oklch(0.148 0.020 45.9 / 0.04);
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
+}
+
+.panel-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.panel-link {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-primary-deep);
+  text-decoration: none;
   white-space: nowrap;
 }
+.panel-link:hover { text-decoration: underline; }
+
+.panel-empty {
+  padding: var(--space-6) var(--space-5);
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  text-align: center;
+}
+
+/* Chart legend */
+.chart-legend {
+  display: flex;
+  gap: var(--space-4);
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-muted);
+}
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+.legend-swatch--ca    { background: var(--color-primary); }
+.legend-swatch--marge { background: oklch(0.55 0.13 150); }
+
+/* Chart body */
+.chart-body { padding: var(--space-4) var(--space-5) var(--space-5); }
+
+.chart-wrap {
+  position: relative;
+  width: 100%;
+}
+.chart-wrap svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.chart-grid   { stroke: var(--color-border); stroke-width: 1; }
+.chart-axis-label {
+  font-family: var(--font-body);
+  font-size: 9px;
+  fill: var(--color-muted);
+}
+.chart-x-label {
+  font-family: var(--font-body);
+  font-size: 10px;
+  fill: var(--color-muted);
+  text-anchor: middle;
+}
+
+.chart-area--ca { fill: var(--color-primary); opacity: 0.08; }
+
+.chart-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart-line--ca    { stroke: var(--color-primary); }
+.chart-line--marge { stroke: oklch(0.55 0.13 150); }
+
+.chart-dot-ring { fill: var(--color-bg); }
+.chart-dot--ca    { fill: var(--color-primary); }
+.chart-dot--marge { fill: oklch(0.55 0.13 150); }
+.chart-dot--hover { opacity: 0; transition: opacity 0.1s; stroke: var(--color-bg); stroke-width: 2; }
+
+.chart-end-label {
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 700;
+  fill: var(--color-ink);
+}
+.chart-end-label--muted { fill: var(--color-muted); font-weight: 600; }
+
+.chart-crosshair {
+  stroke: var(--color-border-strong);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+  opacity: 0;
+  transition: opacity 0.1s;
+  pointer-events: none;
+}
+
+.chart-hit { cursor: crosshair; }
+.chart-hit:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+
+.chart-tooltip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s;
+  background: var(--color-ink);
+  color: white;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  z-index: 2;
+  box-shadow: 0 4px 16px oklch(0.148 0.020 45.9 / 0.25);
+}
+/* :global — this content is injected client-side via innerHTML, so it never
+   gets Astro's scoped-style attribute and plain scoped rules would not match. */
+:global(.tt-month) { font-weight: 700; margin-bottom: 4px; }
+:global(.tt-row) { display: flex; align-items: center; gap: 6px; }
+:global(.tt-label) { margin-right: var(--space-4); min-width: 34px; }
+:global(.tt-row strong) { font-variant-numeric: tabular-nums; }
+:global(.tt-swatch) { width: 8px; height: 8px; border-radius: var(--radius-full); flex-shrink: 0; }
+:global(.tt-swatch--ca)    { background: var(--color-primary-light); }
+:global(.tt-swatch--marge) { background: oklch(0.70 0.13 150); }
+
+.chart-footnote {
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  font-style: italic;
+}
+
+.chart-table-toggle { margin-top: var(--space-3); }
+.chart-table-toggle summary {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-primary-deep);
+  cursor: pointer;
+  user-select: none;
+}
+.chart-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: var(--space-3);
+  font-size: var(--text-xs);
+}
+.chart-data-table th, .chart-data-table td {
+  padding: var(--space-2) var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+  font-variant-numeric: tabular-nums;
+}
+.chart-data-table th { color: var(--color-muted); font-weight: 600; text-align: left; }
+.chart-data-table .th-r { text-align: right; }
+
+/* Side stack */
+.side-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* Category split */
+.cat-split-body { padding: var(--space-4) var(--space-5) var(--space-5); }
+
+.cat-bar {
+  display: flex;
+  gap: 2px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--color-surface);
+  margin-bottom: var(--space-4);
+}
+.cat-bar-segment { height: 100%; min-width: 3px; }
+
+.cat-legend {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.cat-legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+}
+.cat-legend-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.cat-legend-name { color: var(--color-ink); font-weight: 500; flex: 1; }
+.cat-legend-pct  { color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.cat-legend-ca   { color: var(--color-ink); font-weight: 600; font-variant-numeric: tabular-nums; min-width: 64px; text-align: right; }
+
+/* Top 5 products table */
+.top5-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+.top5-table th {
+  padding: var(--space-2) var(--space-5);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  text-align: left;
+  border-bottom: 1px solid var(--color-border);
+}
+.top5-table th.th-r { text-align: right; }
+.top5-table td {
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+.top5-table tr:last-child td { border-bottom: none; }
+.top5-table tr:hover td { background: var(--color-surface); }
+.th-r { text-align: right; }
+
+.top5-name {
+  font-weight: 500;
+  color: var(--color-ink);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.top5-qty { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.top5-unit { color: var(--color-muted); font-size: var(--text-xs); }
+.top5-ca { font-weight: 700; color: var(--color-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* ── Alerts ───────────────────────────────────────── */
 .alerts-row {
@@ -398,6 +1002,15 @@ a.stat-card--urgent:hover { border-color: var(--color-primary); }
   text-decoration: none;
   flex-wrap: wrap;
 }
+
+.alert-card--orders {
+  background: oklch(0.96 0.04 45.9);
+  border: 1px solid oklch(0.85 0.09 45.9);
+  color: oklch(0.40 0.13 45.9);
+  transition: background var(--dur-fast);
+}
+.alert-card--orders:hover { background: oklch(0.91 0.07 45.9); }
+.alert-card--orders svg { flex-shrink: 0; }
 
 .alert-card--clients {
   background: oklch(0.96 0.04 75);
@@ -480,43 +1093,6 @@ a.stat-card--urgent:hover { border-color: var(--color-primary); }
   align-items: start;
 }
 
-.panel {
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-}
-
-.panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.panel-title {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--color-ink);
-}
-
-.panel-link {
-  font-size: var(--text-xs);
-  font-weight: 500;
-  color: var(--color-primary-deep);
-  text-decoration: none;
-  white-space: nowrap;
-}
-.panel-link:hover { text-decoration: underline; }
-
-.panel-empty {
-  padding: var(--space-6) var(--space-5);
-  font-size: var(--text-sm);
-  color: var(--color-muted);
-  text-align: center;
-}
-
 /* Activity table */
 .act-table {
   width: 100%;
@@ -577,8 +1153,6 @@ a.stat-card--urgent:hover { border-color: var(--color-primary); }
 .badge--red    { background: oklch(0.95 0.04 25);         color: oklch(0.46 0.18 25); }
 
 /* ── Quick actions ────────────────────────────────── */
-.actions-section { }
-
 .actions-heading {
   font-size: var(--text-xs);
   font-weight: 600;
@@ -643,14 +1217,18 @@ a.stat-card--urgent:hover { border-color: var(--color-primary); }
 }
 
 /* ── Responsive ───────────────────────────────────── */
+@media (max-width: 1100px) {
+  .visual-grid { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 900px) {
-  .stats-grid    { grid-template-columns: repeat(2, 1fr); }
+  .kpi-grid      { grid-template-columns: repeat(2, 1fr); }
   .activity-grid { grid-template-columns: 1fr; }
   .actions-grid  { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 480px) {
-  .stats-grid { grid-template-columns: 1fr; }
-  .stat-value { font-size: 1.5rem; }
+  .kpi-grid { grid-template-columns: 1fr; }
+  .kpi-value { font-size: 1.375rem; }
 }
 </style>
