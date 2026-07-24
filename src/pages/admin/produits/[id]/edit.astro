@@ -154,6 +154,16 @@ if (Astro.request.method === 'POST') {
           <input type="url" id="image_url" name="image_url" value={product.image_url ?? ''} placeholder="https://…" />
         </div>
 
+        <div class="field">
+          <label for="image_file">Ou téléverser une image (JPEG, PNG, WEBP — max 5 Mo)</label>
+          <input type="file" id="image_file" accept="image/jpeg,image/png,image/webp" />
+          <p class="upload-status" id="uploadStatus"></p>
+        </div>
+
+        <div class="image-preview-wrap" id="imagePreviewWrap" style={product.image_url ? '' : 'display:none'}>
+          <img id="imagePreview" src={product.image_url ?? ''} alt="Aperçu de l'image produit" class="image-preview" />
+        </div>
+
         <div class="field-group field-group--3">
           <div class="field">
             <label for="stock_quantity">Quantité en stock</label>
@@ -496,6 +506,30 @@ input:focus, select:focus, textarea:focus {
 }
 .status-badge--ok  { background: oklch(0.92 0.08 145); color: oklch(0.32 0.14 145); }
 .status-badge--out { background: oklch(0.95 0.04 25);  color: oklch(0.46 0.18 25); }
+
+.upload-status {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  min-height: 1em;
+}
+.upload-status--error   { color: oklch(0.50 0.19 25); }
+.upload-status--success { color: oklch(0.38 0.14 145); }
+
+.image-preview-wrap {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  background: var(--color-surface);
+  align-self: flex-start;
+}
+.image-preview {
+  display: block;
+  max-width: 160px;
+  max-height: 160px;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+}
 </style>
 
 <script>
@@ -517,4 +551,68 @@ if (qtyInput && statusEl) {
       : '<span class="status-badge status-badge--out">Rupture de stock</span>';
   });
 }
+
+// ── Image: URL field or file upload, either populates the same field ──
+const imageUrlInput  = document.getElementById('image_url') as HTMLInputElement | null;
+const imageFileInput = document.getElementById('image_file') as HTMLInputElement | null;
+const uploadStatus   = document.getElementById('uploadStatus') as HTMLElement | null;
+const previewWrap    = document.getElementById('imagePreviewWrap') as HTMLElement | null;
+const previewImg     = document.getElementById('imagePreview') as HTMLImageElement | null;
+
+function updatePreview() {
+  if (!imageUrlInput || !previewWrap || !previewImg) return;
+  const url = imageUrlInput.value.trim();
+  if (url) { previewImg.src = url; } else { previewWrap.style.display = 'none'; }
+}
+imageUrlInput?.addEventListener('input', updatePreview);
+previewImg?.addEventListener('load',  () => { if (previewWrap) previewWrap.style.display = ''; });
+previewImg?.addEventListener('error', () => { if (previewWrap) previewWrap.style.display = 'none'; });
+
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+
+imageFileInput?.addEventListener('change', async () => {
+  const file = imageFileInput.files?.[0];
+  if (!file || !uploadStatus) return;
+
+  uploadStatus.textContent = '';
+  uploadStatus.className = 'upload-status';
+
+  if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+    uploadStatus.textContent = 'Format non supporté (JPEG, PNG ou WEBP uniquement).';
+    uploadStatus.className = 'upload-status upload-status--error';
+    imageFileInput.value = '';
+    return;
+  }
+  if (file.size > MAX_IMAGE_SIZE) {
+    uploadStatus.textContent = 'Fichier trop volumineux (max 5 Mo).';
+    uploadStatus.className = 'upload-status upload-status--error';
+    imageFileInput.value = '';
+    return;
+  }
+
+  uploadStatus.textContent = 'Téléversement en cours…';
+
+  const fd = new FormData();
+  fd.append('image', file);
+
+  try {
+    const res  = await fetch('/api/produits/upload-image', { method: 'POST', body: fd });
+    const body = await res.json();
+    if (!res.ok) {
+      uploadStatus.textContent = body.error || 'Erreur lors du téléversement.';
+      uploadStatus.className = 'upload-status upload-status--error';
+      return;
+    }
+    if (imageUrlInput) imageUrlInput.value = body.url;
+    updatePreview();
+    uploadStatus.textContent = 'Image téléversée avec succès.';
+    uploadStatus.className = 'upload-status upload-status--success';
+  } catch {
+    uploadStatus.textContent = 'Erreur réseau lors du téléversement.';
+    uploadStatus.className = 'upload-status upload-status--error';
+  } finally {
+    imageFileInput.value = '';
+  }
+});
 </script>
