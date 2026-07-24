@@ -23,6 +23,7 @@ const ACTION_LABELS: Record<string, string> = {
   'commande.suppression':      'Commande supprimée',
   'commande.statut':           'Statut commande',
   'commande.creation_admin':   'Commande créée (admin)',
+  'commande.modification':     'Commande modifiée',
   'client.suppression':     'Client supprimé',
   'client.activation':      'Client activé',
   'client.statut':          'Statut client',
@@ -43,6 +44,7 @@ const ACTION_COLOR: Record<string, string> = {
   'commande.suppression':      'red',
   'commande.statut':           'blue',
   'commande.creation_admin':   'green',
+  'commande.modification':     'amber',
   'client.suppression':     'red',
   'client.activation':      'green',
   'client.statut':          'amber',
@@ -85,6 +87,9 @@ function formatDetails(details: Record<string, unknown> | null, action: string):
   }
   if (action === 'client.promotion_admin' || action === 'client.retrogradation') {
     return `Rôle : ${details.nouveau_role ?? ''}`;
+  }
+  if (action === 'commande.modification') {
+    return typeof details.resume === 'string' ? details.resume : '';
   }
   if (action === 'commande.suppression' || action === 'client.suppression') {
     const parts: string[] = [];

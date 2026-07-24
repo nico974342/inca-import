@@ -49,6 +49,13 @@ export const ORDER_STATUS_COLOR: Record<OrderStatus, string> = {
   annulee:        'red',
 };
 
+/** Editable until delivered — stock is only decremented on the livree
+ *  transition, so line items can be changed freely before that point. */
+export function isOrderEditable(status: string): boolean {
+  const idx = ORDER_STATUSES.indexOf(status as OrderStatus);
+  return idx !== -1 && idx < ORDER_STATUSES.indexOf('livree');
+}
+
 // ── Client account status (prospects live here too, as status='prospect') ──
 export const CLIENT_STATUSES = ['prospect', 'en_attente', 'actif', 'suspendu'] as const;
 export type ClientStatus = (typeof CLIENT_STATUSES)[number];

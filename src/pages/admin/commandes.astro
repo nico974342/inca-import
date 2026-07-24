@@ -4,7 +4,7 @@ import { supabaseAdmin } from '../../lib/supabase';
 import { sendLowStockAlert, sendOrderStatusEmail } from '../../lib/email';
 import { sendOrderConfirmedWebhook } from '../../lib/webhooks';
 import { logAdminAction } from '../../lib/audit';
-import { ORDER_STATUSES, ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, marginColorClass } from '../../lib/constants';
+import { ORDER_STATUSES, ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, marginColorClass, isOrderEditable } from '../../lib/constants';
 
 // Handle POST: update order status
 if (Astro.request.method === 'POST') {
@@ -252,8 +252,21 @@ function formatDate(iso: string) {
 function shortId(id: string) {
   return id.slice(0, 8).toUpperCase();
 }
+
+const orderUpdated = !!Astro.url.searchParams.get('updated');
+const editError = Astro.url.searchParams.get('edit_error');
+const EDIT_ERROR_MSG: Record<string, string> = {
+  trop_tard: 'Cette commande ne peut plus être modifiée (déjà livrée ou annulée).',
+};
 ---
 <AdminLayout title="Commandes" activeNav="commandes">
+
+  {orderUpdated && (
+    <div class="success-alert" role="status">Commande mise à jour avec succès.</div>
+  )}
+  {editError && (
+    <div class="alert-error" role="alert">{EDIT_ERROR_MSG[editError] ?? 'Action impossible.'}</div>
+  )}
 
   <!-- Filter tabs -->
   <div class="filter-bar">
@@ -317,6 +330,9 @@ function shortId(id: string) {
                     ))}
                   </select>
                   <button type="submit" class="status-save">Enregistrer</button>
+                  {isOrderEditable(status) && (
+                    <a href={`/admin/commandes/${order.id}/edit`} class="edit-order-link">Modifier la commande</a>
+                  )}
                 </form>
 
 
@@ -748,6 +764,36 @@ details[open] .chevron { transform: rotate(180deg); }
   height: 34px;
 }
 .status-save:hover { opacity: 0.88; }
+
+.edit-order-link {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-primary-deep);
+  text-decoration: none;
+  white-space: nowrap;
+  margin-left: auto;
+}
+.edit-order-link:hover { text-decoration: underline; }
+
+/* ── Top-of-page alerts ──────────────────────────── */
+.success-alert {
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-5);
+  font-size: var(--text-sm);
+  color: oklch(0.35 0.12 145);
+  background: oklch(0.96 0.04 145);
+  border: 1px solid oklch(0.88 0.08 145);
+  border-radius: var(--radius-sm);
+}
+.alert-error {
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-5);
+  font-size: var(--text-sm);
+  color: oklch(0.46 0.18 25);
+  background: oklch(0.97 0.03 25);
+  border: 1px solid oklch(0.88 0.07 25);
+  border-radius: var(--radius-sm);
+}
 
 /* Client info */
 .client-info {
