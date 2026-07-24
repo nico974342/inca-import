@@ -58,6 +58,64 @@ const filteredProducts = filterCat
   ? (products ?? []).filter(p => p.category === filterCat)
   : (products ?? []);
 
+// ── Sortable columns ───────────────────────────────────────────────────
+// Marge/GMROI/rotation are computed values, so sorting happens in-memory
+// here rather than pushed down to the DB query.
+const SORT_KEYS = ['nom', 'categorie', 'prix', 'stock', 'marge', 'gmroi', 'rotation'] as const;
+type SortKey = (typeof SORT_KEYS)[number];
+
+const sortParam = Astro.url.searchParams.get('sort') ?? '';
+const currentSort: SortKey | '' = (SORT_KEYS as readonly string[]).includes(sortParam) ? (sortParam as SortKey) : '';
+const currentDir: 'asc' | 'desc' = Astro.url.searchParams.get('dir') === 'desc' ? 'desc' : 'asc';
+
+function sortUrl(key: SortKey): string {
+  const params = new URLSearchParams(Astro.url.searchParams);
+  params.delete('delete_error');
+  const nextDir = currentSort === key && currentDir === 'asc' ? 'desc' : 'asc';
+  params.set('sort', key);
+  params.set('dir', nextDir);
+  return `/admin/produits?${params.toString()}`;
+}
+
+function catUrl(cat: string): string {
+  const params = new URLSearchParams(Astro.url.searchParams);
+  params.delete('delete_error');
+  if (cat) params.set('cat', cat); else params.delete('cat');
+  const qs = params.toString();
+  return `/admin/produits${qs ? `?${qs}` : ''}`;
+}
+
+const rows = filteredProducts.map(p => {
+  const pump = (p as any).prix_achat_moyen_ht ?? null;
+  const prix = p.price_ht ?? null;
+  const margePct = pump == null || prix == null || prix === 0 ? null : ((prix - pump) / prix) * 100;
+  return { ...p, margePct, gmroi: productGmroi(p as any), rotation: productRotation(p as any) };
+});
+
+// Nulls (no data yet — "—") always sort to the bottom, regardless of direction.
+function compareNullableNumber(a: number | null, b: number | null, dir: 1 | -1): number {
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  return dir * (a - b);
+}
+
+if (currentSort) {
+  const dir = currentDir === 'asc' ? 1 : -1;
+  rows.sort((a, b) => {
+    switch (currentSort) {
+      case 'nom':       return dir * a.name.localeCompare(b.name, 'fr');
+      case 'categorie': return dir * (CAT_LABEL[a.category] ?? a.category).localeCompare(CAT_LABEL[b.category] ?? b.category, 'fr');
+      case 'prix':      return compareNullableNumber(a.price_ht, b.price_ht, dir as 1 | -1);
+      case 'stock':     return compareNullableNumber(a.stock_quantity, b.stock_quantity, dir as 1 | -1);
+      case 'marge':     return compareNullableNumber(a.margePct, b.margePct, dir as 1 | -1);
+      case 'gmroi':     return compareNullableNumber(a.gmroi, b.gmroi, dir as 1 | -1);
+      case 'rotation':  return compareNullableNumber(a.rotation, b.rotation, dir as 1 | -1);
+      default:          return 0;
+    }
+  });
+}
+
 function formatPrice(p: number | null) {
   if (p == null) return '—';
   return p.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' });
@@ -67,10 +125,9 @@ function margeClass(marge: number | null): string {
   return `marge--${marginColorClass(marge)}`;
 }
 
-function margeInfo(pump: number | null, prix: number | null): { label: string; cls: string } {
-  if (pump == null || prix == null || prix === 0) return { label: '—', cls: 'marge--none' };
-  const m = ((prix - pump) / prix) * 100;
-  return { label: m.toFixed(1) + '%', cls: margeClass(m) };
+function margeInfo(pct: number | null): { label: string; cls: string } {
+  if (pct == null) return { label: '—', cls: 'marge--none' };
+  return { label: pct.toFixed(1) + '%', cls: margeClass(pct) };
 }
 
 const deleteError = Astro.url.searchParams.get('delete_error');
@@ -91,31 +148,54 @@ const DELETE_ERROR_MSG: Record<string, string> = {
   </div>
 
   <div class="filter-bar">
-    <a href="/admin/produits" class={`filter-tab ${!filterCat ? 'filter-tab--active' : ''}`}>
+    <a href={catUrl('')} class={`filter-tab ${!filterCat ? 'filter-tab--active' : ''}`}>
       Tous
       <span class="filter-count">{(products ?? []).length}</span>
     </a>
     {CATEGORIES.map(c => (
-      <a href={`/admin/produits?cat=${c}`} class={`filter-tab ${filterCat === c ? 'filter-tab--active' : ''}`}>
+      <a href={catUrl(c)} class={`filter-tab ${filterCat === c ? 'filter-tab--active' : ''}`}>
         {CAT_LABEL[c]}
         {catCounts[c] > 0 && <span class="filter-count">{catCounts[c]}</span>}
       </a>
     ))}
   </div>
 
-  {filteredProducts && filteredProducts.length > 0 ? (
+  {rows && rows.length > 0 ? (
     <div class="table-wrap">
       <table class="data-table">
         <thead>
           <tr>
-            <th>Nom</th>
-            <th>Catégorie</th>
-            <th>SKU</th>
-            <th>Prix HT</th>
-            <th>Coût moy. HT</th>
-            <th>Marge</th>
             <th>
-              GMROI
+              <a href={sortUrl('nom')} class={`th-sort ${currentSort === 'nom' ? 'th-sort--active' : ''}`}>
+                Nom
+                {currentSort === 'nom' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
+              </a>
+            </th>
+            <th>
+              <a href={sortUrl('categorie')} class={`th-sort ${currentSort === 'categorie' ? 'th-sort--active' : ''}`}>
+                Catégorie
+                {currentSort === 'categorie' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
+              </a>
+            </th>
+            <th>SKU</th>
+            <th>
+              <a href={sortUrl('prix')} class={`th-sort ${currentSort === 'prix' ? 'th-sort--active' : ''}`}>
+                Prix HT
+                {currentSort === 'prix' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
+              </a>
+            </th>
+            <th>Coût moy. HT</th>
+            <th>
+              <a href={sortUrl('marge')} class={`th-sort ${currentSort === 'marge' ? 'th-sort--active' : ''}`}>
+                Marge
+                {currentSort === 'marge' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
+              </a>
+            </th>
+            <th>
+              <a href={sortUrl('gmroi')} class={`th-sort ${currentSort === 'gmroi' ? 'th-sort--active' : ''}`}>
+                GMROI
+                {currentSort === 'gmroi' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
+              </a>
               <span
                 class="help-icon"
                 tabindex="0"
@@ -123,20 +203,28 @@ const DELETE_ERROR_MSG: Record<string, string> = {
               >?</span>
             </th>
             <th>
-              Rotation
+              <a href={sortUrl('rotation')} class={`th-sort ${currentSort === 'rotation' ? 'th-sort--active' : ''}`}>
+                Rotation
+                {currentSort === 'rotation' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
+              </a>
               <span
                 class="help-icon"
                 tabindex="0"
                 title="Combien de fois votre stock se renouvelle par an sur ce produit. Rotation = coût des ventes sur 12 mois ÷ valeur du stock actuel. > 6x/an = excellent, 3-6x/an = correct, < 3x/an = stock qui tourne lentement, capital immobilisé trop longtemps."
               >?</span>
             </th>
-            <th>Stock</th>
+            <th>
+              <a href={sortUrl('stock')} class={`th-sort ${currentSort === 'stock' ? 'th-sort--active' : ''}`}>
+                Stock
+                {currentSort === 'stock' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
+              </a>
+            </th>
             <th>Pos.</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
-          {filteredProducts.map(p => (
+          {rows.map(p => (
             <tr>
               <td class="td-strong">{p.name}</td>
               <td>
@@ -148,29 +236,19 @@ const DELETE_ERROR_MSG: Record<string, string> = {
               <td class="td-mono">{formatPrice(p.price_ht)}</td>
               <td class="td-mono td-muted">{formatPrice((p as any).prix_achat_moyen_ht ?? null)}</td>
               {(() => {
-                const mi = margeInfo((p as any).prix_achat_moyen_ht ?? null, p.price_ht ?? null);
+                const mi = margeInfo(p.margePct);
                 return <td><span class={`marge-chip ${mi.cls}`}>{mi.label}</span></td>;
               })()}
-              {(() => {
-                const g = productGmroi(p as any);
-                return (
-                  <td>
-                    <span class={`marge-chip marge--${gmroiColorClass(g)}`}>
-                      {g != null ? g.toFixed(1) + '×' : '—'}
-                    </span>
-                  </td>
-                );
-              })()}
-              {(() => {
-                const r = productRotation(p as any);
-                return (
-                  <td>
-                    <span class={`marge-chip marge--${rotationColorClass(r)}`}>
-                      {r != null ? r.toFixed(1) + 'x/an' : '—'}
-                    </span>
-                  </td>
-                );
-              })()}
+              <td>
+                <span class={`marge-chip marge--${gmroiColorClass(p.gmroi)}`}>
+                  {p.gmroi != null ? p.gmroi.toFixed(1) + '×' : '—'}
+                </span>
+              </td>
+              <td>
+                <span class={`marge-chip marge--${rotationColorClass(p.rotation)}`}>
+                  {p.rotation != null ? p.rotation.toFixed(1) + 'x/an' : '—'}
+                </span>
+              </td>
               <td>
                 {(p.stock_quantity ?? 0) === 0 ? (
                   <span class="stock-chip stock-chip--out">Rupture</span>
@@ -293,6 +371,21 @@ const DELETE_ERROR_MSG: Record<string, string> = {
   letter-spacing: 0.05em;
   border-bottom: 1px solid var(--color-border);
   white-space: nowrap;
+}
+
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.th-sort:hover { color: var(--color-ink); }
+.th-sort--active { color: var(--color-ink); }
+.sort-arrow {
+  font-size: 0.625rem;
+  color: var(--color-primary-deep);
 }
 
 .help-icon {
