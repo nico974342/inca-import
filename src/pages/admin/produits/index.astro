@@ -46,6 +46,17 @@ const CAT_LABEL: Record<string, string> = {
   confiseries: 'Confiseries',
   divers: 'Divers',
 };
+const CATEGORIES = ['boissons', 'snacks', 'confiseries', 'divers'];
+
+// ── Filter by "famille de produit" (category) ─────────────────────────────
+const filterCat = Astro.url.searchParams.get('cat') ?? '';
+const catCounts: Record<string, number> = {};
+for (const c of CATEGORIES) catCounts[c] = 0;
+for (const p of (products ?? [])) catCounts[p.category] = (catCounts[p.category] ?? 0) + 1;
+
+const filteredProducts = filterCat
+  ? (products ?? []).filter(p => p.category === filterCat)
+  : (products ?? []);
 
 function formatPrice(p: number | null) {
   if (p == null) return '—';
@@ -79,7 +90,20 @@ const DELETE_ERROR_MSG: Record<string, string> = {
     <a href="/admin/produits/new" class="btn btn-primary">+ Nouveau produit</a>
   </div>
 
-  {products && products.length > 0 ? (
+  <div class="filter-bar">
+    <a href="/admin/produits" class={`filter-tab ${!filterCat ? 'filter-tab--active' : ''}`}>
+      Tous
+      <span class="filter-count">{(products ?? []).length}</span>
+    </a>
+    {CATEGORIES.map(c => (
+      <a href={`/admin/produits?cat=${c}`} class={`filter-tab ${filterCat === c ? 'filter-tab--active' : ''}`}>
+        {CAT_LABEL[c]}
+        {catCounts[c] > 0 && <span class="filter-count">{catCounts[c]}</span>}
+      </a>
+    ))}
+  </div>
+
+  {filteredProducts && filteredProducts.length > 0 ? (
     <div class="table-wrap">
       <table class="data-table">
         <thead>
@@ -112,7 +136,7 @@ const DELETE_ERROR_MSG: Record<string, string> = {
           </tr>
         </thead>
         <tbody>
-          {products.map(p => (
+          {filteredProducts.map(p => (
             <tr>
               <td class="td-strong">{p.name}</td>
               <td>
@@ -175,6 +199,12 @@ const DELETE_ERROR_MSG: Record<string, string> = {
         </tbody>
       </table>
     </div>
+  ) : filterCat ? (
+    <div class="empty-state">
+      <p class="empty-title">Aucun produit dans "{CAT_LABEL[filterCat] ?? filterCat}".</p>
+      <p class="empty-body">Essayez une autre famille de produit ou affichez tous les produits.</p>
+      <a href="/admin/produits" class="btn btn-primary" style="margin-top: var(--space-5)">Voir tous les produits</a>
+    </div>
   ) : (
     <div class="empty-state">
       <p class="empty-title">Aucun produit encore.</p>
@@ -199,6 +229,45 @@ const DELETE_ERROR_MSG: Record<string, string> = {
   display: flex;
   justify-content: flex-end;
   margin-bottom: var(--space-5);
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+.filter-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-muted);
+  text-decoration: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-bg);
+  transition: all var(--dur-fast);
+}
+.filter-tab:hover { color: var(--color-ink); border-color: var(--color-border-strong); }
+.filter-tab--active {
+  color: var(--color-ink);
+  background: var(--color-surface-2);
+  border-color: var(--color-border-strong);
+  font-weight: 600;
+}
+.filter-count {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: var(--color-muted);
+  background: var(--color-surface);
+  padding: 1px 5px;
+  border-radius: 99px;
+  border: 1px solid var(--color-border);
+  min-width: 18px;
+  text-align: center;
 }
 
 .table-wrap {
