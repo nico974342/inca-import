@@ -1,7 +1,7 @@
 ---
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
-import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, CONTACT_STATUS_LABEL, CONTACT_STATUS_COLOR, computeGmroi, gmroiColorClass, computeStockRotation, rotationColorClass } from '../../lib/constants';
+import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, CONTACT_STATUS_LABEL, CONTACT_STATUS_COLOR, computeGmroi, gmroiColorClass, computeStockRotation, rotationColorClass, MONTHLY_MARGIN_BREAKEVEN } from '../../lib/constants';
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'] as const;
 
@@ -165,11 +165,18 @@ const caTrend     = trend(caMonth, caPrev);
 const orderTrend  = trend(orderCountMonth, orderCountPrev);
 const panierTrend = trend(panierMoyen, panierMoyenPrev);
 
-const margeTrend: Trend = margeMonthPct != null && margePrevPct != null
-  ? (Math.abs(margeMonthPct - margePrevPct) < 0.05
-      ? { dir: 'flat', pct: 0 }
-      : { dir: margeMonthPct > margePrevPct ? 'up' : 'down', pct: margeMonthPct - margePrevPct })
-  : { dir: 'none', pct: null };
+// Margin trend compares the € amount vs last month (not the margin rate) —
+// a "point mort" is measured in euros, so the headline delta should be too.
+const margePrevHt = buckets[CURRENT_IDX - 1].margeHt;
+const margeDiffHt = margeMonthHt - margePrevHt;
+const margeTrend: Trend = Math.abs(margeDiffHt) < 0.5
+  ? { dir: 'flat', pct: 0 }
+  : { dir: margeDiffHt > 0 ? 'up' : 'down', pct: margeDiffHt };
+
+// ── Point mort (break-even) progress for the current month ───────────────
+const breakEvenPct: number = MONTHLY_MARGIN_BREAKEVEN > 0 ? (margeMonthHt / MONTHLY_MARGIN_BREAKEVEN) * 100 : 0;
+const breakEvenColor: 'red' | 'amber' | 'green' = breakEvenPct >= 100 ? 'green' : breakEvenPct >= 50 ? 'amber' : 'red';
+const breakEvenSurplus = margeMonthHt - MONTHLY_MARGIN_BREAKEVEN;
 
 // ── Top 5 products this month, by margin HT generated ──────────────────────
 const top5Products = Array.from(productAgg.values())
@@ -285,9 +292,18 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
       </span>
       <span class={`kpi-trend kpi-trend--${margeTrend.dir}`}>
         <span class="kpi-trend-arrow">{margeTrend.dir === 'up' ? '▲' : margeTrend.dir === 'down' ? '▼' : '–'}</span>
-        {trendLabel(margeTrend, ' pts')}
+        {margeTrend.pct == null ? '—' : `${margeTrend.pct > 0 ? '+' : margeTrend.pct < 0 ? '-' : ''}${formatCA(Math.abs(margeTrend.pct))}`}
         <span class="kpi-trend-caption">vs mois dernier</span>
       </span>
+      <div class="breakeven">
+        <div class="breakeven-bar">
+          <div class={`breakeven-fill breakeven-fill--${breakEvenColor}`} style={`width:${Math.min(100, Math.max(0, breakEvenPct))}%`}></div>
+        </div>
+        <div class="breakeven-label">
+          <span>{formatCA(margeMonthHt)} / {formatCA(MONTHLY_MARGIN_BREAKEVEN)} <span class="breakeven-caption">point mort</span></span>
+          {breakEvenPct >= 100 && <span class="breakeven-surplus">+{formatCA(breakEvenSurplus)} au-dessus du point mort</span>}
+        </div>
+      </div>
     </div>
 
     <div class="kpi-card">
@@ -762,6 +778,7 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
+  align-items: start;
   gap: var(--space-4);
   margin-bottom: var(--space-5);
 }
@@ -832,6 +849,44 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
 .kpi-trend--down  { color: oklch(0.50 0.19 25);  }
 .kpi-trend--flat  { color: var(--color-muted); }
 .kpi-trend--none  { color: var(--color-muted); }
+
+/* ── Break-even (point mort) progress ──────────────── */
+.breakeven {
+  margin-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.breakeven-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  overflow: hidden;
+}
+.breakeven-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+.breakeven-fill--red   { background: oklch(0.62 0.19 25);  }
+.breakeven-fill--amber { background: oklch(0.72 0.15 65);  }
+.breakeven-fill--green { background: oklch(0.62 0.14 145); }
+.breakeven-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  font-weight: 500;
+}
+.breakeven-caption {
+  color: var(--color-muted);
+  font-weight: 400;
+}
+.breakeven-surplus {
+  color: oklch(0.38 0.14 145);
+  font-weight: 700;
+}
 
 /* ── Chart + side stack ──────────────────────────── */
 .visual-grid {

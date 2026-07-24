@@ -19,6 +19,10 @@ export const COMPANY_ADDRESS_LINE = `${COMPANY.addressLine}, ${COMPANY.postalCod
 /** Fallback rate used only when a product/order line has no tva_rate snapshot. */
 export const DEFAULT_TVA_RATE = 0.085;
 
+/** Fixed monthly gross-margin break-even (point mort), in euros HT. Update
+ *  here if the business's break-even point changes. */
+export const MONTHLY_MARGIN_BREAKEVEN = 4700;
+
 export const RESEND_DEFAULT_FROM = `${COMPANY.name} <noreply@inca-import.re>`;
 
 // ── Order status ────────────────────────────────────────────────────────
