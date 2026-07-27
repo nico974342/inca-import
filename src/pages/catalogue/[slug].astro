@@ -8,7 +8,7 @@ const { slug } = Astro.params;
 
 const { data: product } = await supabaseAdmin
   .from('products')
-  .select('id, name, slug, category, description, sku, price_ht, unit, image_url, in_stock, stock_quantity')
+  .select('id, name, slug, category, description, sku, price_ht, unit, units_per_carton, image_url, in_stock, stock_quantity')
   .eq('slug', slug)
   .single();
 
@@ -44,6 +44,10 @@ const CAT_BG: Record<string, string> = {
 };
 
 const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
+
+const unitPriceHT = (product.price_ht != null && product.units_per_carton)
+  ? Number(product.price_ht) / product.units_per_carton
+  : null;
 ---
 <Base
   title={`${product.name} — Inca Import`}
@@ -140,7 +144,18 @@ const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
             {isClient && product.price_ht != null && (
               <div class="attr-row attr-row--price">
                 <dt>Prix HT</dt>
-                <dd class="price-value">{fmtHT(Number(product.price_ht))}</dd>
+                <dd>
+                  {unitPriceHT != null ? (
+                    <div class="price-value-wrap">
+                      <span class="price-value">{fmtHT(unitPriceHT)}<span class="price-value-suffix"> /unité</span></span>
+                      <span class="price-secondary">
+                        {fmtHT(Number(product.price_ht))} /{product.unit ?? 'carton'} ({product.units_per_carton} unités)
+                      </span>
+                    </div>
+                  ) : (
+                    <span class="price-value">{fmtHT(Number(product.price_ht))}</span>
+                  )}
+                </dd>
               </div>
             )}
             {!isClient && (
@@ -438,6 +453,24 @@ const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
   font-weight: 700;
   color: var(--color-ink);
   letter-spacing: -0.02em;
+}
+.price-value-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.price-value-suffix {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-muted);
+  letter-spacing: 0;
+}
+.price-secondary {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-muted);
 }
 
 /* Cart area */

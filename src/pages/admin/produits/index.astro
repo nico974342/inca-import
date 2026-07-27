@@ -7,7 +7,7 @@ const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'];
 
 const { data: products, error } = await supabaseAdmin
   .from('products')
-  .select('id, name, category, sku, price_ht, unit, in_stock, stock_quantity, position, prix_achat_moyen_ht')
+  .select('id, name, category, sku, price_ht, unit, units_per_carton, in_stock, stock_quantity, position, prix_achat_moyen_ht')
   .order('position', { ascending: true })
   .order('name', { ascending: true });
 
@@ -119,6 +119,11 @@ if (currentSort) {
 function formatPrice(p: number | null) {
   if (p == null) return '—';
   return p.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' });
+}
+
+function formatUnitPrice(priceHt: number | null, unitsPerCarton: number | null): string | null {
+  if (priceHt == null || !unitsPerCarton || unitsPerCarton <= 0) return null;
+  return formatPrice(priceHt / unitsPerCarton);
 }
 
 function margeClass(marge: number | null): string {
@@ -233,7 +238,12 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                 </span>
               </td>
               <td class="td-mono">{p.sku ?? '—'}</td>
-              <td class="td-mono">{formatPrice(p.price_ht)}</td>
+              <td class="td-mono">
+                {formatPrice(p.price_ht)}
+                {formatUnitPrice(p.price_ht, (p as any).units_per_carton ?? null) && (
+                  <span class="td-sub"> ({formatUnitPrice(p.price_ht, (p as any).units_per_carton ?? null)}/unité)</span>
+                )}
+              </td>
               <td class="td-mono td-muted">{formatPrice((p as any).prix_achat_moyen_ht ?? null)}</td>
               {(() => {
                 const mi = margeInfo(p.margePct);
@@ -417,6 +427,7 @@ const DELETE_ERROR_MSG: Record<string, string> = {
 .td-strong { font-weight: 500; color: var(--color-ink); }
 .td-muted  { color: var(--color-muted); }
 .td-mono   { font-family: var(--font-mono); color: var(--color-ink); }
+.td-sub    { font-size: var(--text-xs); color: var(--color-muted); }
 .td-actions { white-space: nowrap; }
 .actions-inner {
   display: flex;

@@ -188,6 +188,9 @@ const productsMetaJSON = JSON.stringify(
               const priceFormatted = p.price_ht
                 ? Number(p.price_ht).toFixed(2).replace('.', ',')
                 : null;
+              const unitPriceFormatted = (p.price_ht && p.units_per_carton)
+                ? (Number(p.price_ht) / p.units_per_carton).toFixed(2).replace('.', ',')
+                : null;
               return (
               <article
                 class={`product-card${(p.stock_quantity ?? 0) === 0 ? ' product-card--oos' : ''}`}
@@ -226,18 +229,32 @@ const productsMetaJSON = JSON.stringify(
                       ) : p.name}
                     </h2>
                     {isClient && !isPending && priceFormatted && (
-                      <p class="product-price" aria-label={`Prix : ${priceFormatted} euros HT`}>
-                        {priceFormatted}&nbsp;<span class="price-currency">€</span>
-                        <span class="price-suffix">HT</span>
-                      </p>
+                      unitPriceFormatted ? (
+                        <div class="product-price-group">
+                          <p class="product-price" aria-label={`Prix à l'unité : ${unitPriceFormatted} euros HT`}>
+                            {unitPriceFormatted}&nbsp;<span class="price-currency">€</span>
+                            <span class="price-suffix">/unité HT</span>
+                          </p>
+                          <p class="product-price-secondary">
+                            {priceFormatted}&nbsp;€ /{p.unit ?? 'carton'} ({p.units_per_carton} unités)
+                          </p>
+                        </div>
+                      ) : (
+                        <p class="product-price" aria-label={`Prix : ${priceFormatted} euros HT`}>
+                          {priceFormatted}&nbsp;<span class="price-currency">€</span>
+                          <span class="price-suffix">HT</span>
+                        </p>
+                      )
                     )}
                   </div>
 
-                  {p.units_per_carton ? (
-                    <p class="product-unit">{p.units_per_carton} unités/{p.unit ?? 'carton'}</p>
-                  ) : p.unit ? (
-                    <p class="product-unit">{p.unit}</p>
-                  ) : null}
+                  {!(isClient && !isPending && priceFormatted && unitPriceFormatted) && (
+                    p.units_per_carton ? (
+                      <p class="product-unit">{p.units_per_carton} unités/{p.unit ?? 'carton'}</p>
+                    ) : p.unit ? (
+                      <p class="product-unit">{p.unit}</p>
+                    ) : null
+                  )}
 
                   {isClient && !isPending && (p.stock_quantity ?? 0) > 0 && (
                     <p class={`prod-stock prod-stock--${(p.stock_quantity ?? 0) < 5 ? 'low' : 'ok'}`}>
@@ -1368,6 +1385,18 @@ const productsMetaJSON = JSON.stringify(
 }
 
 .product-unit {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.product-price-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.product-price-secondary {
   font-size: var(--text-xs);
   color: var(--color-muted);
   font-weight: 500;

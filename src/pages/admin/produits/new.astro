@@ -94,6 +94,7 @@ if (Astro.request.method === 'POST') {
           <div class="field">
             <label for="price_ht">Prix HT (€)</label>
             <input type="number" id="price_ht" name="price_ht" step="0.01" min="0" placeholder="0.00" />
+            <p class="field-computed-hint" id="unitPriceHint" style="display:none"></p>
           </div>
           <div class="field">
             <label for="unit">Unité</label>
@@ -199,6 +200,12 @@ if (Astro.request.method === 'POST') {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+.field-computed-hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-muted);
 }
 
 label {
@@ -327,6 +334,27 @@ input:focus, select:focus, textarea:focus {
         : '<span class="status-badge status-badge--out">Rupture de stock</span>';
     });
   }
+
+  // ── Live per-unit price hint (Prix HT ÷ Unités par carton) ─────────
+  const priceHtInput = document.getElementById('price_ht') as HTMLInputElement | null;
+  const unitsInput   = document.getElementById('units_per_carton') as HTMLInputElement | null;
+  const unitHintEl   = document.getElementById('unitPriceHint');
+
+  function updateUnitPriceHint() {
+    if (!unitHintEl || !priceHtInput || !unitsInput) return;
+    const price = parseFloat(priceHtInput.value);
+    const units = parseInt(unitsInput.value, 10);
+    if (!isNaN(price) && !isNaN(units) && units > 0) {
+      const perUnit = price / units;
+      unitHintEl.textContent = perUnit.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' }) + ' / unité';
+      unitHintEl.style.display = '';
+    } else {
+      unitHintEl.style.display = 'none';
+    }
+  }
+  priceHtInput?.addEventListener('input', updateUnitPriceHint);
+  unitsInput?.addEventListener('input', updateUnitPriceHint);
+  updateUnitPriceHint();
 
   // ── Image: URL field or file upload, either populates the same field ──
   const imageUrlInput  = document.getElementById('image_url') as HTMLInputElement | null;
