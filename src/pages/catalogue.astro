@@ -95,9 +95,10 @@ const productsMetaJSON = JSON.stringify(
     href="https://images.unsplash.com/photo-1553413077-190dd305871c?q=80&w=1600&auto=format&fit=crop"
   />
   <Nav user={user} />
+  <div class="page-body" id="pageBody" data-cart-state={isClient && !isPending ? 'expanded' : undefined}>
   <main>
 
-    <!-- Product metadata for cart drawer JS -->
+    <!-- Product metadata for cart panel JS -->
     {isClient && !isPending && (
       <script type="application/json" id="productsMetaData" set:html={productsMetaJSON} />
     )}
@@ -326,105 +327,81 @@ const productsMetaJSON = JSON.stringify(
 
   </main>
   <Footer />
+  </div>
 
   {isClient && !isPending && (
     <>
-      <!-- Logout form (used by drawer) -->
+      <!-- Logout form (used by cart panel) -->
       <form id="logoutForm" action="/api/auth/client-logout" method="POST" hidden>
       </form>
 
-      <!-- Backdrop -->
+      <!-- Backdrop — only ever shown on mobile, behind the expanded bottom sheet -->
       <div class="cart-backdrop" id="cartBackdrop" aria-hidden="true"></div>
 
-      <!-- Cart drawer -->
+      <!-- Single persistent cart panel: a sidebar on desktop, a bottom
+           sheet / pill on mobile. One source of truth for cart display. -->
       <aside
-        class="cart-drawer"
-        id="cartDrawer"
-        role="dialog"
+        class="cart-panel"
+        id="cartPanel"
+        data-state="expanded"
         aria-label="Votre panier"
-        aria-modal="true"
-        aria-hidden="true"
       >
-        <div class="drawer-header">
-          <h2 class="drawer-heading">Panier</h2>
-          <div class="drawer-header-actions">
-            <button type="button" class="drawer-logout" id="drawerLogoutBtn" aria-label="Se déconnecter">
-              Déconnexion
-            </button>
-            <button type="button" class="drawer-close" id="drawerClose" aria-label="Fermer le panier">
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-                <path d="M4 4l10 10M14 4L4 14" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
-              </svg>
-            </button>
-          </div>
-        </div>
+        <button
+          type="button"
+          class="cart-panel-tab"
+          id="cartPanelToggle"
+          aria-expanded="true"
+          aria-controls="cartPanelCollapseOuter"
+        >
+          <svg class="cart-panel-icon" width="20" height="20" viewBox="0 0 22 22" fill="none" aria-hidden="true">
+            <path d="M1.5 1.5h3l2.4 11.5m0 0H18l1.5-7H6.9m0 7-.9 4h13.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="8.5" cy="20" r="1.5" fill="currentColor"/>
+            <circle cx="17.5" cy="20" r="1.5" fill="currentColor"/>
+          </svg>
+          <span class="cart-panel-title">Panier</span>
+          <span
+            class="cart-panel-badge"
+            id="cartBadge"
+            data-empty={totalCartQty === 0}
+            aria-hidden="true"
+          >{totalCartQty}</span>
+          <svg class="cart-panel-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
 
-        <div class="drawer-body" id="drawerBody">
-          <ul class="drawer-items-list" id="drawerItemsList" aria-label="Articles dans votre panier"></ul>
-          <p class="drawer-empty" id="drawerEmpty" aria-live="polite">Votre panier est vide.</p>
-        </div>
+        <div class="cart-panel-collapse-outer" id="cartPanelCollapseOuter">
+          <div class="cart-panel-collapse-inner">
+            <div class="cart-panel-subheader">
+              <button type="button" class="drawer-logout" id="drawerLogoutBtn" aria-label="Se déconnecter">
+                Déconnexion
+              </button>
+            </div>
 
-        <div class="drawer-footer">
-          <div class="drawer-total-row">
-            <span class="drawer-total-label">Total HT</span>
-            <span class="drawer-total-amount" id="drawerTotal">{totalCartHT.toFixed(2).replace('.', ',')} €</span>
+            <div class="drawer-body" id="drawerBody">
+              <ul class="drawer-items-list" id="drawerItemsList" aria-label="Articles dans votre panier"></ul>
+              <p class="drawer-empty" id="drawerEmpty" aria-live="polite">Votre panier est vide.</p>
+            </div>
+
+            <div class="drawer-footer">
+              <div class="drawer-total-row">
+                <span class="drawer-total-label">Total HT</span>
+                <span class="drawer-total-amount" id="drawerTotal">{totalCartHT.toFixed(2).replace('.', ',')} €</span>
+              </div>
+              <div class="drawer-ttc-row">
+                <span class="drawer-ttc-label">Total TTC</span>
+                <span class="drawer-ttc-amount" id="drawerTtc">{totalCartTTC.toFixed(2).replace('.', ',')} €</span>
+              </div>
+              <a href="/commande" class="btn btn-primary drawer-checkout">
+                Passer commande
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                  <path d="M2 7h10M8 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </a>
+            </div>
           </div>
-          <div class="drawer-ttc-row">
-            <span class="drawer-ttc-label">Total TTC</span>
-            <span class="drawer-ttc-amount" id="drawerTtc">{totalCartTTC.toFixed(2).replace('.', ',')} €</span>
-          </div>
-          <a href="/commande" class="btn btn-primary drawer-checkout">
-            Passer commande
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-              <path d="M2 7h10M8 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </a>
         </div>
       </aside>
-
-      <!-- Cart toggle button -->
-      <button
-        class="cart-toggle"
-        id="cartToggle"
-        style="position:fixed; bottom:calc(1.5rem + env(safe-area-inset-bottom,0px)); right:calc(1.5rem + env(safe-area-inset-right,0px)); left:auto;"
-        aria-label={`Ouvrir le panier — ${totalCartQty} article${totalCartQty !== 1 ? 's' : ''}`}
-        aria-expanded="false"
-        aria-controls="cartDrawer"
-      >
-        <svg class="cart-toggle-icon" width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
-          <path d="M1.5 1.5h3l2.4 11.5m0 0H18l1.5-7H6.9m0 7-.9 4h13.5" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="8.5" cy="20" r="1.5" fill="white"/>
-          <circle cx="17.5" cy="20" r="1.5" fill="white"/>
-        </svg>
-        <span
-          class="cart-toggle-badge"
-          id="cartBadge"
-          data-empty={totalCartQty === 0}
-          aria-hidden="true"
-        >{totalCartQty}</span>
-      </button>
-
-      <!-- Sticky cart total bar — quick glance + shortcut to the drawer,
-           only shown once the cart has at least one item. Sits centered at
-           the bottom, inset far enough from the edges to clear the cart
-           toggle (right) and WhatsApp (left) circular buttons. -->
-      <button
-        type="button"
-        class="cart-total-bar"
-        id="cartTotalBar"
-        style={totalCartQty === 0 ? 'display:none' : ''}
-        aria-label={`Voir le panier — ${totalCartQty} article${totalCartQty !== 1 ? 's' : ''}, ${totalCartHT.toFixed(2).replace('.', ',')} € HT`}
-      >
-        <svg class="ctb-icon" width="16" height="16" viewBox="0 0 22 22" fill="none" aria-hidden="true">
-          <path d="M1.5 1.5h3l2.4 11.5m0 0H18l1.5-7H6.9m0 7-.9 4h13.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="8.5" cy="20" r="1.5" fill="currentColor"/>
-          <circle cx="17.5" cy="20" r="1.5" fill="currentColor"/>
-        </svg>
-        <span class="ctb-qty" id="cartTotalBarQty" aria-hidden="true">{totalCartQty}</span>
-        <span class="ctb-sep" aria-hidden="true">·</span>
-        <span class="ctb-amount" id="cartTotalBarAmount" aria-hidden="true">{totalCartHT.toFixed(2).replace('.', ',')} €</span>
-        <span class="ctb-suffix" aria-hidden="true">HT</span>
-      </button>
     </>
   )}
 
@@ -522,9 +499,9 @@ const productsMetaJSON = JSON.stringify(
 
   if (activeCat !== 'tous') applyFilters();
 
-  // ── Cart drawer (clients only) ────────────────────────────────
-  const cartToggle  = document.getElementById('cartToggle');
-  if (!cartToggle) {
+  // ── Cart panel (clients only) ─────────────────────────────────
+  const cartPanel = document.getElementById('cartPanel');
+  if (!cartPanel) {
     // Guest — no cart logic needed
   } else {
     // Parse product metadata
@@ -566,10 +543,10 @@ const productsMetaJSON = JSON.stringify(
       if (qty > 0) cartState[id] = qty;
     });
 
-    // Drawer elements
+    // Panel elements — one single cart UI, no duplicate drawer/toggle/bar
+    const pageBody       = document.getElementById('pageBody');
     const backdrop       = document.getElementById('cartBackdrop')!;
-    const drawer         = document.getElementById('cartDrawer')!;
-    const drawerClose    = document.getElementById('drawerClose')!;
+    const cartPanelToggle = document.getElementById('cartPanelToggle')!;
     const drawerLogout   = document.getElementById('drawerLogoutBtn')!;
     const drawerItemsList = document.getElementById('drawerItemsList')!;
     const drawerEmptyEl  = document.getElementById('drawerEmpty')!;
@@ -577,62 +554,37 @@ const productsMetaJSON = JSON.stringify(
     const drawerTtcEl    = document.getElementById('drawerTtc')!;
     const cartBadge      = document.getElementById('cartBadge')!;
     const logoutForm     = document.getElementById('logoutForm') as HTMLFormElement;
-    const cartTotalBar      = document.getElementById('cartTotalBar');
-    const cartTotalBarQty   = document.getElementById('cartTotalBarQty');
-    const cartTotalBarAmount = document.getElementById('cartTotalBarAmount');
 
-    let isOpen = false;
-
-    // ── Auto-open (first add) / manual-close persistence ──────────
-    // "Session" here means this browser tab until it's closed, matching the
-    // user's ask to remember a manual close "pour la suite de la session".
-    const AUTO_OPEN_DONE_KEY = 'cartDrawerAutoOpenDone';
-    let autoOpenDone = sessionStorage.getItem(AUTO_OPEN_DONE_KEY) === '1';
-
-    function markAutoOpenDone() {
-      autoOpenDone = true;
-      sessionStorage.setItem(AUTO_OPEN_DONE_KEY, '1');
+    function isMobile(): boolean {
+      return window.matchMedia('(max-width: 768px)').matches;
     }
 
-    // Called whenever a cart-controls quantity changes; auto-opens the
-    // drawer only on the very first 0 → N transition of the session, and
-    // only if the user hasn't already dismissed the drawer manually.
-    function maybeAutoOpen(prevQty: number, newQty: number) {
-      if (prevQty !== 0 || newQty <= 0) return;
-      if (!autoOpenDone && !isOpen) openDrawer();
-      markAutoOpenDone();
+    // Open by default on every page load. Collapsing only frees up screen
+    // space for the current view — it's a plain in-memory toggle, not
+    // persisted, so the panel is always expanded again on the next load.
+    let isExpanded = true;
+
+    function setExpanded(expanded: boolean) {
+      isExpanded = expanded;
+      const state = expanded ? 'expanded' : 'collapsed';
+      cartPanel.dataset.state = state;
+      cartPanelToggle.setAttribute('aria-expanded', String(expanded));
+      if (pageBody) pageBody.dataset.cartState = state;
+      // The dimming backdrop only makes sense for the mobile bottom sheet,
+      // which covers meaningful screen area when expanded.
+      if (isMobile() && expanded) {
+        backdrop.classList.add('is-open');
+      } else {
+        backdrop.classList.remove('is-open');
+      }
     }
 
-    // ── Drawer open / close ──────────────────────────────────────
-    function openDrawer() {
-      isOpen = true;
-      drawer.classList.add('is-open');
-      backdrop.classList.add('is-open');
-      drawer.setAttribute('aria-hidden', 'false');
-      cartToggle.setAttribute('aria-expanded', 'true');
-      document.body.style.overflow = 'hidden';
-      drawerClose.focus();
-    }
-
-    function closeDrawer() {
-      isOpen = false;
-      drawer.classList.remove('is-open');
-      backdrop.classList.remove('is-open');
-      drawer.setAttribute('aria-hidden', 'true');
-      cartToggle.setAttribute('aria-expanded', 'false');
-      document.body.style.overflow = '';
-      cartToggle.focus();
-      markAutoOpenDone();
-    }
-
-    cartToggle.addEventListener('click', () => isOpen ? closeDrawer() : openDrawer());
-    drawerClose.addEventListener('click', closeDrawer);
-    backdrop.addEventListener('click', closeDrawer);
+    cartPanelToggle.addEventListener('click', () => setExpanded(!isExpanded));
+    backdrop.addEventListener('click', () => setExpanded(false));
     drawerLogout.addEventListener('click', () => logoutForm?.submit());
-    cartTotalBar?.addEventListener('click', () => { if (!isOpen) openDrawer(); });
 
     document.addEventListener('keydown', e => {
-      if (e.key === 'Escape' && isOpen) closeDrawer();
+      if (e.key === 'Escape' && isExpanded) setExpanded(false);
     });
 
     // ── Cart totals ───────────────────────────────────────────────
@@ -650,8 +602,8 @@ const productsMetaJSON = JSON.stringify(
       const qty = calcTotalQty();
       cartBadge.textContent = String(qty);
       cartBadge.dataset.empty = qty === 0 ? 'true' : 'false';
-      cartToggle.setAttribute('aria-label',
-        `${isOpen ? 'Fermer' : 'Ouvrir'} le panier — ${qty} article${qty !== 1 ? 's' : ''}`
+      cartPanelToggle.setAttribute('aria-label',
+        `Panier — ${qty} article${qty !== 1 ? 's' : ''}`
       );
     }
 
@@ -661,18 +613,6 @@ const productsMetaJSON = JSON.stringify(
         .reduce((s, [id, q]) => s + (q > 0 ? q * (priceMap[id] ?? 0) * (1 + (tvaMap[id] ?? 0.085)) : 0), 0);
       drawerTotalEl.textContent = ht.toFixed(2).replace('.', ',') + ' €';
       drawerTtcEl.textContent   = ttc.toFixed(2).replace('.', ',') + ' €';
-    }
-
-    function updateTotalBar() {
-      if (!cartTotalBar) return;
-      const qty = calcTotalQty();
-      const ht  = calcTotalHT();
-      cartTotalBar.style.display = qty > 0 ? '' : 'none';
-      if (cartTotalBarQty)    cartTotalBarQty.textContent    = String(qty);
-      if (cartTotalBarAmount) cartTotalBarAmount.textContent = ht.toFixed(2).replace('.', ',') + ' €';
-      cartTotalBar.setAttribute('aria-label',
-        `Voir le panier — ${qty} article${qty !== 1 ? 's' : ''}, ${ht.toFixed(2).replace('.', ',')} € HT`
-      );
     }
 
     function renderDrawerItems() {
@@ -893,7 +833,6 @@ const productsMetaJSON = JSON.stringify(
     function renderCart() {
       updateBadge();
       updateTotal();
-      updateTotalBar();
       renderDrawerItems();
     }
 
@@ -936,7 +875,7 @@ const productsMetaJSON = JSON.stringify(
       const letter = card?.querySelector<HTMLElement>('.img-letter')?.textContent?.trim() ?? null;
 
       const fromRect   = fromEl.getBoundingClientRect();
-      const toggleRect = cartToggle.getBoundingClientRect();
+      const toggleRect = cartPanelToggle.getBoundingClientRect();
 
       const startX = fromRect.left + fromRect.width  / 2;
       const startY = fromRect.top  + fromRect.height / 2;
@@ -976,9 +915,9 @@ const productsMetaJSON = JSON.stringify(
 
       anim.onfinish = () => {
         thumb.remove();
-        cartToggle.classList.add('cart-bounce');
-        cartToggle.addEventListener('animationend',
-          () => cartToggle.classList.remove('cart-bounce'), { once: true });
+        cartPanelToggle.classList.add('cart-bounce');
+        cartPanelToggle.addEventListener('animationend',
+          () => cartPanelToggle.classList.remove('cart-bounce'), { once: true });
       };
     }
 
@@ -1025,15 +964,13 @@ const productsMetaJSON = JSON.stringify(
           showStockWarn(productId, stock, unit);
           return;
         }
-        const newQty      = cur + 1;
-        const prevTotalQty = calcTotalQty();
+        const newQty = cur + 1;
         clearStockWarn(productId);
         pulse(incBtn);
         flyToCart(incBtn, productId);
         cartState[productId] = newQty;
         refreshCard(newQty);
         renderCart();
-        maybeAutoOpen(prevTotalQty, calcTotalQty());
         await sendCartUpdate(productId, newQty);
       });
 
@@ -1056,10 +993,8 @@ const productsMetaJSON = JSON.stringify(
         const prev = cartState[productId] ?? 0;
         refreshCard(newQty);
         if (newQty === prev) return;
-        const prevTotalQty = calcTotalQty();
         cartState[productId] = newQty;
         renderCart();
-        maybeAutoOpen(prevTotalQty, calcTotalQty());
         await sendCartUpdate(productId, newQty);
       });
     });
@@ -1631,7 +1566,16 @@ const productsMetaJSON = JSON.stringify(
 }
 .cta-band-sub { font-size: var(--text-sm); color: var(--color-muted); }
 
-/* ── Cart backdrop ────────────────────────────────── */
+/* ── Page body — reflows to make room for the cart sidebar ─ */
+.page-body {
+  transition: padding-right 0.28s var(--ease-out-quart);
+}
+@media (min-width: 769px) {
+  .page-body[data-cart-state="expanded"]  { padding-right: min(340px, 100%); }
+  .page-body[data-cart-state="collapsed"] { padding-right: 0; }
+}
+
+/* ── Cart backdrop — mobile-only, behind the expanded sheet ─ */
 .cart-backdrop {
   position: fixed;
   inset: 0;
@@ -1646,47 +1590,98 @@ const productsMetaJSON = JSON.stringify(
   pointer-events: auto;
 }
 
-/* ── Cart drawer ──────────────────────────────────── */
-.cart-drawer {
+/* ── Cart panel — single persistent cart UI ───────── */
+.cart-panel {
   position: fixed;
-  top: 0;
+  top: 64px;
   right: 0;
-  height: 100%;
-  width: min(400px, 100%);
+  width: min(340px, 100%);
+  max-height: calc(100vh - 64px);
   background: var(--color-bg);
-  box-shadow: -4px 0 48px oklch(0 0 0 / 0.14);
+  box-shadow: -4px 0 32px oklch(0 0 0 / 0.12);
+  border-left: 1px solid var(--color-border);
   z-index: var(--z-modal);
   display: flex;
   flex-direction: column;
-  transform: translateX(105%);
-  transition: transform 0.36s var(--ease-out-expo);
-}
-.cart-drawer.is-open {
-  transform: translateX(0);
 }
 
-.drawer-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-5) var(--space-6);
-  border-bottom: 1px solid var(--color-border);
-  flex-shrink: 0;
-  gap: var(--space-3);
-}
-
-.drawer-heading {
-  font-family: var(--font-display);
-  font-size: var(--text-xl);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--color-ink);
-}
-
-.drawer-header-actions {
+.cart-panel-tab {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-4) var(--space-5);
+  border: none;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  flex-shrink: 0;
+  transition: background var(--dur-fast);
+}
+.cart-panel-tab:hover { background: var(--color-surface); }
+.cart-panel-tab:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+
+.cart-panel-icon { flex-shrink: 0; color: var(--color-primary); }
+
+.cart-panel-title {
+  flex: 1;
+  text-align: left;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.cart-panel-badge {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 11px;
+  background: var(--color-primary);
+  color: white;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 22px;
+  text-align: center;
+  flex-shrink: 0;
+  transition: transform var(--dur-fast) var(--ease-out-expo), opacity var(--dur-fast);
+}
+.cart-panel-badge[data-empty="true"] { transform: scale(0); opacity: 0; }
+
+.cart-panel-chevron {
+  flex-shrink: 0;
+  color: var(--color-muted);
+  transition: transform 0.25s var(--ease-out-quart);
+}
+.cart-panel[data-state="collapsed"] .cart-panel-chevron { transform: rotate(-90deg); }
+
+/* Grid-rows collapse trick — animates to/from an intrinsic height
+   without knowing it upfront, and truly zeroes out the box (no gap). */
+.cart-panel-collapse-outer {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.28s var(--ease-out-quart);
+}
+.cart-panel[data-state="collapsed"] .cart-panel-collapse-outer {
+  grid-template-rows: 0fr;
+  flex: 0 0 auto;
+}
+
+.cart-panel-collapse-inner {
+  overflow: hidden;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.cart-panel-subheader {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-2) var(--space-6) 0;
+  flex-shrink: 0;
 }
 
 .drawer-logout {
@@ -1704,22 +1699,6 @@ const productsMetaJSON = JSON.stringify(
 }
 .drawer-logout:hover { color: var(--color-ink); background: var(--color-surface); }
 
-.drawer-close {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-sm);
-  border: none;
-  background: transparent;
-  color: var(--color-muted);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background var(--dur-fast), color var(--dur-fast);
-}
-.drawer-close:hover { background: var(--color-surface); color: var(--color-ink); }
-.drawer-close:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
-
 .drawer-body {
   flex: 1;
   overflow-y: auto;
@@ -1735,178 +1714,14 @@ const productsMetaJSON = JSON.stringify(
   font-size: var(--text-base);
 }
 
-/* ── Drawer items — horizontal compact layout ───────── */
+/* ── Drawer items list — rows are built in JS with inline
+   styles (see renderDrawerItems), so only the <ul> itself needs
+   a rule here. ───────────────────────────────────────────── */
 .drawer-items-list {
   list-style: none;
   padding: 0;
   margin: 0;
 }
-
-.drawer-item {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 0;
-  margin: 0;
-  border-bottom: 1px solid oklch(0.92 0.003 45.9);
-  background: var(--color-bg);
-  min-height: 0;
-}
-.drawer-item:last-child { border-bottom: none; }
-
-/* Thumbnail — locked at 48×48, never grows */
-.di-avatar {
-  display: block;
-  width: 48px;
-  min-width: 48px;
-  max-width: 48px;
-  height: 48px;
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--color-surface-2);
-  flex-shrink: 0;
-  flex-grow: 0;
-  flex-basis: 48px;
-}
-.di-avatar img {
-  display: block;
-  width: 48px;
-  height: 48px;
-  object-fit: cover;
-}
-
-/* Text body fills remaining space */
-.di-body {
-  flex: 1 1 0;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-/* Row 1: name + price */
-.di-row1 {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.di-name {
-  font-family: var(--font-body);
-  font-size: 0.8125rem;
-  font-weight: 700;
-  color: var(--color-ink);
-  line-height: 1.2;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1 1 0;
-  min-width: 0;
-}
-
-.di-price {
-  font-family: var(--font-display);
-  font-size: 0.8125rem;
-  font-weight: 700;
-  color: var(--color-primary);
-  letter-spacing: -0.02em;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-/* Row 2: meta + actions */
-.di-row2 {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.di-meta {
-  font-family: var(--font-body);
-  font-size: 0.6875rem;
-  color: var(--color-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1 1 0;
-  min-width: 0;
-  line-height: 1;
-}
-
-.di-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-/* Coral pill stepper — 32px tall, no visible border */
-.di-stepper {
-  display: inline-flex;
-  align-items: stretch;
-  height: 28px;
-  border-radius: 14px;
-  overflow: hidden;
-  background: var(--color-primary);
-  flex-shrink: 0;
-}
-
-.d-qty-btn {
-  width: 28px;
-  height: 28px;
-  border: none;
-  background: transparent;
-  font-size: 1rem;
-  font-weight: 400;
-  line-height: 1;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  transition: background 0.12s;
-  user-select: none;
-  flex-shrink: 0;
-}
-.d-qty-btn:hover  { background: oklch(0.50 0.149 45.9); }
-.d-qty-btn:active { background: oklch(0.44 0.149 45.9); }
-.d-qty-btn:focus-visible { outline: 2px solid white; outline-offset: -2px; border-radius: 50%; }
-
-.d-qty-val {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 22px;
-  padding: 0 3px;
-  font-family: var(--font-body);
-  font-size: 0.75rem;
-  font-weight: 700;
-  color: white;
-  line-height: 1;
-}
-
-/* "Supprimer" — plain text link, no box */
-.drawer-item-del {
-  display: inline;
-  border: none;
-  background: none;
-  padding: 0;
-  margin: 0;
-  font-family: var(--font-body);
-  font-size: 0.6875rem;
-  font-weight: 500;
-  color: oklch(0.60 0.15 25);
-  cursor: pointer;
-  line-height: 1;
-  text-decoration: none;
-  white-space: nowrap;
-  transition: color 0.12s;
-}
-.drawer-item-del:hover { color: oklch(0.44 0.20 25); text-decoration: underline; }
-.drawer-item-del:focus-visible { outline: 2px solid oklch(0.60 0.15 25); outline-offset: 2px; border-radius: 2px; }
 
 /* ── Fly-to-cart thumbnail ────────────────────────── */
 .fly-dot {
@@ -1942,16 +1757,16 @@ const productsMetaJSON = JSON.stringify(
   line-height: 1;
 }
 
-/* ── Cart toggle bounce ───────────────────────────── */
+/* ── Cart panel tab bounce (on add-to-cart) ───────── */
 @keyframes cart-bounce {
   0%   { transform: scale(1); }
-  22%  { transform: scale(1.35); }
-  48%  { transform: scale(0.86); }
-  68%  { transform: scale(1.14); }
-  84%  { transform: scale(0.96); }
+  22%  { transform: scale(1.15); }
+  48%  { transform: scale(0.94); }
+  68%  { transform: scale(1.05); }
+  84%  { transform: scale(0.98); }
   100% { transform: scale(1); }
 }
-.cart-toggle.cart-bounce {
+.cart-panel-tab.cart-bounce {
   animation: cart-bounce 0.52s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
@@ -2015,117 +1830,43 @@ const productsMetaJSON = JSON.stringify(
   gap: var(--space-2);
 }
 
-/* ── Cart toggle button ───────────────────────────── */
-.cart-toggle {
-  position: fixed;
-  bottom: calc(clamp(var(--space-5), 3vw, var(--space-8)) + env(safe-area-inset-bottom, 0px));
-  right: calc(clamp(var(--space-4), 3vw, var(--space-8)) + env(safe-area-inset-right, 0px));
-  z-index: var(--z-toast);
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  border: none;
-  background: var(--color-primary);
-  color: white;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 4px 18px oklch(0.568 0.149 45.9 / 0.42),
-              0 1px 4px oklch(0 0 0 / 0.12);
-  transition: background var(--dur-fast), box-shadow var(--dur-fast), transform var(--dur-fast);
-}
-.cart-toggle:hover {
-  background: oklch(0.518 0.149 45.9);
-  box-shadow: 0 8px 28px oklch(0.568 0.149 45.9 / 0.52),
-              0 2px 6px oklch(0 0 0 / 0.14);
-  transform: scale(1.06);
-}
-.cart-toggle:active   { transform: scale(0.96); }
-.cart-toggle:focus-visible {
-  outline: 3px solid var(--color-primary);
-  outline-offset: 3px;
-}
+/* ── Cart panel — mobile: bottom sheet / collapsed pill ──── */
+@media (max-width: 768px) {
+  .cart-panel {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    max-height: 78vh;
+    border-left: none;
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -6px 32px oklch(0 0 0 / 0.18);
+  }
+  .cart-panel-tab {
+    border-radius: 16px 16px 0 0;
+    padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+  }
+  .cart-panel[data-state="expanded"] .cart-panel-tab {
+    padding-bottom: var(--space-4);
+  }
 
-.cart-toggle-badge {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 5px;
-  border-radius: 10px;
-  background: var(--color-ink);
-  color: white;
-  font-family: var(--font-body);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 20px;
-  text-align: center;
-  pointer-events: none;
-  border: 2px solid var(--color-primary);
-  box-sizing: content-box;
-  transition: transform var(--dur-fast) var(--ease-out-expo), opacity var(--dur-fast);
-}
-/* ── Sticky cart total bar ────────────────────────── */
-/* Inset far enough from both edges to clear the cart toggle (right,
-   ~16-32px + 56px wide) and the WhatsApp FAB (left, ~16-20px + 52-56px
-   wide) — the bar only occupies the center strip between them. */
-.cart-total-bar {
-  position: fixed;
-  left: 84px;
-  right: 84px;
-  bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
-  margin: 0 auto;
-  max-width: 340px;
-  z-index: var(--z-tooltip);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 11px var(--space-4);
-  border-radius: var(--radius-full);
-  border: none;
-  background: var(--color-ink);
-  color: white;
-  cursor: pointer;
-  font-family: var(--font-body);
-  white-space: nowrap;
-  box-shadow: 0 8px 24px oklch(0 0 0 / 0.28), 0 2px 6px oklch(0 0 0 / 0.16);
-  transition: transform var(--dur-fast), box-shadow var(--dur-fast);
-}
-.cart-total-bar:hover { transform: translateY(-1px); box-shadow: 0 10px 28px oklch(0 0 0 / 0.32), 0 2px 6px oklch(0 0 0 / 0.18); }
-.cart-total-bar:active { transform: translateY(0) scale(0.98); }
-.cart-total-bar:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
-
-.ctb-icon { flex-shrink: 0; opacity: 0.85; }
-.ctb-qty {
-  font-size: var(--text-sm);
-  font-weight: 700;
-}
-.ctb-sep { color: oklch(1 0 0 / 0.4); }
-.ctb-amount {
-  font-family: var(--font-display);
-  font-size: var(--text-sm);
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
-.ctb-suffix {
-  font-size: 10px;
-  font-weight: 600;
-  color: oklch(1 0 0 / 0.6);
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-}
-
-@media (max-width: 480px) {
-  .cart-total-bar { left: 76px; right: 76px; padding: 10px var(--space-3); gap: 5px; }
-  .ctb-suffix { display: none; }
-}
-
-.cart-toggle-badge[data-empty="true"] {
-  transform: scale(0);
-  opacity: 0;
+  /* Collapsed: shrink to a centered floating pill, clear of the
+     WhatsApp FAB (bottom-left). */
+  .cart-panel[data-state="collapsed"] {
+    left: 50%;
+    right: auto;
+    bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-50%);
+    width: auto;
+    max-width: min(300px, calc(100vw - 96px));
+    border-radius: var(--radius-full);
+    box-shadow: 0 8px 28px oklch(0 0 0 / 0.28), 0 2px 6px oklch(0 0 0 / 0.16);
+  }
+  .cart-panel[data-state="collapsed"] .cart-panel-tab {
+    border-radius: var(--radius-full);
+    padding: 10px var(--space-4);
+  }
 }
 
 /* ── Global ───────────────────────────────────────── */
@@ -2145,11 +1886,11 @@ const productsMetaJSON = JSON.stringify(
   .product-card:not(.product-card--oos):hover .product-img img { transform: none; }
   .tab-indicator       { transition: none; }
   .qty-btn.btn-pressed { animation: none; }
-  .cart-drawer         { transition: none; }
+  .cart-panel          { transition: none; }
+  .cart-panel-collapse-outer { transition: none; }
+  .cart-panel-chevron  { transition: none; }
   .cart-backdrop       { transition: none; }
-  .cart-toggle         { transition: none; }
-  .cart-toggle:hover   { transform: none; }
-  .cart-toggle.cart-bounce { animation: none; }
+  .cart-panel-tab.cart-bounce { animation: none; }
   .fly-dot             { display: none; }
   .products-grid           { transition: none; }
   .products-grid.is-updating { opacity: 1; }
