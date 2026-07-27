@@ -583,6 +583,26 @@ const productsMetaJSON = JSON.stringify(
 
     let isOpen = false;
 
+    // ── Auto-open (first add) / manual-close persistence ──────────
+    // "Session" here means this browser tab until it's closed, matching the
+    // user's ask to remember a manual close "pour la suite de la session".
+    const AUTO_OPEN_DONE_KEY = 'cartDrawerAutoOpenDone';
+    let autoOpenDone = sessionStorage.getItem(AUTO_OPEN_DONE_KEY) === '1';
+
+    function markAutoOpenDone() {
+      autoOpenDone = true;
+      sessionStorage.setItem(AUTO_OPEN_DONE_KEY, '1');
+    }
+
+    // Called whenever a cart-controls quantity changes; auto-opens the
+    // drawer only on the very first 0 → N transition of the session, and
+    // only if the user hasn't already dismissed the drawer manually.
+    function maybeAutoOpen(prevQty: number, newQty: number) {
+      if (prevQty !== 0 || newQty <= 0) return;
+      if (!autoOpenDone && !isOpen) openDrawer();
+      markAutoOpenDone();
+    }
+
     // ── Drawer open / close ──────────────────────────────────────
     function openDrawer() {
       isOpen = true;
@@ -602,6 +622,7 @@ const productsMetaJSON = JSON.stringify(
       cartToggle.setAttribute('aria-expanded', 'false');
       document.body.style.overflow = '';
       cartToggle.focus();
+      markAutoOpenDone();
     }
 
     cartToggle.addEventListener('click', () => isOpen ? closeDrawer() : openDrawer());
@@ -1004,13 +1025,15 @@ const productsMetaJSON = JSON.stringify(
           showStockWarn(productId, stock, unit);
           return;
         }
-        const newQty = cur + 1;
+        const newQty      = cur + 1;
+        const prevTotalQty = calcTotalQty();
         clearStockWarn(productId);
         pulse(incBtn);
         flyToCart(incBtn, productId);
         cartState[productId] = newQty;
         refreshCard(newQty);
         renderCart();
+        maybeAutoOpen(prevTotalQty, calcTotalQty());
         await sendCartUpdate(productId, newQty);
       });
 
@@ -1033,8 +1056,10 @@ const productsMetaJSON = JSON.stringify(
         const prev = cartState[productId] ?? 0;
         refreshCard(newQty);
         if (newQty === prev) return;
+        const prevTotalQty = calcTotalQty();
         cartState[productId] = newQty;
         renderCart();
+        maybeAutoOpen(prevTotalQty, calcTotalQty());
         await sendCartUpdate(productId, newQty);
       });
     });
