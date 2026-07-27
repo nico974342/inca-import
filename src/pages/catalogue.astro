@@ -403,6 +403,28 @@ const productsMetaJSON = JSON.stringify(
           aria-hidden="true"
         >{totalCartQty}</span>
       </button>
+
+      <!-- Sticky cart total bar — quick glance + shortcut to the drawer,
+           only shown once the cart has at least one item. Sits centered at
+           the bottom, inset far enough from the edges to clear the cart
+           toggle (right) and WhatsApp (left) circular buttons. -->
+      <button
+        type="button"
+        class="cart-total-bar"
+        id="cartTotalBar"
+        style={totalCartQty === 0 ? 'display:none' : ''}
+        aria-label={`Voir le panier — ${totalCartQty} article${totalCartQty !== 1 ? 's' : ''}, ${totalCartHT.toFixed(2).replace('.', ',')} € HT`}
+      >
+        <svg class="ctb-icon" width="16" height="16" viewBox="0 0 22 22" fill="none" aria-hidden="true">
+          <path d="M1.5 1.5h3l2.4 11.5m0 0H18l1.5-7H6.9m0 7-.9 4h13.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="8.5" cy="20" r="1.5" fill="currentColor"/>
+          <circle cx="17.5" cy="20" r="1.5" fill="currentColor"/>
+        </svg>
+        <span class="ctb-qty" id="cartTotalBarQty" aria-hidden="true">{totalCartQty}</span>
+        <span class="ctb-sep" aria-hidden="true">·</span>
+        <span class="ctb-amount" id="cartTotalBarAmount" aria-hidden="true">{totalCartHT.toFixed(2).replace('.', ',')} €</span>
+        <span class="ctb-suffix" aria-hidden="true">HT</span>
+      </button>
     </>
   )}
 
@@ -555,6 +577,9 @@ const productsMetaJSON = JSON.stringify(
     const drawerTtcEl    = document.getElementById('drawerTtc')!;
     const cartBadge      = document.getElementById('cartBadge')!;
     const logoutForm     = document.getElementById('logoutForm') as HTMLFormElement;
+    const cartTotalBar      = document.getElementById('cartTotalBar');
+    const cartTotalBarQty   = document.getElementById('cartTotalBarQty');
+    const cartTotalBarAmount = document.getElementById('cartTotalBarAmount');
 
     let isOpen = false;
 
@@ -583,6 +608,7 @@ const productsMetaJSON = JSON.stringify(
     drawerClose.addEventListener('click', closeDrawer);
     backdrop.addEventListener('click', closeDrawer);
     drawerLogout.addEventListener('click', () => logoutForm?.submit());
+    cartTotalBar?.addEventListener('click', () => { if (!isOpen) openDrawer(); });
 
     document.addEventListener('keydown', e => {
       if (e.key === 'Escape' && isOpen) closeDrawer();
@@ -614,6 +640,18 @@ const productsMetaJSON = JSON.stringify(
         .reduce((s, [id, q]) => s + (q > 0 ? q * (priceMap[id] ?? 0) * (1 + (tvaMap[id] ?? 0.085)) : 0), 0);
       drawerTotalEl.textContent = ht.toFixed(2).replace('.', ',') + ' €';
       drawerTtcEl.textContent   = ttc.toFixed(2).replace('.', ',') + ' €';
+    }
+
+    function updateTotalBar() {
+      if (!cartTotalBar) return;
+      const qty = calcTotalQty();
+      const ht  = calcTotalHT();
+      cartTotalBar.style.display = qty > 0 ? '' : 'none';
+      if (cartTotalBarQty)    cartTotalBarQty.textContent    = String(qty);
+      if (cartTotalBarAmount) cartTotalBarAmount.textContent = ht.toFixed(2).replace('.', ',') + ' €';
+      cartTotalBar.setAttribute('aria-label',
+        `Voir le panier — ${qty} article${qty !== 1 ? 's' : ''}, ${ht.toFixed(2).replace('.', ',')} € HT`
+      );
     }
 
     function renderDrawerItems() {
@@ -834,6 +872,7 @@ const productsMetaJSON = JSON.stringify(
     function renderCart() {
       updateBadge();
       updateTotal();
+      updateTotalBar();
       renderDrawerItems();
     }
 
@@ -2003,6 +2042,62 @@ const productsMetaJSON = JSON.stringify(
   box-sizing: content-box;
   transition: transform var(--dur-fast) var(--ease-out-expo), opacity var(--dur-fast);
 }
+/* ── Sticky cart total bar ────────────────────────── */
+/* Inset far enough from both edges to clear the cart toggle (right,
+   ~16-32px + 56px wide) and the WhatsApp FAB (left, ~16-20px + 52-56px
+   wide) — the bar only occupies the center strip between them. */
+.cart-total-bar {
+  position: fixed;
+  left: 84px;
+  right: 84px;
+  bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+  margin: 0 auto;
+  max-width: 340px;
+  z-index: var(--z-tooltip);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 11px var(--space-4);
+  border-radius: var(--radius-full);
+  border: none;
+  background: var(--color-ink);
+  color: white;
+  cursor: pointer;
+  font-family: var(--font-body);
+  white-space: nowrap;
+  box-shadow: 0 8px 24px oklch(0 0 0 / 0.28), 0 2px 6px oklch(0 0 0 / 0.16);
+  transition: transform var(--dur-fast), box-shadow var(--dur-fast);
+}
+.cart-total-bar:hover { transform: translateY(-1px); box-shadow: 0 10px 28px oklch(0 0 0 / 0.32), 0 2px 6px oklch(0 0 0 / 0.18); }
+.cart-total-bar:active { transform: translateY(0) scale(0.98); }
+.cart-total-bar:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+
+.ctb-icon { flex-shrink: 0; opacity: 0.85; }
+.ctb-qty {
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+.ctb-sep { color: oklch(1 0 0 / 0.4); }
+.ctb-amount {
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.ctb-suffix {
+  font-size: 10px;
+  font-weight: 600;
+  color: oklch(1 0 0 / 0.6);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+@media (max-width: 480px) {
+  .cart-total-bar { left: 76px; right: 76px; padding: 10px var(--space-3); gap: 5px; }
+  .ctb-suffix { display: none; }
+}
+
 .cart-toggle-badge[data-empty="true"] {
   transform: scale(0);
   opacity: 0;
