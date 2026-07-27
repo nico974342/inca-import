@@ -216,6 +216,11 @@ if (Astro.request.method === 'POST') {
             ? pump.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 4, maximumFractionDigits: 4 })
             : <span class="pump-none">Non calculé</span>}
         </span>
+        {pump != null && (product as any).units_per_carton && (
+          <span class="pump-stat-sub">
+            ({(pump / (product as any).units_per_carton).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}/unité)
+          </span>
+        )}
       </div>
       {pump != null && (product as any).price_ht != null && (
         (() => {
@@ -340,6 +345,11 @@ if (Astro.request.method === 'POST') {
 }
 
 .pump-stat-value--pump { color: oklch(0.38 0.12 220); }
+
+.pump-stat-sub {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
 
 .pump-none {
   font-family: var(--font-body);

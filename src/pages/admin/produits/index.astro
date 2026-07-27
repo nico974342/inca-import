@@ -244,7 +244,12 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                   <span class="td-sub"> ({formatUnitPrice(p.price_ht, (p as any).units_per_carton ?? null)}/unité)</span>
                 )}
               </td>
-              <td class="td-mono td-muted">{formatPrice((p as any).prix_achat_moyen_ht ?? null)}</td>
+              <td class="td-mono td-muted">
+                {formatPrice((p as any).prix_achat_moyen_ht ?? null)}
+                {formatUnitPrice((p as any).prix_achat_moyen_ht ?? null, (p as any).units_per_carton ?? null) && (
+                  <span class="td-sub"> ({formatUnitPrice((p as any).prix_achat_moyen_ht ?? null, (p as any).units_per_carton ?? null)}/unité)</span>
+                )}
+              </td>
               {(() => {
                 const mi = margeInfo(p.margePct);
                 return <td><span class={`marge-chip ${mi.cls}`}>{mi.label}</span></td>;
