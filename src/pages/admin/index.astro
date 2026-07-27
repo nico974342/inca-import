@@ -5,6 +5,29 @@ import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, CONTACT_STATUS_LABEL, CONTACT_S
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'] as const;
 
+// ── "Actions de la semaine" — add/toggle handled inline, like other admin
+//    pages in this app (no separate API route for a widget this small). ──
+if (Astro.request.method === 'POST') {
+  const data   = await Astro.request.formData();
+  const action = data.get('action') as string;
+
+  if (action === 'add') {
+    const content = (data.get('content') as string)?.trim().slice(0, 200);
+    if (content) await supabaseAdmin.from('weekly_tasks').insert({ content });
+  } else if (action === 'toggle') {
+    const id   = data.get('id') as string;
+    const done = data.get('done') === 'true';
+    if (id) {
+      await supabaseAdmin
+        .from('weekly_tasks')
+        .update({ done, done_at: done ? new Date().toISOString() : null })
+        .eq('id', id);
+    }
+  }
+
+  return Astro.redirect('/admin');
+}
+
 const now = new Date();
 const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
@@ -22,6 +45,10 @@ for (let i = MONTHS_BACK - 1; i >= 0; i--) {
 // simply ignores rows older than its own 6-month window (idx === -1 below).
 const marginWindowStart = new Date(now.getFullYear(), now.getMonth() - 12, now.getDate()).toISOString();
 
+// Pending tasks stay visible no matter how old; done ones self-clear after
+// 14 days so the widget doesn't accumulate stale checked-off clutter.
+const taskFreshnessCutoff = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000).toISOString();
+
 const [
   { count: commandesEnAttente },
   { count: livraisonsEnAttente },
@@ -31,6 +58,7 @@ const [
   { data: lowStockItems },
   { data: twelveMonthOrders },
   { data: allProductsRaw },
+  { data: weeklyTasksRaw },
 ] = await Promise.all([
   supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }).eq('status', 'en_attente'),
   supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }).in('status', ['confirmee', 'en_preparation', 'expediee']),
@@ -44,7 +72,17 @@ const [
     .in('status', REVENUE_STATUSES)
     .gte('created_at', marginWindowStart),
   supabaseAdmin.from('products').select('id, name, stock_quantity, prix_achat_moyen_ht'),
+  supabaseAdmin
+    .from('weekly_tasks')
+    .select('id, content, done, created_at, done_at')
+    .or(`done.eq.false,and(done.eq.true,done_at.gte.${taskFreshnessCutoff})`)
+    .order('created_at', { ascending: true }),
 ]);
+
+const pendingTasks = (weeklyTasksRaw ?? []).filter(t => !t.done);
+const doneTasks = (weeklyTasksRaw ?? [])
+  .filter(t => t.done)
+  .sort((a, b) => new Date(b.done_at ?? b.created_at).getTime() - new Date(a.done_at ?? a.created_at).getTime());
 
 // ── Bucket the order set by month for the 6-month chart, aggregate
 //    current-month products/categories, AND sum 12-month margin per
@@ -54,6 +92,8 @@ const buckets: MonthBucket[] = monthDefs.map(m => ({ label: m.label, caHt: 0, ma
 
 const productAgg = new Map<string, { productId: string | null; name: string; unit: string | null; qty: number; ca: number; marge: number; hasPump: boolean }>();
 const categoryAgg = new Map<string, number>();
+const categoryMargeAgg = new Map<string, number>();
+const categoryMargePartial = new Set<string>();
 const margin12moByProduct = new Map<string, number>();
 const cogs12moByProduct = new Map<string, number>();
 const CURRENT_IDX = MONTHS_BACK - 1;
@@ -95,7 +135,14 @@ for (const order of (twelveMonthOrders ?? [])) {
       productAgg.set(key, prev);
 
       const cat = (item as any).products?.category ?? null;
-      if (cat) categoryAgg.set(cat, (categoryAgg.get(cat) ?? 0) + prix * qty);
+      if (cat) {
+        categoryAgg.set(cat, (categoryAgg.get(cat) ?? 0) + prix * qty);
+        if (pump != null) {
+          categoryMargeAgg.set(cat, (categoryMargeAgg.get(cat) ?? 0) + (prix - pump) * qty);
+        } else {
+          categoryMargePartial.add(cat);
+        }
+      }
     }
   }
 }
@@ -202,6 +249,16 @@ const categorySplit = CAT_ORDER
   .map(cat => ({ cat, label: CAT_LABEL[cat], color: CAT_COLOR[cat], ca: categoryAgg.get(cat) ?? 0 }))
   .filter(c => c.ca > 0)
   .map(c => ({ ...c, pct: categoryTotal > 0 ? (c.ca / categoryTotal) * 100 : 0 }));
+
+// ── Margin split this month — same categories/colors, but marge HT instead
+//    of CA. Lines with no PUMP recorded are excluded from the sum (can't
+//    know their margin), flagged with a "*" rather than silently ignored. ──
+const categoryMargeTotal = Array.from(categoryMargeAgg.values()).reduce((s, v) => s + v, 0);
+const categoryMargeSplit = CAT_ORDER
+  .map(cat => ({ cat, label: CAT_LABEL[cat], color: CAT_COLOR[cat], marge: categoryMargeAgg.get(cat) ?? 0, partial: categoryMargePartial.has(cat) }))
+  .filter(c => c.marge > 0)
+  .map(c => ({ ...c, pct: categoryMargeTotal > 0 ? (c.marge / categoryMargeTotal) * 100 : 0 }));
+const categoryMargeHasPartial = categoryMargeSplit.some(c => c.partial);
 
 // ── Trend chart geometry (plain SVG, computed server-side) ────────────────
 const CHART_W = 640, CHART_H = 200;
@@ -471,6 +528,43 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
         </div>
       </div>
 
+      <!-- Margin split -->
+      <div class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Marge par catégorie</h2>
+        </div>
+        <div class="cat-split-body">
+          {categoryMargeSplit.length > 0 ? (
+            <>
+              <div class="cat-bar">
+                {categoryMargeSplit.map(c => (
+                  <div
+                    class="cat-bar-segment"
+                    style={`width:${c.pct}%; background:${c.color};`}
+                    title={`${c.label} — ${formatCA(c.marge)} (${c.pct.toFixed(1)} %)`}
+                  ></div>
+                ))}
+              </div>
+              <ul class="cat-legend">
+                {categoryMargeSplit.map(c => (
+                  <li class="cat-legend-item">
+                    <span class="cat-legend-swatch" style={`background:${c.color};`}></span>
+                    <span class="cat-legend-name">{c.label}{c.partial && '*'}</span>
+                    <span class="cat-legend-pct">{c.pct.toFixed(0)} %</span>
+                    <span class="cat-legend-ca">{formatCA(c.marge)}</span>
+                  </li>
+                ))}
+              </ul>
+              {categoryMargeHasPartial && (
+                <p class="chart-footnote">* Marge partielle — PUMP non défini pour certains produits.</p>
+              )}
+            </>
+          ) : (
+            <p class="panel-empty">Aucune marge ce mois-ci.</p>
+          )}
+        </div>
+      </div>
+
       <!-- Top 5 products -->
       <div class="panel">
         <div class="panel-header">
@@ -605,6 +699,53 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
       )}
     </div>
   )}
+
+  <!-- ── Actions de la semaine ─────────────────────────── -->
+  <div class="panel tasks-panel">
+    <div class="panel-header">
+      <h2 class="panel-title">Actions de la semaine</h2>
+    </div>
+    <div class="tasks-body">
+      <form method="post" class="task-add-form">
+        <input type="hidden" name="action" value="add" />
+        <input type="text" name="content" class="task-add-input" placeholder="Ajouter une tâche…" maxlength="200" required autocomplete="off" />
+        <button type="submit" class="task-add-btn">Ajouter</button>
+      </form>
+
+      {pendingTasks.length === 0 && doneTasks.length === 0 ? (
+        <p class="panel-empty">Aucune tâche pour l'instant.</p>
+      ) : (
+        <ul class="task-list">
+          {pendingTasks.map(t => (
+            <li class="task-item">
+              <form method="post" class="task-toggle-form">
+                <input type="hidden" name="action" value="toggle" />
+                <input type="hidden" name="id" value={t.id} />
+                <input type="hidden" name="done" value="true" />
+                <label class="task-label">
+                  <input type="checkbox" class="task-checkbox" />
+                  <span class="task-text">{t.content}</span>
+                </label>
+              </form>
+            </li>
+          ))}
+          {doneTasks.map(t => (
+            <li class="task-item task-item--done">
+              <form method="post" class="task-toggle-form">
+                <input type="hidden" name="action" value="toggle" />
+                <input type="hidden" name="id" value={t.id} />
+                <input type="hidden" name="done" value="false" />
+                <label class="task-label">
+                  <input type="checkbox" class="task-checkbox" checked />
+                  <span class="task-text task-text--done">{t.content}</span>
+                </label>
+              </form>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  </div>
 
   <!-- ── Activity grid ──────────────────────────────── -->
   <div class="activity-grid">
@@ -770,6 +911,16 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
   wrap?.addEventListener('mouseleave', hideAll);
   wrap?.addEventListener('focusout', (e) => {
     if (!wrap.contains(e.relatedTarget)) hideAll();
+  });
+</script>
+
+<script>
+  // Checking/unchecking a task submits its (already-flipped) hidden "done"
+  // value — the form is the toggle, the checkbox is just its visible face.
+  document.querySelectorAll<HTMLInputElement>('.task-toggle-form .task-checkbox').forEach(cb => {
+    cb.addEventListener('change', () => {
+      (cb.closest('form') as HTMLFormElement | null)?.requestSubmit();
+    });
   });
 </script>
 
@@ -1282,6 +1433,81 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
 }
 .stock-pill-qty--zero {
   background: oklch(0.52 0.20 25);
+}
+
+/* ── Actions de la semaine ────────────────────────── */
+.tasks-panel { margin-bottom: var(--space-5); }
+.tasks-body { padding: var(--space-4) var(--space-5) var(--space-5); }
+
+.task-add-form {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+.task-add-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color var(--dur-fast);
+}
+.task-add-input:focus { border-color: var(--color-primary); }
+.task-add-btn {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: white;
+  background: var(--color-primary);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-5);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity var(--dur-fast);
+}
+.task-add-btn:hover { opacity: 0.88; }
+
+.task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.task-item {
+  border-bottom: 1px solid var(--color-border);
+}
+.task-item:last-child { border-bottom: none; }
+.task-toggle-form { display: contents; }
+
+.task-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  cursor: pointer;
+}
+.task-checkbox {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+.task-text {
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+}
+.task-text--done {
+  color: var(--color-muted);
+  text-decoration: line-through;
 }
 
 /* ── Activity panels ──────────────────────────────── */
