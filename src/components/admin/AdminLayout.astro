@@ -3,7 +3,7 @@ import '../../styles/global.css';
 
 interface Props {
   title: string;
-  activeNav?: 'dashboard' | 'produits' | 'stocks' | 'reception' | 'clients' | 'commande-rapide' | 'livraison' | 'commandes' | 'marges' | 'journal';
+  activeNav?: 'dashboard' | 'produits' | 'stocks' | 'reception' | 'clients' | 'commande-rapide' | 'livraison' | 'commandes' | 'marges' | 'journal' | 'chat';
 }
 
 const { title, activeNav } = Astro.props;
@@ -29,7 +29,7 @@ const { title, activeNav } = Astro.props;
     rel="stylesheet"
   />
 </head>
-<body class="admin-body">
+<body class="admin-body" data-active-nav={activeNav ?? ''}>
 
   <!-- Mobile top bar -->
   <header class="admin-topbar">
@@ -124,6 +124,13 @@ const { title, activeNav } = Astro.props;
           </svg>
           Journal
         </a>
+        <a href="/admin/chat" class={`nav-link ${activeNav === 'chat' ? 'nav-link--active' : ''}`}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2 3h12v8H6l-3 3v-3H2V3Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+          </svg>
+          Chat
+          <span class="nav-badge" id="chatBadge" style="display:none">0</span>
+        </a>
       </nav>
 
       <div class="sidebar-footer">
@@ -178,6 +185,50 @@ const { title, activeNav } = Astro.props;
       sidebar?.classList.contains('is-open') ? closeSidebar() : openSidebar();
     });
     overlay?.addEventListener('click', closeSidebar);
+
+    // ── Chat unread badge ──────────────────────────────────────────
+    // "Unread" is tracked client-side only (localStorage last-seen
+    // timestamp) — simplest option, no per-admin read-state table needed.
+    (function chatBadge() {
+      const badge = document.getElementById('chatBadge');
+      if (!badge) return;
+
+      const STORAGE_KEY = 'chat_last_seen';
+      const isChatPage = document.body.dataset.activeNav === 'chat';
+
+      if (isChatPage) {
+        // The chat page itself keeps last-seen fresh; never show its own badge.
+        localStorage.setItem(STORAGE_KEY, new Date().toISOString());
+        return;
+      }
+
+      function getLastSeen() {
+        let v = localStorage.getItem(STORAGE_KEY);
+        if (!v) {
+          v = new Date().toISOString();
+          localStorage.setItem(STORAGE_KEY, v);
+        }
+        return v;
+      }
+
+      async function checkUnread() {
+        try {
+          const since = getLastSeen();
+          const res = await fetch('/api/admin/chat/unread?since=' + encodeURIComponent(since));
+          if (!res.ok) return;
+          const { count } = await res.json();
+          if (count > 0) {
+            badge.textContent = count > 9 ? '9+' : String(count);
+            badge.style.display = '';
+          } else {
+            badge.style.display = 'none';
+          }
+        } catch { /* silent — next tick retries */ }
+      }
+
+      checkUnread();
+      setInterval(checkUnread, 8000);
+    })();
   </script>
 </body>
 </html>
@@ -266,6 +317,20 @@ const { title, activeNav } = Astro.props;
   -webkit-tap-highlight-color: transparent;
 }
 .nav-link svg { flex-shrink: 0; }
+.nav-badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: white;
+  background: var(--color-primary);
+  border-radius: var(--radius-full);
+}
 .nav-link:hover { color: var(--color-ink); background: var(--color-surface); }
 .nav-link--active {
   color: var(--color-primary-deep);
