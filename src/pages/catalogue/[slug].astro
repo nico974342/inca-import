@@ -132,7 +132,10 @@ const unitPriceHT = (product.price_ht != null && product.units_per_carton)
             {product.unit && (
               <div class="attr-row">
                 <dt>Conditionnement</dt>
-                <dd>{product.unit}</dd>
+                <dd>
+                  {product.unit}
+                  {product.units_per_carton ? ` (${product.units_per_carton} unités)` : ''}
+                </dd>
               </div>
             )}
             {product.sku && (
@@ -145,16 +148,12 @@ const unitPriceHT = (product.price_ht != null && product.units_per_carton)
               <div class="attr-row attr-row--price">
                 <dt>Prix HT</dt>
                 <dd>
-                  {unitPriceHT != null ? (
-                    <div class="price-value-wrap">
-                      <span class="price-value">{fmtHT(unitPriceHT)}<span class="price-value-suffix"> /unité</span></span>
-                      <span class="price-secondary">
-                        {fmtHT(Number(product.price_ht))} /{product.unit ?? 'carton'} ({product.units_per_carton} unités)
-                      </span>
-                    </div>
-                  ) : (
-                    <span class="price-value">{fmtHT(Number(product.price_ht))}</span>
-                  )}
+                  <div class="price-value-wrap">
+                    <span class="price-value">{fmtHT(Number(product.price_ht))}<span class="price-value-suffix"> /{product.unit ?? 'carton'}</span></span>
+                    {unitPriceHT != null && (
+                      <span class="price-secondary">soit {fmtHT(unitPriceHT)} /unité</span>
+                    )}
+                  </div>
                 </dd>
               </div>
             )}
@@ -178,9 +177,12 @@ const unitPriceHT = (product.price_ht != null && product.units_per_carton)
               data-unit={product.unit ?? 'carton'}
             >
               <div class="qty-row">
-                <button type="button" class="qty-btn qty-btn--dec" aria-label={`Retirer ${product.name} du panier`}>−</button>
+                <button type="button" class="qty-btn qty-btn--dec" aria-label={`Retirer un ${product.unit ?? 'carton'} de ${product.name} du panier`}>−</button>
                 <span class="qty-val" data-empty={cartQty === 0}>{cartQty}</span>
-                <button type="button" class="qty-btn qty-btn--inc" aria-label={`Ajouter ${product.name} au panier`}>+</button>
+                <span class="qty-unit-label" id="slugQtyUnitLabel" aria-hidden="true">
+                  {cartQty > 1 ? `${product.unit ?? 'carton'}s` : (product.unit ?? 'carton')}
+                </span>
+                <button type="button" class="qty-btn qty-btn--inc" aria-label={`Ajouter un ${product.unit ?? 'carton'} de ${product.name} au panier`}>+</button>
               </div>
               <p class="qty-stock-warn" id="slug-stock-warn" aria-live="polite"></p>
               <a href="/commande" class="btn btn-primary cart-cta" id="goToOrder" style={cartQty === 0 ? 'display:none' : ''}>
@@ -226,6 +228,7 @@ const unitPriceHT = (product.price_ht != null && product.units_per_carton)
     const valSpan    = area.querySelector<HTMLElement>('.qty-val')!;
     const decBtn     = area.querySelector<HTMLButtonElement>('.qty-btn--dec')!;
     const incBtn     = area.querySelector<HTMLButtonElement>('.qty-btn--inc')!;
+    const unitLabel  = document.getElementById('slugQtyUnitLabel');
     const goToOrder  = document.getElementById('goToOrder') as HTMLElement | null;
     const warnEl     = document.getElementById('slug-stock-warn') as HTMLElement | null;
 
@@ -242,6 +245,7 @@ const unitPriceHT = (product.price_ht != null && product.units_per_carton)
     function render() {
       valSpan.textContent   = String(qty);
       valSpan.dataset.empty = qty === 0 ? 'true' : 'false';
+      if (unitLabel) unitLabel.textContent = qty > 1 ? `${unit}s` : unit;
       if (goToOrder) goToOrder.style.display = qty > 0 ? '' : 'none';
       if (stock !== null) incBtn.disabled = qty >= stock;
     }
@@ -521,6 +525,12 @@ const unitPriceHT = (product.price_ht != null && product.units_per_carton)
 .qty-val[data-empty="true"] {
   color: var(--color-muted);
   font-weight: 400;
+}
+
+.qty-unit-label {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-muted);
 }
 
 .qty-stock-warn {

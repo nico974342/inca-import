@@ -229,32 +229,23 @@ const productsMetaJSON = JSON.stringify(
                       ) : p.name}
                     </h2>
                     {isClient && !isPending && priceFormatted && (
-                      unitPriceFormatted ? (
-                        <div class="product-price-group">
-                          <p class="product-price" aria-label={`Prix à l'unité : ${unitPriceFormatted} euros HT`}>
-                            {unitPriceFormatted}&nbsp;<span class="price-currency">€</span>
-                            <span class="price-suffix">/unité HT</span>
-                          </p>
-                          <p class="product-price-secondary">
-                            {priceFormatted}&nbsp;€ /{p.unit ?? 'carton'} ({p.units_per_carton} unités)
-                          </p>
-                        </div>
-                      ) : (
-                        <p class="product-price" aria-label={`Prix : ${priceFormatted} euros HT`}>
+                      <div class="product-price-group">
+                        <p class="product-price" aria-label={`Prix : ${priceFormatted} euros HT par ${p.unit ?? 'carton'}`}>
                           {priceFormatted}&nbsp;<span class="price-currency">€</span>
-                          <span class="price-suffix">HT</span>
+                          <span class="price-suffix">/{p.unit ?? 'carton'} HT</span>
                         </p>
-                      )
+                        {unitPriceFormatted && (
+                          <p class="product-price-secondary">soit {unitPriceFormatted} € /unité</p>
+                        )}
+                      </div>
                     )}
                   </div>
 
-                  {!(isClient && !isPending && priceFormatted && unitPriceFormatted) && (
-                    p.units_per_carton ? (
-                      <p class="product-unit">{p.units_per_carton} unités/{p.unit ?? 'carton'}</p>
-                    ) : p.unit ? (
-                      <p class="product-unit">{p.unit}</p>
-                    ) : null
-                  )}
+                  {p.units_per_carton ? (
+                    <p class="product-unit">{p.units_per_carton} unités/{p.unit ?? 'carton'}</p>
+                  ) : p.unit ? (
+                    <p class="product-unit">{p.unit}</p>
+                  ) : null}
 
                   {isClient && !isPending && (p.stock_quantity ?? 0) > 0 && (
                     <p class={`prod-stock prod-stock--${(p.stock_quantity ?? 0) < 5 ? 'low' : 'ok'}`}>
@@ -275,8 +266,9 @@ const productsMetaJSON = JSON.stringify(
                         data-price={priceMap[p.id] ?? 0}
                         data-tva={tvaMap[p.id] ?? 0.085}
                         data-stock={p.stock_quantity !== null ? String(p.stock_quantity) : ''}
+                        data-unit={p.unit ?? 'carton'}
                       >
-                        <button type="button" class="qty-btn qty-btn--dec" aria-label={`Retirer ${p.name} du panier`}>−</button>
+                        <button type="button" class="qty-btn qty-btn--dec" aria-label={`Retirer un ${p.unit ?? 'carton'} de ${p.name} du panier`}>−</button>
                         <input
                           class="qty-val"
                           type="text"
@@ -284,9 +276,12 @@ const productsMetaJSON = JSON.stringify(
                           pattern="[0-9]*"
                           value={String(cartMap[p.id] ?? 0)}
                           data-empty={!cartMap[p.id]}
-                          aria-label={`Quantité de ${p.name}`}
+                          aria-label={`Quantité de ${p.name}, en ${p.unit ?? 'carton'}s`}
                         />
-                        <button type="button" class="qty-btn qty-btn--inc" aria-label={`Ajouter ${p.name} au panier`}>+</button>
+                        <span class="qty-unit-label" aria-hidden="true">
+                          {(cartMap[p.id] ?? 0) > 1 ? `${p.unit ?? 'carton'}s` : (p.unit ?? 'carton')}
+                        </span>
+                        <button type="button" class="qty-btn qty-btn--inc" aria-label={`Ajouter un ${p.unit ?? 'carton'} de ${p.name} au panier`}>+</button>
                       </div>
                       <p class="qty-stock-warn" id={`stock-warn-${p.id}`} aria-live="polite"></p>
                     </>
@@ -938,13 +933,16 @@ const productsMetaJSON = JSON.stringify(
       const initQty   = parseInt(ctrl.dataset.initialQty ?? '0', 10);
       if (initQty > 0) cartState[productId] = initQty;
 
-      const valInput = ctrl.querySelector<HTMLInputElement>('.qty-val')!;
-      const decBtn   = ctrl.querySelector<HTMLButtonElement>('.qty-btn--dec')!;
-      const incBtn   = ctrl.querySelector<HTMLButtonElement>('.qty-btn--inc')!;
+      const valInput   = ctrl.querySelector<HTMLInputElement>('.qty-val')!;
+      const decBtn     = ctrl.querySelector<HTMLButtonElement>('.qty-btn--dec')!;
+      const incBtn     = ctrl.querySelector<HTMLButtonElement>('.qty-btn--inc')!;
+      const unitLabel  = ctrl.querySelector<HTMLElement>('.qty-unit-label');
+      const unitWord   = ctrl.dataset.unit ?? 'carton';
 
       function refreshCard(qty: number) {
         valInput.value        = String(qty);
         valInput.dataset.empty = qty === 0 ? 'true' : 'false';
+        if (unitLabel) unitLabel.textContent = qty > 1 ? `${unitWord}s` : unitWord;
       }
       refreshCard(initQty);
 
@@ -1481,8 +1479,8 @@ const productsMetaJSON = JSON.stringify(
 .qty-btn.btn-pressed { animation: btn-press 0.22s var(--ease-out-expo); }
 
 .qty-val {
-  flex: 1;
-  min-width: 2rem;
+  flex: 0 0 auto;
+  width: 2.75rem;
   height: 32px;
   text-align: center;
   font-size: var(--text-base);
@@ -1509,6 +1507,17 @@ const productsMetaJSON = JSON.stringify(
   color: var(--color-primary);
 }
 .qty-val[data-empty="true"] { color: oklch(0.74 0.06 45.9); font-weight: 600; }
+
+.qty-unit-label {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .qty-stock-warn {
   font-size: var(--text-xs);
