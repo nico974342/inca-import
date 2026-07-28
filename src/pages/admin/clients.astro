@@ -262,6 +262,10 @@ function formatDate(iso: string) {
 }
 ---
 <AdminLayout title="Clients" activeNav="clients">
+  <div class="clients-toolbar">
+    <a href="/admin/clients/performances" class="btn btn-ghost">📊 Performances clients</a>
+  </div>
+
   <details class="new-client-panel">
     <summary class="new-client-toggle">
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -532,6 +536,12 @@ function formatDate(iso: string) {
 </script>
 
 <style>
+.clients-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--space-4);
+}
+
 .success-alert {
   display: flex;
   align-items: center;

@@ -125,7 +125,10 @@ const clientOrders = Array.from(orderMap.values())
 
 const orderIds = clientOrders.map(o => o.id);
 const { data: allItems } = orderIds.length
-  ? await supabaseAdmin.from('order_items').select('order_id, quantity, price_ht_snapshot').in('order_id', orderIds)
+  ? await supabaseAdmin
+      .from('order_items')
+      .select('order_id, product_id, product_name, quantity, price_ht_snapshot, pump_snapshot')
+      .in('order_id', orderIds)
   : { data: [] };
 
 const totalsByOrder: Record<string, number | null> = {};
@@ -138,9 +141,50 @@ for (const item of allItems ?? []) {
 
 const ordersWithTotal = clientOrders.map(o => ({ ...o, total: totalsByOrder[o.id] ?? null }));
 const lastOrderDate   = clientOrders[0]?.created_at ?? null;
-const totalCA = ordersWithTotal
-  .filter(o => o.status !== 'annulee')
+const revenueOrders = ordersWithTotal.filter(o => o.status !== 'annulee');
+const totalCA = revenueOrders.reduce((sum, o) => sum + (o.total ?? 0), 0);
+
+// ── Statistiques ─────────────────────────────────────────────────────
+const twelveMonthsAgo = new Date();
+twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+const ca12mo = revenueOrders
+  .filter(o => new Date(o.created_at) >= twelveMonthsAgo)
   .reduce((sum, o) => sum + (o.total ?? 0), 0);
+
+const panierMoyen = revenueOrders.length > 0 ? totalCA / revenueOrders.length : null;
+
+const nonAnnuleeOrderIds = new Set(revenueOrders.map(o => o.id));
+const productStatsMap = new Map<string, { name: string; qty: number; ca: number }>();
+let margeTotale = 0;
+for (const item of allItems ?? []) {
+  if (!nonAnnuleeOrderIds.has(item.order_id)) continue;
+  const price = (item as any).price_ht_snapshot != null ? Number((item as any).price_ht_snapshot) : null;
+  const pump  = (item as any).pump_snapshot != null ? Number((item as any).pump_snapshot) : null;
+  if (price != null && pump != null) {
+    margeTotale += (price - pump) * item.quantity;
+  }
+  const key = item.product_id ?? item.product_name;
+  if (!key) continue;
+  const existing = productStatsMap.get(key) ?? { name: item.product_name, qty: 0, ca: 0 };
+  existing.qty += item.quantity;
+  if (price != null) existing.ca += price * item.quantity;
+  productStatsMap.set(key, existing);
+}
+const topProducts = Array.from(productStatsMap.values())
+  .sort((a, b) => b.ca - a.ca)
+  .slice(0, 5);
+
+let frequenceLabel = 'Aucune commande';
+if (clientOrders.length === 1) {
+  frequenceLabel = 'Une seule commande';
+} else if (clientOrders.length >= 2) {
+  const dates = clientOrders.map(o => new Date(o.created_at).getTime()).sort((a, b) => a - b);
+  const spanDays = (dates[dates.length - 1] - dates[0]) / (1000 * 60 * 60 * 24);
+  const avgIntervalDays = spanDays / (clientOrders.length - 1);
+  frequenceLabel = avgIntervalDays >= 1
+    ? `1 commande tous les ${avgIntervalDays.toFixed(0)} jours en moyenne`
+    : 'Plusieurs commandes par jour en moyenne';
+}
 
 const CLIENT_STATUS_LABEL = SHARED_CLIENT_STATUS_LABEL;
 const ORDER_STATUS_LABEL  = SHARED_ORDER_STATUS_LABEL;
@@ -239,10 +283,64 @@ const roleError = Astro.url.searchParams.get('role_error');
       <dl class="info-list">
         <div class="info-row"><dt>Compte créé le</dt><dd>{formatDate(client.created_at)}</dd></div>
         <div class="info-row"><dt>Dernière commande</dt><dd>{lastOrderDate ? formatDate(lastOrderDate) : '—'}</dd></div>
-        <div class="info-row"><dt>Nombre de commandes</dt><dd>{clientOrders.length}</dd></div>
-        <div class="info-row"><dt>CA total généré</dt><dd class="ca-total">{totalCA.toFixed(2).replace('.', ',')} € HT</dd></div>
       </dl>
     </div>
+  </div>
+
+  <div class="card">
+    <h2 class="card-title">Statistiques</h2>
+    <div class="stats-grid">
+      <div class="stat-tile">
+        <span class="stat-label">CA total HT</span>
+        <span class="stat-value">{totalCA.toFixed(2).replace('.', ',')} €</span>
+      </div>
+      <div class="stat-tile">
+        <span class="stat-label">CA 12 derniers mois</span>
+        <span class="stat-value">{ca12mo.toFixed(2).replace('.', ',')} €</span>
+      </div>
+      <div class="stat-tile">
+        <span class="stat-label">Marge totale HT générée</span>
+        <span class="stat-value stat-value--marge">{margeTotale.toFixed(2).replace('.', ',')} €</span>
+      </div>
+      <div class="stat-tile">
+        <span class="stat-label">Nombre de commandes</span>
+        <span class="stat-value">{clientOrders.length}</span>
+      </div>
+      <div class="stat-tile">
+        <span class="stat-label">Panier moyen HT</span>
+        <span class="stat-value">{panierMoyen != null ? `${panierMoyen.toFixed(2).replace('.', ',')} €` : '—'}</span>
+      </div>
+      <div class="stat-tile">
+        <span class="stat-label">Fréquence de commande</span>
+        <span class="stat-value stat-value--freq">{frequenceLabel}</span>
+      </div>
+    </div>
+
+    <h3 class="stats-subheading">Top 5 produits commandés</h3>
+    {topProducts.length === 0 ? (
+      <p class="empty-orders">Aucun produit commandé.</p>
+    ) : (
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Produit</th>
+              <th class="th-r">Quantité totale</th>
+              <th class="th-r">CA généré</th>
+            </tr>
+          </thead>
+          <tbody>
+            {topProducts.map(p => (
+              <tr>
+                <td>{p.name ?? '—'}</td>
+                <td class="td-r">{p.qty}</td>
+                <td class="td-r">{p.ca.toFixed(2).replace('.', ',')} €</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
   </div>
 
   <div class="card role-card">
@@ -591,6 +689,46 @@ const roleError = Astro.url.searchParams.get('role_error');
   margin: 0 0 var(--space-4);
 }
 
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+.stat-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  background: var(--color-surface);
+  border-radius: var(--radius-sm);
+}
+.stat-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.stat-value {
+  font-family: var(--font-display);
+  font-size: 1.375rem;
+  font-weight: 700;
+  color: var(--color-ink);
+  letter-spacing: -0.02em;
+}
+.stat-value--marge { color: var(--color-primary-deep); }
+.stat-value--freq  { font-size: var(--text-base); }
+
+.stats-subheading {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 var(--space-3);
+}
+
 .info-list { display: flex; flex-direction: column; gap: var(--space-3); margin: 0; }
 .info-row {
   display: flex;
@@ -603,7 +741,6 @@ const roleError = Astro.url.searchParams.get('role_error');
 .info-row:last-child { padding-bottom: 0; border-bottom: none; }
 .info-row dt { font-size: var(--text-xs); color: var(--color-muted); white-space: nowrap; }
 .info-row dd { font-size: var(--text-sm); font-weight: 500; color: var(--color-ink); text-align: right; margin: 0; }
-.ca-total { color: var(--color-primary-deep); font-weight: 700; }
 
 .status-badge {
   display: inline-block;

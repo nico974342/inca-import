@@ -1,0 +1,310 @@
+---
+import AdminLayout from '../../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../../lib/supabase';
+
+const { data: clientsRaw } = await supabaseAdmin
+  .from('client_accounts')
+  .select('id, nom, societe, email, status')
+  .order('nom', { ascending: true });
+
+const { data: ordersRaw } = await supabaseAdmin
+  .from('orders')
+  .select('id, email, status, created_at');
+
+const orderIds = (ordersRaw ?? []).map(o => o.id);
+const { data: itemsRaw } = orderIds.length
+  ? await supabaseAdmin.from('order_items').select('order_id, quantity, price_ht_snapshot, pump_snapshot').in('order_id', orderIds)
+  : { data: [] };
+
+// ── Per-order HT total + margin, from item snapshots ──────────────────
+const orderTotals = new Map<string, { ht: number; marge: number }>();
+for (const item of (itemsRaw ?? [])) {
+  const price = (item as any).price_ht_snapshot != null ? Number((item as any).price_ht_snapshot) : null;
+  const pump  = (item as any).pump_snapshot != null ? Number((item as any).pump_snapshot) : null;
+  const cur = orderTotals.get(item.order_id) ?? { ht: 0, marge: 0 };
+  if (price != null) cur.ht += price * item.quantity;
+  if (price != null && pump != null) cur.marge += (price - pump) * item.quantity;
+  orderTotals.set(item.order_id, cur);
+}
+
+// ── Orders have no client_id FK — client_accounts has no user_id column
+//    either, so email is the only reliable match (same as the per-client
+//    detail page's primary lookup). Indexed once here since we're doing
+//    this for every client. ──
+type OrderRow = { id: string; email: string | null; status: string; created_at: string };
+const ordersByEmail = new Map<string, OrderRow[]>();
+for (const o of (ordersRaw ?? []) as OrderRow[]) {
+  if (!o.email) continue;
+  const key = o.email.toLowerCase();
+  if (!ordersByEmail.has(key)) ordersByEmail.set(key, []);
+  ordersByEmail.get(key)!.push(o);
+}
+
+const allStats = (clientsRaw ?? []).map(c => {
+  const orders = c.email ? (ordersByEmail.get(c.email.toLowerCase()) ?? []) : [];
+  const revenueOrders = orders.filter(o => o.status !== 'annulee');
+  const totalCA    = revenueOrders.reduce((s, o) => s + (orderTotals.get(o.id)?.ht ?? 0), 0);
+  const totalMarge = revenueOrders.reduce((s, o) => s + (orderTotals.get(o.id)?.marge ?? 0), 0);
+  const lastOrderDate = orders.length
+    ? orders.reduce((latest, o) => new Date(o.created_at) > new Date(latest) ? o.created_at : latest, orders[0].created_at)
+    : null;
+  const panierMoyen = revenueOrders.length > 0 ? totalCA / revenueOrders.length : null;
+
+  return {
+    id: c.id,
+    nom: c.nom,
+    societe: c.societe,
+    status: c.status,
+    nbCommandes: orders.length,
+    totalCA,
+    totalMarge,
+    panierMoyen,
+    lastOrderDate,
+  };
+});
+
+// ── Search ──────────────────────────────────────────────────────────
+const q = (Astro.url.searchParams.get('q') ?? '').trim().toLowerCase();
+const filtered = q
+  ? allStats.filter(c => c.nom.toLowerCase().includes(q) || (c.societe ?? '').toLowerCase().includes(q))
+  : allStats;
+
+// ── Sortable columns — CA descending by default, to surface the best
+//    clients immediately without needing to click anything. ──────────
+const SORT_KEYS = ['nom', 'ca', 'marge', 'commandes', 'derniere', 'panier'] as const;
+type SortKey = (typeof SORT_KEYS)[number];
+const sortParam = Astro.url.searchParams.get('sort') ?? '';
+const currentSort: SortKey = (SORT_KEYS as readonly string[]).includes(sortParam) ? (sortParam as SortKey) : 'ca';
+const currentDir: 'asc' | 'desc' = Astro.url.searchParams.get('dir') === 'asc' ? 'asc' : 'desc';
+
+function sortUrl(key: SortKey): string {
+  const params = new URLSearchParams(Astro.url.searchParams);
+  const nextDir = currentSort === key && currentDir === 'desc' ? 'asc' : 'desc';
+  params.set('sort', key);
+  params.set('dir', nextDir);
+  return `/admin/clients/performances?${params.toString()}`;
+}
+
+function compareNullableNumber(a: number | null, b: number | null, dir: 1 | -1): number {
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  return dir * (a - b);
+}
+
+const dir = currentDir === 'asc' ? 1 : -1;
+const rows = [...filtered].sort((a, b) => {
+  switch (currentSort) {
+    case 'nom':       return dir * a.nom.localeCompare(b.nom, 'fr');
+    case 'ca':        return compareNullableNumber(a.totalCA, b.totalCA, dir as 1 | -1);
+    case 'marge':     return compareNullableNumber(a.totalMarge, b.totalMarge, dir as 1 | -1);
+    case 'commandes': return compareNullableNumber(a.nbCommandes, b.nbCommandes, dir as 1 | -1);
+    case 'panier':    return compareNullableNumber(a.panierMoyen, b.panierMoyen, dir as 1 | -1);
+    case 'derniere':  return compareNullableNumber(
+      a.lastOrderDate ? new Date(a.lastOrderDate).getTime() : null,
+      b.lastOrderDate ? new Date(b.lastOrderDate).getTime() : null,
+      dir as 1 | -1,
+    );
+    default: return 0;
+  }
+});
+
+function formatEuros(n: number): string {
+  return n.toFixed(2).replace('.', ',') + ' €';
+}
+function formatDate(iso: string | null): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+}
+---
+<AdminLayout title="Performances clients" activeNav="clients">
+  <a href="/admin/clients" class="back-link">← Retour aux clients</a>
+
+  <form method="get" class="search-row">
+    {currentSort && <input type="hidden" name="sort" value={currentSort} />}
+    {currentDir && <input type="hidden" name="dir" value={currentDir} />}
+    <input
+      type="search"
+      name="q"
+      value={q}
+      placeholder="Rechercher un client par nom ou société…"
+      class="search-input"
+    />
+    <button type="submit" class="btn btn-ghost">Rechercher</button>
+  </form>
+
+  {rows.length === 0 ? (
+    <div class="empty-state">
+      <p class="empty-title">Aucun client ne correspond à votre recherche.</p>
+    </div>
+  ) : (
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>
+              <a href={sortUrl('nom')} class={`th-sort ${currentSort === 'nom' ? 'th-sort--active' : ''}`}>
+                Client
+                {currentSort === 'nom' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
+              </a>
+            </th>
+            <th class="th-num">
+              <a href={sortUrl('ca')} class={`th-sort ${currentSort === 'ca' ? 'th-sort--active' : ''}`}>
+                CA total HT
+                {currentSort === 'ca' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
+              </a>
+            </th>
+            <th class="th-num">
+              <a href={sortUrl('marge')} class={`th-sort ${currentSort === 'marge' ? 'th-sort--active' : ''}`}>
+                Marge totale HT
+                {currentSort === 'marge' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
+              </a>
+            </th>
+            <th class="th-num">
+              <a href={sortUrl('commandes')} class={`th-sort ${currentSort === 'commandes' ? 'th-sort--active' : ''}`}>
+                Commandes
+                {currentSort === 'commandes' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
+              </a>
+            </th>
+            <th class="th-num">
+              <a href={sortUrl('derniere')} class={`th-sort ${currentSort === 'derniere' ? 'th-sort--active' : ''}`}>
+                Dernière commande
+                {currentSort === 'derniere' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
+              </a>
+            </th>
+            <th class="th-num">
+              <a href={sortUrl('panier')} class={`th-sort ${currentSort === 'panier' ? 'th-sort--active' : ''}`}>
+                Panier moyen HT
+                {currentSort === 'panier' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
+              </a>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(c => (
+            <tr class="client-row" data-href={`/admin/clients/${c.id}`}>
+              <td>
+                <a href={`/admin/clients/${c.id}`} class="client-link">{c.nom}</a>
+                {c.societe && <div class="td-sub">{c.societe}</div>}
+              </td>
+              <td class="th-num td-mono">{formatEuros(c.totalCA)}</td>
+              <td class="th-num td-mono td-marge">{formatEuros(c.totalMarge)}</td>
+              <td class="th-num td-mono">{c.nbCommandes}</td>
+              <td class="th-num td-muted">{formatDate(c.lastOrderDate)}</td>
+              <td class="th-num td-mono">{c.panierMoyen != null ? formatEuros(c.panierMoyen) : '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )}
+</AdminLayout>
+
+<script>
+  document.querySelectorAll<HTMLTableRowElement>('tr.client-row').forEach(row => {
+    row.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('a')) return;
+      const href = row.dataset.href;
+      if (href) window.location.href = href;
+    });
+  });
+</script>
+
+<style>
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-muted);
+  text-decoration: none;
+  margin-bottom: var(--space-4);
+  transition: color var(--dur-fast);
+}
+.back-link:hover { color: var(--color-ink); }
+
+.search-row {
+  display: flex;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+.search-input {
+  flex: 1;
+  max-width: 360px;
+  padding: 0.625rem 0.875rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  min-height: 40px;
+  outline: none;
+  transition: border-color var(--dur-fast);
+}
+.search-input:focus { border-color: var(--color-primary); }
+
+.table-wrap {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.data-table thead th {
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+.th-num { text-align: right; }
+
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.th-sort:hover { color: var(--color-ink); }
+.th-sort--active { color: var(--color-ink); }
+.sort-arrow { font-size: 0.625rem; color: var(--color-primary-deep); }
+
+.data-table tbody td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table tbody tr.client-row { cursor: pointer; }
+.data-table tbody tr:hover td { background: var(--color-surface); }
+
+.client-link { font-weight: 500; color: var(--color-primary-deep); text-decoration: none; }
+.client-link:hover { text-decoration: underline; }
+.td-sub { font-size: var(--text-xs); color: var(--color-muted); margin-top: 2px; }
+.td-mono  { font-family: var(--font-mono); color: var(--color-ink); white-space: nowrap; }
+.td-muted { color: var(--color-muted); white-space: nowrap; }
+.td-marge { color: var(--color-primary-deep); font-weight: 600; }
+
+.empty-state {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-16) var(--space-8);
+  text-align: center;
+}
+.empty-title { font-weight: 600; color: var(--color-ink); }
+</style>
