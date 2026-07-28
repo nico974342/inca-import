@@ -2,7 +2,12 @@
 import AdminLayout from '../../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../../lib/supabase';
 import { logAdminAction } from '../../../../lib/audit';
-import { marginColorClass } from '../../../../lib/constants';
+import {
+  marginColorClass, REAPPRO_WEEKS_LOOKBACK, computeVitesseVente,
+  computeJoursAvantRupture, computeSuggestedReorderQty, isApproachingOrBelowSeuil,
+} from '../../../../lib/constants';
+
+const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'];
 
 const { id } = Astro.params;
 let formError = '';
@@ -24,6 +29,23 @@ const { data: purchaseHistory } = await supabaseAdmin
   .limit(50);
 
 const pump = (product as any).prix_achat_moyen_ht as number | null;
+
+// ── Réassort: sales velocity over the lookback window, for this product only ──
+const lookbackIso = new Date(Date.now() - REAPPRO_WEEKS_LOOKBACK * 7 * 24 * 60 * 60 * 1000).toISOString();
+const { data: salesRows } = await supabaseAdmin
+  .from('order_items')
+  .select('quantity, orders!inner(status, created_at)')
+  .eq('product_id', id)
+  .in('orders.status', REVENUE_STATUSES)
+  .gte('orders.created_at', lookbackIso);
+
+const soldQty = (salesRows ?? []).reduce((s, row) => s + row.quantity, 0);
+const vitesseVente = computeVitesseVente(soldQty);
+const joursAvantRupture = computeJoursAvantRupture(product.stock_quantity, vitesseVente);
+const seuilReappro = (product as any).seuil_reappro as number | null;
+const delaiLivraisonJours = (product as any).delai_livraison_jours as number | null;
+const suggestedReorderQty = computeSuggestedReorderQty(vitesseVente, delaiLivraisonJours, product.stock_quantity);
+const showSuggestion = isApproachingOrBelowSeuil(product.stock_quantity, seuilReappro, joursAvantRupture, delaiLivraisonJours);
 
 if (Astro.request.method === 'POST') {
   const data = await Astro.request.formData();
@@ -47,13 +69,15 @@ if (Astro.request.method === 'POST') {
   const position       = data.get('position') ? parseInt(data.get('position') as string) : 0;
   const stock_quantity = data.get('stock_quantity') ? parseInt(data.get('stock_quantity') as string, 10) : 0;
   const in_stock       = stock_quantity > 0;
+  const seuil_reappro         = data.get('seuil_reappro')         ? parseInt(data.get('seuil_reappro') as string, 10) : null;
+  const delai_livraison_jours = data.get('delai_livraison_jours') ? parseInt(data.get('delai_livraison_jours') as string, 10) : null;
 
   if (!name || !slug || !category) {
     formError = 'Le nom, le slug et la catégorie sont requis.';
   } else {
     const { error } = await supabaseAdmin
       .from('products')
-      .update({ name, slug, category, description, sku, price_ht, tva_rate, unit, units_per_carton, image_url, in_stock, position, stock_quantity })
+      .update({ name, slug, category, description, sku, price_ht, tva_rate, unit, units_per_carton, image_url, in_stock, position, stock_quantity, seuil_reappro, delai_livraison_jours })
       .eq('id', id);
 
     if (error) {
@@ -185,6 +209,19 @@ if (Astro.request.method === 'POST') {
           </div>
         </div>
 
+        <div class="field-group">
+          <div class="field">
+            <label for="seuil_reappro">Seuil de réapprovisionnement (cartons)</label>
+            <input type="number" id="seuil_reappro" name="seuil_reappro" min="0" value={seuilReappro ?? ''} placeholder="ex : 10" />
+            <p class="field-computed-hint">Le produit sera signalé « à réassortir » quand le stock atteint ce seuil ou passe en-dessous.</p>
+          </div>
+          <div class="field">
+            <label for="delai_livraison_jours">Délai de livraison fournisseur (jours)</label>
+            <input type="number" id="delai_livraison_jours" name="delai_livraison_jours" min="0" value={delaiLivraisonJours ?? 21} placeholder="21" />
+            <p class="field-computed-hint">Utilisé pour calculer la quantité suggérée à commander.</p>
+          </div>
+        </div>
+
         <div class="form-actions">
           <button type="submit" class="btn btn-primary">Enregistrer</button>
           <a href="/admin/produits" class="btn btn-ghost">Annuler</a>
@@ -233,6 +270,27 @@ if (Astro.request.method === 'POST') {
             </div>
           );
         })()
+      )}
+      <div class="pump-stat">
+        <span class="pump-stat-label">Vitesse de vente</span>
+        <span class="pump-stat-value">
+          {vitesseVente > 0 ? `${vitesseVente.toFixed(1)} cartons/semaine` : <span class="pump-none">Pas de vente récente</span>}
+        </span>
+        <span class="pump-stat-sub">(sur {REAPPRO_WEEKS_LOOKBACK} dernières semaines)</span>
+      </div>
+      <div class="pump-stat">
+        <span class="pump-stat-label">Jours avant rupture estimés</span>
+        <span class="pump-stat-value">
+          {joursAvantRupture != null ? `${Math.round(joursAvantRupture)} j` : <span class="pump-none">Non estimable</span>}
+        </span>
+      </div>
+      {showSuggestion && suggestedReorderQty != null && (
+        <div class="pump-stat">
+          <span class="pump-stat-label">Suggestion</span>
+          <span class="pump-stat-value pump-stat-value--suggestion">
+            {suggestedReorderQty > 0 ? `Commander ${suggestedReorderQty} cartons` : 'Stock suffisant'}
+          </span>
+        </div>
       )}
     </div>
 
@@ -345,6 +403,7 @@ if (Astro.request.method === 'POST') {
 }
 
 .pump-stat-value--pump { color: oklch(0.38 0.12 220); }
+.pump-stat-value--suggestion { color: oklch(0.42 0.14 60); }
 
 .pump-stat-sub {
   font-size: var(--text-xs);

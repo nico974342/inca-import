@@ -1,13 +1,16 @@
 ---
 import AdminLayout from '../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../lib/supabase';
-import { marginColorClass, computeGmroi, gmroiColorClass, computeStockRotation, rotationColorClass } from '../../../lib/constants';
+import {
+  marginColorClass, computeGmroi, gmroiColorClass, computeStockRotation, rotationColorClass,
+  REAPPRO_WEEKS_LOOKBACK, computeVitesseVente, computeJoursAvantRupture, isAtOrBelowSeuil,
+} from '../../../lib/constants';
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'];
 
 const { data: products, error } = await supabaseAdmin
   .from('products')
-  .select('id, name, category, sku, price_ht, unit, units_per_carton, in_stock, stock_quantity, position, prix_achat_moyen_ht')
+  .select('id, name, category, sku, price_ht, unit, units_per_carton, in_stock, stock_quantity, position, prix_achat_moyen_ht, seuil_reappro')
   .order('position', { ascending: true })
   .order('name', { ascending: true });
 
@@ -40,6 +43,21 @@ function productRotation(p: { id: string; stock_quantity: number | null; prix_ac
   return computeStockRotation(p.stock_quantity, p.prix_achat_moyen_ht, cogs12moByProduct.get(p.id) ?? null);
 }
 
+// ── Vitesse de vente / jours avant rupture — same order_items pull
+//    pattern as above, but over the shorter réassort lookback window. ──
+const reapproLookbackIso = new Date(Date.now() - REAPPRO_WEEKS_LOOKBACK * 7 * 24 * 60 * 60 * 1000).toISOString();
+const { data: recentSalesRows } = await supabaseAdmin
+  .from('order_items')
+  .select('product_id, quantity, orders!inner(status, created_at)')
+  .in('orders.status', REVENUE_STATUSES)
+  .gte('orders.created_at', reapproLookbackIso);
+
+const recentQtyByProduct = new Map<string, number>();
+for (const row of (recentSalesRows ?? [])) {
+  if (!row.product_id) continue;
+  recentQtyByProduct.set(row.product_id, (recentQtyByProduct.get(row.product_id) ?? 0) + row.quantity);
+}
+
 const CAT_LABEL: Record<string, string> = {
   boissons: 'Boissons',
   snacks: 'Snacks',
@@ -61,7 +79,7 @@ const filteredProducts = filterCat
 // ── Sortable columns ───────────────────────────────────────────────────
 // Marge/GMROI/rotation are computed values, so sorting happens in-memory
 // here rather than pushed down to the DB query.
-const SORT_KEYS = ['nom', 'categorie', 'prix', 'stock', 'marge', 'gmroi', 'rotation'] as const;
+const SORT_KEYS = ['nom', 'categorie', 'prix', 'stock', 'marge', 'gmroi', 'rotation', 'rupture'] as const;
 type SortKey = (typeof SORT_KEYS)[number];
 
 const sortParam = Astro.url.searchParams.get('sort') ?? '';
@@ -89,7 +107,13 @@ const rows = filteredProducts.map(p => {
   const pump = (p as any).prix_achat_moyen_ht ?? null;
   const prix = p.price_ht ?? null;
   const margePct = pump == null || prix == null || prix === 0 ? null : ((prix - pump) / prix) * 100;
-  return { ...p, margePct, gmroi: productGmroi(p as any), rotation: productRotation(p as any) };
+  const vitesseVente = computeVitesseVente(recentQtyByProduct.get(p.id) ?? 0);
+  const joursAvantRupture = computeJoursAvantRupture(p.stock_quantity, vitesseVente);
+  return {
+    ...p, margePct, gmroi: productGmroi(p as any), rotation: productRotation(p as any),
+    vitesseVente, joursAvantRupture,
+    needsReappro: isAtOrBelowSeuil(p.stock_quantity, (p as any).seuil_reappro ?? null),
+  };
 });
 
 // Nulls (no data yet — "—") always sort to the bottom, regardless of direction.
@@ -111,6 +135,7 @@ if (currentSort) {
       case 'marge':     return compareNullableNumber(a.margePct, b.margePct, dir as 1 | -1);
       case 'gmroi':     return compareNullableNumber(a.gmroi, b.gmroi, dir as 1 | -1);
       case 'rotation':  return compareNullableNumber(a.rotation, b.rotation, dir as 1 | -1);
+      case 'rupture':   return compareNullableNumber(a.joursAvantRupture, b.joursAvantRupture, dir as 1 | -1);
       default:          return 0;
     }
   });
@@ -224,6 +249,17 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                 {currentSort === 'stock' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
               </a>
             </th>
+            <th>
+              <a href={sortUrl('rupture')} class={`th-sort ${currentSort === 'rupture' ? 'th-sort--active' : ''}`}>
+                Rupture estimée
+                {currentSort === 'rupture' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
+              </a>
+              <span
+                class="help-icon"
+                tabindex="0"
+                title="Estimation basée sur la vitesse de vente moyenne des 10 dernières semaines (commandes confirmées ou livrées). « — » = pas de vente récente, pas d'estimation possible."
+              >?</span>
+            </th>
             <th>Pos.</th>
             <th></th>
           </tr>
@@ -265,12 +301,31 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                 </span>
               </td>
               <td>
-                {(p.stock_quantity ?? 0) === 0 ? (
-                  <span class="stock-chip stock-chip--out">Rupture</span>
-                ) : (p.stock_quantity ?? 0) < 5 ? (
-                  <span class="stock-chip stock-chip--low" title="Stock bas">{p.stock_quantity}</span>
+                <div class="stock-cell">
+                  {(p.stock_quantity ?? 0) === 0 ? (
+                    <span class="stock-chip stock-chip--out">Rupture</span>
+                  ) : (p.stock_quantity ?? 0) < 5 ? (
+                    <span class="stock-chip stock-chip--low" title="Stock bas">{p.stock_quantity}</span>
+                  ) : (
+                    <span class="stock-chip stock-chip--ok">{p.stock_quantity}</span>
+                  )}
+                  {p.needsReappro && (
+                    <span class="reappro-badge" title={`Seuil de réapprovisionnement : ${(p as any).seuil_reappro} cartons`}>
+                      ⚠ Réassort
+                    </span>
+                  )}
+                </div>
+              </td>
+              <td>
+                {p.joursAvantRupture != null ? (
+                  <span class={`rupture-chip ${p.joursAvantRupture <= 7 ? 'rupture-chip--soon' : p.joursAvantRupture <= 14 ? 'rupture-chip--warn' : ''}`}>
+                    {Math.round(p.joursAvantRupture)} j
+                  </span>
                 ) : (
-                  <span class="stock-chip stock-chip--ok">{p.stock_quantity}</span>
+                  <span class="td-muted">—</span>
+                )}
+                {p.vitesseVente > 0 && (
+                  <p class="td-sub">{p.vitesseVente.toFixed(1)} cartons/sem.</p>
                 )}
               </td>
               <td class="td-muted">{p.position}</td>
@@ -480,6 +535,38 @@ const DELETE_ERROR_MSG: Record<string, string> = {
 .stock-chip--ok  { background: oklch(0.92 0.08 145); color: oklch(0.32 0.14 145); }
 .stock-chip--low { background: oklch(0.95 0.07 60);  color: oklch(0.38 0.15 55);  }
 .stock-chip--out { background: oklch(0.95 0.04 25);  color: oklch(0.46 0.18 25);  }
+
+.stock-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.reappro-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+  background: oklch(0.95 0.07 60);
+  color: oklch(0.38 0.15 55);
+  border: 1px solid oklch(0.85 0.09 60);
+}
+
+.rupture-chip {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-ink);
+  white-space: nowrap;
+}
+.rupture-chip--warn { color: oklch(0.42 0.14 60); }
+.rupture-chip--soon { color: oklch(0.46 0.18 25); }
 
 .action-link {
   font-size: var(--text-sm);

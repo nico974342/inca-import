@@ -9,7 +9,7 @@ async function listProducts() {
   if (hasStockUpdatedAt) {
     const { data, error } = await supabaseAdmin
       .from('products')
-      .select('id, name, category, sku, stock_quantity, stock_updated_at')
+      .select('id, name, category, sku, stock_quantity, stock_updated_at, seuil_reappro')
       .order('stock_quantity', { ascending: true })
       .order('name', { ascending: true });
 
@@ -20,7 +20,7 @@ async function listProducts() {
 
   const { data, error } = await supabaseAdmin
     .from('products')
-    .select('id, name, category, sku, stock_quantity')
+    .select('id, name, category, sku, stock_quantity, seuil_reappro')
     .order('stock_quantity', { ascending: true })
     .order('name', { ascending: true });
 

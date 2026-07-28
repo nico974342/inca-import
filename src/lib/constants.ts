@@ -156,3 +156,71 @@ export function rotationColorClass(value: number | null): 'green' | 'amber' | 'r
   if (value >= 3) return 'amber';
   return 'red';
 }
+
+// ── Réassort (automated restocking) ─────────────────────────────────────
+/** Rolling window used to estimate weekly sales velocity — 8-12 weeks
+ *  smooths out week-to-week noise without going stale on trend shifts. */
+export const REAPPRO_WEEKS_LOOKBACK = 10;
+
+/** Cartons/week, from total quantity sold (confirmed+ orders) over the
+ *  lookback window. */
+export function computeVitesseVente(qtyOverWindow: number): number {
+  return qtyOverWindow / REAPPRO_WEEKS_LOOKBACK;
+}
+
+/** Estimated days of stock remaining at the current sales pace. Null when
+ *  there's no sales velocity to extrapolate from (can't estimate a runway
+ *  for a product that hasn't sold in the window — distinct from 0, which
+ *  means it's already out). */
+export function computeJoursAvantRupture(
+  stockQuantity: number | null | undefined,
+  vitesseVenteWeekly: number | null | undefined,
+): number | null {
+  if (stockQuantity == null) return null;
+  if (stockQuantity <= 0) return 0;
+  if (!vitesseVenteWeekly || vitesseVenteWeekly <= 0) return null;
+  return stockQuantity / (vitesseVenteWeekly / 7);
+}
+
+/** Cartons to order so stock covers the supplier lead time at the current
+ *  sales pace: (daily rate × lead time) − stock on hand. Null when there's
+ *  no sales velocity to size an order from; 0 (not null) when the current
+ *  stock already covers the lead time — a real answer, not missing data. */
+export function computeSuggestedReorderQty(
+  vitesseVenteWeekly: number | null | undefined,
+  delaiLivraisonJours: number | null | undefined,
+  stockQuantity: number | null | undefined,
+): number | null {
+  if (!vitesseVenteWeekly || vitesseVenteWeekly <= 0) return null;
+  const delai = delaiLivraisonJours ?? 21;
+  const dailyRate = vitesseVenteWeekly / 7;
+  const suggested = Math.ceil(dailyRate * delai - (stockQuantity ?? 0));
+  return suggested > 0 ? suggested : 0;
+}
+
+/** Task 1's flag condition: stock at or below the reorder point. */
+export function isAtOrBelowSeuil(
+  stockQuantity: number | null | undefined,
+  seuilReappro: number | null | undefined,
+): boolean {
+  if (seuilReappro == null) return false;
+  return (stockQuantity ?? 0) <= seuilReappro;
+}
+
+/** Broader than isAtOrBelowSeuil — also true when stock is getting close
+ *  (within 50% headroom above the threshold) or when the estimated runway
+ *  is shorter than the supplier lead time, i.e. it would run out before a
+ *  fresh order could even arrive. Used to decide when a reorder suggestion
+ *  is worth showing, not just a bare "low stock" flag. */
+export function isApproachingOrBelowSeuil(
+  stockQuantity: number | null | undefined,
+  seuilReappro: number | null | undefined,
+  joursAvantRupture: number | null | undefined,
+  delaiLivraisonJours: number | null | undefined,
+): boolean {
+  if (seuilReappro == null) return false;
+  const stock = stockQuantity ?? 0;
+  if (stock <= seuilReappro * 1.5) return true;
+  if (joursAvantRupture != null && delaiLivraisonJours != null && joursAvantRupture <= delaiLivraisonJours) return true;
+  return false;
+}

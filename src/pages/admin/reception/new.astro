@@ -8,6 +8,7 @@ const { data: products } = await supabaseAdmin
   .order('name');
 
 const today = new Date().toISOString().split('T')[0];
+const preselectProductId = Astro.url.searchParams.get('product') ?? null;
 ---
 <AdminLayout title="Nouvelle réception fournisseur" activeNav="reception">
 
@@ -80,7 +81,7 @@ const today = new Date().toISOString().split('T')[0];
   </form>
 </AdminLayout>
 
-<script define:vars={{ products }}>
+<script define:vars={{ products, preselectProductId }}>
 const PRODUCTS = products ?? [];
 
 const productMap = {};
@@ -244,8 +245,8 @@ function checkDateHint() {
 dateInput?.addEventListener('change', checkDateHint);
 checkDateHint();
 
-// Start with one empty row
-addRow(null);
+// Start with one empty row — pre-selected if we arrived via a "réassort" link
+addRow(preselectProductId && PRODUCTS.some(p => p.id === preselectProductId) ? preselectProductId : null);
 </script>
 
 <style>
