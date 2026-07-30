@@ -195,16 +195,21 @@ const top5Products = Array.from(productAgg.values())
   .slice(0, 5);
 
 // ── Category split this month ──────────────────────────────────────────
-const CAT_ORDER = ['boissons', 'snacks', 'confiseries', 'divers'] as const;
+const CAT_ORDER = ['boissons', 'snacks', 'chips', 'confiseries', 'divers'] as const;
 const CAT_LABEL: Record<string, string> = {
-  boissons: 'Boissons', snacks: 'Snacks', confiseries: 'Confiseries', divers: 'Divers',
+  boissons: 'Boissons', snacks: 'Snacks', chips: 'Chips', confiseries: 'Confiseries', divers: 'Divers',
 };
 // Chart-strength steps of the same hues used by the category badges elsewhere
 // in the app (boissons/snacks/confiseries/divers = 220/60/330/275), re-stepped
 // for CVD separation as solid marks (validated: adjacent ΔE 7.9, normal ΔE 16.6).
+// "chips" (180, teal) was added later — at the other four's own lightness/chroma
+// it clashed with confiseries under every CVD simulation tried, so it sits at a
+// lighter L (0.75 vs ~0.50-0.68) to buy back separation; re-validated as a full
+// 5-color set (all pairs, not just adjacent) via the dataviz skill's validator.
 const CAT_COLOR: Record<string, string> = {
   boissons:    'oklch(0.60 0.14 220)',
   snacks:      'oklch(0.68 0.15 55)',
+  chips:       'oklch(0.75 0.14 180)',
   confiseries: 'oklch(0.60 0.16 350)',
   divers:      'oklch(0.50 0.13 285)',
 };

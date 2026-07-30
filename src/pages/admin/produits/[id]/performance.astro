@@ -22,6 +22,7 @@ if (!product) return Astro.redirect('/admin/produits');
 const CAT_LABEL: Record<string, string> = {
   boissons: 'Boissons',
   snacks: 'Snacks',
+  chips: 'Chips',
   confiseries: 'Confiseries',
   divers: 'Divers',
 };
@@ -467,6 +468,7 @@ const bars = monthDefs.map((m, i) => {
 }
 .badge--boissons    { background: oklch(0.93 0.05 220); color: oklch(0.35 0.10 220); }
 .badge--snacks      { background: oklch(0.94 0.05 60);  color: oklch(0.40 0.12 60);  }
+.badge--chips       { background: oklch(0.93 0.05 180); color: oklch(0.35 0.10 180); }
 .badge--confiseries { background: oklch(0.93 0.06 330); color: oklch(0.40 0.12 330); }
 .badge--divers      { background: oklch(0.93 0.05 275); color: oklch(0.40 0.12 275); }
 
