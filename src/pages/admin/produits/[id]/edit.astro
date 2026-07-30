@@ -234,7 +234,10 @@ if (Astro.request.method === 'POST') {
   <div class="pump-shell">
     <div class="pump-header">
       <h2 class="pump-title">Achats &amp; Coût</h2>
-      <a href={`/admin/reception/new`} class="btn btn-ghost btn-sm">+ Enregistrer une réception</a>
+      <div class="pump-header-actions">
+        <a href={`/admin/produits/${id}/performance`} class="btn btn-ghost btn-sm">📊 Voir les performances</a>
+        <a href={`/admin/reception/new`} class="btn btn-ghost btn-sm">+ Enregistrer une réception</a>
+      </div>
     </div>
 
     <div class="pump-stat-row">
@@ -343,6 +346,12 @@ if (Astro.request.method === 'POST') {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   overflow: hidden;
+}
+
+.pump-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .pump-header {
