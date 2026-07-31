@@ -3,7 +3,7 @@ import '../../styles/global.css';
 
 interface Props {
   title: string;
-  activeNav?: 'dashboard' | 'produits' | 'stocks' | 'reappro' | 'reception' | 'clients' | 'commande-rapide' | 'livraison' | 'commandes' | 'marges' | 'journal' | 'taches' | 'chat';
+  activeNav?: 'dashboard' | 'produits' | 'stocks' | 'reappro' | 'reception' | 'clients' | 'commande-rapide' | 'preparation' | 'livraison' | 'commandes' | 'marges' | 'journal' | 'taches' | 'chat';
 }
 
 const { title, activeNav } = Astro.props;
@@ -102,6 +102,14 @@ const { title, activeNav } = Astro.props;
             <path d="M2 3h1.5l2 7h7l1.5-5H5.5M6 12.5a.5.5 0 1 1 1 0 .5.5 0 0 1-1 0Zm5 0a.5.5 0 1 1 1 0 .5.5 0 0 1-1 0Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
           Prise de commande
+        </a>
+        <a href="/admin/preparation" class={`nav-link ${activeNav === 'preparation' ? 'nav-link--active' : ''}`}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M1.5 4.5 8 1.5l6.5 3v7L8 14.5l-6.5-3v-7Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M1.5 4.5 8 7.5l6.5-3M8 7.5v7" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M5.5 6.5 5 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          Préparation
         </a>
         <a href="/admin/commandes" class={`nav-link ${activeNav === 'commandes' ? 'nav-link--active' : ''}`}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">

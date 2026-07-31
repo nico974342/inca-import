@@ -1,0 +1,631 @@
+---
+import AdminLayout from '../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../lib/supabase';
+
+const PICKING_STATUSES = ['confirmee', 'en_preparation'];
+
+const { data: ordersRaw } = await supabaseAdmin
+  .from('orders')
+  .select('id, nom, societe, status, created_at')
+  .in('status', PICKING_STATUSES)
+  .order('created_at', { ascending: true });
+
+const orderIds = (ordersRaw ?? []).map(o => o.id);
+const { data: itemsRaw } = orderIds.length
+  ? await supabaseAdmin
+      .from('order_items')
+      .select('id, order_id, product_id, product_name, quantity, unit, picked')
+      .in('order_id', orderIds)
+      .order('product_name', { ascending: true })
+  : { data: [] };
+
+type ItemRow = {
+  id: string; order_id: string; product_id: string | null;
+  product_name: string; quantity: number; unit: string | null; picked: boolean;
+};
+
+const itemsByOrder = new Map<string, ItemRow[]>();
+for (const item of (itemsRaw ?? []) as ItemRow[]) {
+  if (!itemsByOrder.has(item.order_id)) itemsByOrder.set(item.order_id, []);
+  itemsByOrder.get(item.order_id)!.push(item);
+}
+
+const orders = (ordersRaw ?? []).map(o => {
+  const items = itemsByOrder.get(o.id) ?? [];
+  const pickedCount = items.filter(i => i.picked).length;
+  const totalItems = items.length;
+  return {
+    ...o,
+    pdv: o.societe || o.nom || 'Client',
+    items,
+    totalItems,
+    pickedCount,
+    allPicked: totalItems > 0 && pickedCount === totalItems,
+    pct: totalItems > 0 ? Math.round((pickedCount / totalItems) * 100) : 0,
+  };
+});
+
+const globalTotalItems = orders.reduce((s, o) => s + o.totalItems, 0);
+const globalPickedItems = orders.reduce((s, o) => s + o.pickedCount, 0);
+const globalPct = globalTotalItems > 0 ? Math.round((globalPickedItems / globalTotalItems) * 100) : 0;
+
+// ── Consolidated "par produit" view — every pending line, grouped across
+//    all orders on this page. ──
+type ProductLine = { itemId: string; orderId: string; clientLabel: string; qty: number; picked: boolean };
+type ProductAgg = { key: string; name: string; unit: string | null; totalQty: number; lines: ProductLine[] };
+
+const productAgg = new Map<string, ProductAgg>();
+for (const o of orders) {
+  for (const item of o.items) {
+    const key = item.product_id ?? item.product_name;
+    const agg = productAgg.get(key) ?? { key, name: item.product_name, unit: item.unit, totalQty: 0, lines: [] };
+    agg.totalQty += item.quantity;
+    agg.lines.push({ itemId: item.id, orderId: o.id, clientLabel: o.pdv, qty: item.quantity, picked: item.picked });
+    productAgg.set(key, agg);
+  }
+}
+
+const productRows = Array.from(productAgg.values())
+  .map(p => ({
+    ...p,
+    orderCount: new Set(p.lines.map(l => l.orderId)).size,
+    pickedCount: p.lines.filter(l => l.picked).length,
+    allPicked: p.lines.length > 0 && p.lines.every(l => l.picked),
+  }))
+  .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+---
+<AdminLayout title="Préparation des commandes" activeNav="preparation">
+  <div class="prep-sticky-header" id="prepStickyHeader">
+    <div class="prep-progress-row">
+      <span class="prep-progress-label">Articles préparés</span>
+      <span class="prep-progress-count" id="globalCount">{globalPickedItems}/{globalTotalItems}</span>
+    </div>
+    <div class="prep-progress-track">
+      <div class="prep-progress-fill" id="globalFill" style={`width:${globalPct}%`}></div>
+    </div>
+    <div class="prep-view-toggle" role="tablist" aria-label="Mode d'affichage">
+      <button type="button" class="prep-view-btn prep-view-btn--active" data-view="commande" role="tab" aria-selected="true">
+        Par commande
+      </button>
+      <button type="button" class="prep-view-btn" data-view="produit" role="tab" aria-selected="false">
+        Par produit
+      </button>
+    </div>
+  </div>
+
+  {orders.length === 0 ? (
+    <div class="prep-empty">
+      <p class="prep-empty-title">Rien à préparer 🎉</p>
+      <p class="prep-empty-body">Les commandes confirmées apparaîtront ici, triées par ancienneté.</p>
+    </div>
+  ) : (
+    <>
+      <!-- ── Par commande ─────────────────────────────────────────── -->
+      <div class="prep-view" data-view-panel="commande">
+        {orders.map(o => (
+          <details class="order-card" data-order-id={o.id} data-already-prepping={o.status === 'en_preparation' ? 'true' : 'false'}>
+            <summary class="order-card-summary">
+              <div class="order-card-summary-main">
+                <span class="order-client-name">{o.nom}</span>
+                <span class="order-pdv">{o.pdv}</span>
+              </div>
+              <div class="order-card-summary-side">
+                <span class="order-progress-text" data-order-progress-text>{o.pickedCount}/{o.totalItems}</span>
+                <svg class="order-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </div>
+            </summary>
+
+            <div class="order-progress-track">
+              <div class="order-progress-fill" data-order-progress-fill style={`width:${o.pct}%`}></div>
+            </div>
+
+            <ul class="pick-list">
+              {o.items.map(item => (
+                <li class="pick-row" data-item-row data-item-id={item.id} data-picked={item.picked ? 'true' : 'false'}>
+                  <label class="pick-row-label">
+                    <input type="checkbox" class="pick-checkbox" data-item-checkbox data-item-id={item.id} checked={item.picked} />
+                    <span class="pick-product-name">{item.product_name}</span>
+                    <span class="pick-qty">{item.quantity} <span class="pick-unit">{item.unit ?? 'cartons'}</span></span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+
+            <div class="order-ready-row">
+              <button
+                type="button"
+                class="btn-mark-ready"
+                data-mark-ready
+                data-order-id={o.id}
+                hidden={!o.allPicked || o.status === 'en_preparation'}
+              >
+                ✓ Marquer comme prête
+              </button>
+              {o.status === 'en_preparation' && (
+                <span class="already-prepping-tag" data-already-tag>En préparation</span>
+              )}
+            </div>
+          </details>
+        ))}
+      </div>
+
+      <!-- ── Par produit (consolidé) ──────────────────────────────── -->
+      <div class="prep-view" data-view-panel="produit" hidden>
+        {productRows.map(p => (
+          <details class="product-card" data-product-key={p.key}>
+            <summary class="product-card-summary">
+              <input
+                type="checkbox"
+                class="pick-checkbox pick-checkbox--product"
+                data-product-checkbox
+                data-item-ids={p.lines.map(l => l.itemId).join(',')}
+                checked={p.allPicked}
+                onclick="event.stopPropagation()"
+              />
+              <div class="product-card-summary-main">
+                <span class="product-name">{p.name}</span>
+                <span class="product-meta">{p.orderCount} commande{p.orderCount !== 1 ? 's' : ''}</span>
+              </div>
+              <span class="pick-qty">{p.totalQty} <span class="pick-unit">{p.unit ?? 'cartons'}</span></span>
+              <svg class="order-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </summary>
+
+            <ul class="pick-list">
+              {p.lines.map(l => (
+                <li class="pick-row pick-row--sub" data-item-row data-item-id={l.itemId} data-picked={l.picked ? 'true' : 'false'}>
+                  <label class="pick-row-label">
+                    <input type="checkbox" class="pick-checkbox" data-item-checkbox data-item-id={l.itemId} checked={l.picked} />
+                    <span class="pick-product-name">{l.clientLabel}</span>
+                    <span class="pick-qty">{l.qty} <span class="pick-unit">{p.unit ?? 'cartons'}</span></span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </details>
+        ))}
+      </div>
+    </>
+  )}
+</AdminLayout>
+
+<script>
+  // ── View toggle ────────────────────────────────────────────────
+  document.querySelectorAll<HTMLButtonElement>('.prep-view-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const view = btn.dataset.view;
+      document.querySelectorAll<HTMLButtonElement>('.prep-view-btn').forEach(b => {
+        const active = b === btn;
+        b.classList.toggle('prep-view-btn--active', active);
+        b.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      document.querySelectorAll<HTMLElement>('[data-view-panel]').forEach(panel => {
+        panel.hidden = panel.dataset.viewPanel !== view;
+      });
+    });
+  });
+
+  // ── Sticky header offset — sits right below the mobile topbar when
+  //    it's visible, flush to the top otherwise. ──
+  function syncStickyOffset() {
+    const topbar = document.querySelector<HTMLElement>('.admin-topbar');
+    const header = document.getElementById('prepStickyHeader');
+    if (!topbar || !header) return;
+    const visible = getComputedStyle(topbar).display !== 'none';
+    header.style.top = visible ? `${topbar.offsetHeight}px` : '0px';
+  }
+  syncStickyOffset();
+  window.addEventListener('resize', syncStickyOffset);
+
+  // ── Picked-state propagation — every DOM node tagged with a given
+  //    item id (checkbox + row, across BOTH views) gets updated together,
+  //    so switching views never shows stale state. ──
+  function applyPickedState(itemIds: string[], picked: boolean) {
+    for (const id of itemIds) {
+      document.querySelectorAll<HTMLElement>(`[data-item-id="${id}"]`).forEach(el => {
+        if (el instanceof HTMLInputElement && el.dataset.itemCheckbox !== undefined) {
+          el.checked = picked;
+        }
+        if (el.hasAttribute('data-item-row')) {
+          el.dataset.picked = picked ? 'true' : 'false';
+        }
+      });
+    }
+    recomputeProgress();
+  }
+
+  function recomputeProgress() {
+    // Per order (also the canonical, one-row-per-item source for the global count).
+    let globalTotal = 0;
+    let globalDone = 0;
+    document.querySelectorAll<HTMLElement>('.order-card').forEach(card => {
+      const rows = card.querySelectorAll<HTMLElement>('[data-item-row]');
+      const total = rows.length;
+      const done = Array.from(rows).filter(r => r.dataset.picked === 'true').length;
+      globalTotal += total;
+      globalDone += done;
+
+      const text = card.querySelector<HTMLElement>('[data-order-progress-text]');
+      if (text) text.textContent = `${done}/${total}`;
+      const fill = card.querySelector<HTMLElement>('[data-order-progress-fill]');
+      if (fill) fill.style.width = total > 0 ? `${(done / total) * 100}%` : '0%';
+
+      const readyBtn = card.querySelector<HTMLButtonElement>('[data-mark-ready]');
+      const alreadyPrepping = card.dataset.alreadyPrepping === 'true';
+      if (readyBtn) readyBtn.hidden = alreadyPrepping || !(total > 0 && done === total);
+    });
+
+    const globalCountEl = document.getElementById('globalCount');
+    if (globalCountEl) globalCountEl.textContent = `${globalDone}/${globalTotal}`;
+    const globalFillEl = document.getElementById('globalFill');
+    if (globalFillEl) globalFillEl.style.width = globalTotal > 0 ? `${(globalDone / globalTotal) * 100}%` : '0%';
+
+    // Per product (checkbox reflects "every underlying line picked").
+    document.querySelectorAll<HTMLElement>('.product-card').forEach(card => {
+      const rows = card.querySelectorAll<HTMLElement>('[data-item-row]');
+      const total = rows.length;
+      const done = Array.from(rows).filter(r => r.dataset.picked === 'true').length;
+      const cb = card.querySelector<HTMLInputElement>('[data-product-checkbox]');
+      if (cb) {
+        cb.checked = total > 0 && done === total;
+        cb.indeterminate = done > 0 && done < total;
+      }
+    });
+  }
+
+  async function postToggle(itemIds: string[], picked: boolean): Promise<boolean> {
+    try {
+      const res = await fetch('/api/admin/preparation/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemIds, picked }),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  // Initial paint already has the right checked/hidden state server-side,
+  // but indeterminate (partially-picked product rows) can only be set via
+  // JS — run once up front so a reload mid-pick looks right immediately.
+  recomputeProgress();
+
+  document.addEventListener('change', async (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLInputElement) || target.type !== 'checkbox') return;
+
+    if (target.dataset.itemCheckbox !== undefined) {
+      const itemId = target.dataset.itemId!;
+      const picked = target.checked;
+      applyPickedState([itemId], picked);
+      const ok = await postToggle([itemId], picked);
+      if (!ok) applyPickedState([itemId], !picked);
+    } else if (target.dataset.productCheckbox !== undefined) {
+      const itemIds = (target.dataset.itemIds ?? '').split(',').filter(Boolean);
+      if (itemIds.length === 0) return;
+      const picked = target.checked;
+      applyPickedState(itemIds, picked);
+      const ok = await postToggle(itemIds, picked);
+      if (!ok) applyPickedState(itemIds, !picked);
+    }
+  });
+
+  // ── Mark ready ───────────────────────────────────────────────────
+  document.addEventListener('click', async (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-mark-ready]');
+    if (!btn) return;
+    const orderId = btn.dataset.orderId!;
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Enregistrement…';
+
+    try {
+      const res = await fetch('/api/admin/preparation/mark-ready', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || 'Erreur inconnue');
+      }
+      const card = document.querySelector<HTMLElement>(`.order-card[data-order-id="${orderId}"]`);
+      if (card) {
+        card.dataset.alreadyPrepping = 'true';
+        btn.hidden = true;
+        if (!card.querySelector('[data-already-tag]')) {
+          const tag = document.createElement('span');
+          tag.className = 'already-prepping-tag';
+          tag.setAttribute('data-already-tag', '');
+          tag.textContent = 'Prête ✓';
+          btn.insertAdjacentElement('afterend', tag);
+        }
+      }
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+      alert(err instanceof Error ? err.message : 'Erreur — réessayez.');
+    }
+  });
+</script>
+
+<style>
+/* ── Sticky progress header ───────────────────────────────────── */
+.prep-sticky-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+  margin: calc(var(--space-6) * -1) calc(var(--space-8) * -1) var(--space-5);
+  padding: var(--space-4) var(--space-8);
+}
+
+.prep-progress-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+.prep-progress-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-muted);
+}
+.prep-progress-count {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-ink);
+  letter-spacing: -0.02em;
+}
+
+.prep-progress-track {
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-2);
+  overflow: hidden;
+  margin-bottom: var(--space-4);
+}
+.prep-progress-fill {
+  height: 100%;
+  background: oklch(0.60 0.14 145);
+  border-radius: var(--radius-full);
+  transition: width 0.25s var(--ease-out-quart);
+}
+
+.prep-view-toggle {
+  display: flex;
+  gap: var(--space-2);
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  padding: 4px;
+}
+.prep-view-btn {
+  flex: 1;
+  padding: var(--space-3) var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-muted);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 44px;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.prep-view-btn--active {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  box-shadow: 0 1px 3px oklch(0 0 0 / 0.08);
+}
+
+/* ── Empty state ──────────────────────────────────────────────── */
+.prep-empty {
+  padding: var(--space-16) var(--space-8);
+  text-align: center;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.prep-empty-title { font-size: 1.25rem; font-weight: 700; color: var(--color-ink); margin-bottom: var(--space-2); }
+.prep-empty-body { color: var(--color-muted); }
+
+/* ── Order / product cards ────────────────────────────────────── */
+.order-card,
+.product-card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-4);
+  overflow: hidden;
+}
+
+.order-card-summary,
+.product-card-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  min-height: 64px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.order-card-summary::-webkit-details-marker,
+.product-card-summary::-webkit-details-marker,
+.order-card-summary::marker,
+.product-card-summary::marker { display: none; content: ''; }
+
+.order-card-summary-main,
+.product-card-summary-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.order-client-name,
+.product-name {
+  font-size: 1.0625rem;
+  font-weight: 700;
+  color: var(--color-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.order-pdv,
+.product-meta {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+
+.order-card-summary-side {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+.order-progress-text {
+  font-family: var(--font-mono);
+  font-size: 1.0625rem;
+  font-weight: 700;
+  color: var(--color-ink);
+  white-space: nowrap;
+}
+.order-chevron {
+  color: var(--color-muted);
+  transition: transform var(--dur-fast);
+  flex-shrink: 0;
+}
+details[open] > summary .order-chevron { transform: rotate(180deg); }
+
+.order-progress-track {
+  height: 6px;
+  background: var(--color-surface-2);
+  margin: 0 var(--space-5);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+.order-progress-fill {
+  height: 100%;
+  background: oklch(0.60 0.14 145);
+  border-radius: var(--radius-full);
+  transition: width 0.25s var(--ease-out-quart);
+}
+
+/* ── Pick rows — the core thumb-friendly control ─────────────────
+   Checkbox on the left, product name in the middle, big bold qty
+   on the right. Picked = dimmed + struck through, still legible. */
+.pick-list { list-style: none; margin: 0; padding: var(--space-3) 0; }
+
+.pick-row {
+  border-bottom: 1px solid var(--color-border);
+}
+.pick-row:last-child { border-bottom: none; }
+
+.pick-row-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  min-height: 56px;
+  cursor: pointer;
+}
+.pick-row--sub .pick-row-label { padding-left: var(--space-8); }
+
+.pick-checkbox {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  accent-color: oklch(0.568 0.149 45.9);
+  cursor: pointer;
+}
+.pick-checkbox--product {
+  margin-right: calc(var(--space-1) * -1);
+}
+
+.pick-product-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--color-ink);
+  overflow-wrap: break-word;
+}
+
+.pick-qty {
+  flex-shrink: 0;
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--color-ink);
+  white-space: nowrap;
+}
+.pick-unit {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-muted);
+}
+
+.pick-row[data-picked="true"] .pick-product-name,
+.pick-row[data-picked="true"] .pick-qty,
+.pick-row[data-picked="true"] .pick-unit {
+  color: var(--color-muted);
+  text-decoration: line-through;
+}
+.pick-row[data-picked="true"] { background: var(--color-surface); }
+
+/* ── Mark ready ───────────────────────────────────────────────── */
+.order-ready-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--color-border);
+}
+.btn-mark-ready {
+  width: 100%;
+  padding: var(--space-4);
+  min-height: 56px;
+  background: oklch(0.55 0.15 145);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-body);
+  font-size: 1.0625rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background var(--dur-fast);
+}
+.btn-mark-ready:hover { background: oklch(0.48 0.15 145); }
+.btn-mark-ready:disabled { opacity: 0.6; cursor: default; }
+
+.already-prepping-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-full);
+  background: oklch(0.92 0.08 145);
+  color: oklch(0.32 0.14 145);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  .prep-sticky-header { margin: calc(var(--space-4) * -1) calc(var(--space-5) * -1) var(--space-4); padding: var(--space-3) var(--space-5); }
+}
+
+@media (max-width: 640px) {
+  .prep-progress-count { font-size: 1.25rem; }
+  .pick-product-name { font-size: 1rem; }
+  .pick-qty { font-size: 1.125rem; }
+}
+</style>
