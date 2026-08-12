@@ -18,7 +18,7 @@ const CAT_LABEL: Record<string, string> = {
 
 const { data: trackedProducts } = await supabaseAdmin
   .from('products')
-  .select('id, name, sku, category, unit, stock_quantity, seuil_reappro, delai_livraison_jours')
+  .select('id, name, sku, category, unit, stock_quantity, seuil_reappro, delai_livraison_jours, created_at')
   .not('seuil_reappro', 'is', null)
   .order('name', { ascending: true });
 
@@ -61,7 +61,7 @@ if (productIds.length > 0) {
 const UNGROUPED_LABEL = 'Fournisseur non renseigné';
 
 const rows = atRiskProducts.map(p => {
-  const vitesseVente = computeVitesseVente(salesQtyByProduct.get(p.id) ?? 0);
+  const vitesseVente = computeVitesseVente(salesQtyByProduct.get(p.id) ?? 0, (p as any).created_at);
   const joursAvantRupture = computeJoursAvantRupture(p.stock_quantity, vitesseVente);
   const suggestedQty = computeSuggestedReorderQty(vitesseVente, p.delai_livraison_jours, p.stock_quantity);
   return {

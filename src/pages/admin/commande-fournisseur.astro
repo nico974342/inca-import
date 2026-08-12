@@ -3,6 +3,7 @@ import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import {
   REAPPRO_WEEKS_LOOKBACK, computeVitesseVente,
+  effectiveHistoryWeeks, VITESSE_SHORT_HISTORY_WEEKS,
   COUVERTURE_DEFAULT_WEEKS, COUVERTURE_HORIZON_MONTHS, couvertureHorizonWeeks,
   computeCouvertureWeeks, computeCouvertureOrderQty,
 } from '../../lib/constants';
@@ -28,7 +29,7 @@ const horizonWeeks = couvertureHorizonWeeks(horizonMonths);
 
 const { data: products } = await supabaseAdmin
   .from('products')
-  .select('id, name, sku, category, unit, units_per_carton, stock_quantity, prix_achat_moyen_ht')
+  .select('id, name, sku, category, unit, units_per_carton, stock_quantity, prix_achat_moyen_ht, created_at')
   .order('name', { ascending: true });
 
 const allProducts = products ?? [];
@@ -68,7 +69,9 @@ if (productIds.length > 0) {
 const UNGROUPED_LABEL = 'Fournisseur non renseigné';
 
 const rows = allProducts.map(p => {
-  const vitesseVente = computeVitesseVente(salesQtyByProduct.get(p.id) ?? 0);
+  const createdAt = (p as any).created_at ?? null;
+  const historyWeeks = effectiveHistoryWeeks(createdAt);
+  const vitesseVente = computeVitesseVente(salesQtyByProduct.get(p.id) ?? 0, createdAt);
   const couvertureWeeks = computeCouvertureWeeks(p.stock_quantity, vitesseVente);
   const suggested = computeCouvertureOrderQty(vitesseVente, horizonWeeks, p.stock_quantity);
   const pump = (p as any).prix_achat_moyen_ht != null ? Number((p as any).prix_achat_moyen_ht) : null;
@@ -77,6 +80,10 @@ const rows = allProducts.map(p => {
   return {
     ...p,
     vitesseVente,
+    historyWeeks,
+    // Velocity from only a few weeks of data — flagged so a thin sample
+    // isn't read with the same confidence as an established product.
+    shortHistory: historyWeeks < VITESSE_SHORT_HISTORY_WEEKS,
     couvertureWeeks,
     // null (no history) is surfaced as its own state but still starts at 0,
     // so the input is always a usable number.
@@ -111,6 +118,9 @@ function formatPrice(n: number | null): string {
     <strong>{horizonMonths} mois</strong> sans rupture, au rythme de vente des
     {REAPPRO_WEEKS_LOOKBACK} dernières semaines (commandes confirmées, en préparation, expédiées ou livrées).
     Les quantités sont modifiables — le total se recalcule en direct.
+    Pour un produit récent, la vitesse est ramenée à son ancienneté réelle et non aux
+    {REAPPRO_WEEKS_LOOKBACK} semaines pleines ; en dessous de {VITESSE_SHORT_HISTORY_WEEKS} semaines
+    d'historique, la ligne est marquée « historique court ».
   </p>
 
   <form method="get" class="controls">
@@ -190,7 +200,15 @@ function formatPrice(n: number | null): string {
               <td class="td-supplier">{p.supplier}</td>
               <td class="th-num td-mono">
                 {p.hasHistory ? (
-                  `${p.vitesseVente.toFixed(1)} /sem.`
+                  <>
+                    {p.vitesseVente.toFixed(1)} /sem.
+                    {p.shortHistory && (
+                      <p
+                        class="short-history"
+                        title={`Vitesse calculée sur ${p.historyWeeks.toFixed(1)} semaine(s) d'historique seulement — produit récent, chiffre moins fiable.`}
+                      >Historique court</p>
+                    )}
+                  </>
                 ) : (
                   <span class="td-muted">Pas d'historique</span>
                 )}
@@ -538,6 +556,17 @@ function formatPrice(n: number | null): string {
   text-align: right;
 }
 .qty-note--ok { color: oklch(0.48 0.13 150); }
+
+/* Thin sample behind the velocity — present but deliberately quiet. */
+.short-history {
+  margin: 3px 0 0;
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: oklch(0.52 0.11 60);
+  text-align: right;
+  cursor: help;
+}
 
 .totals-row td {
   padding: var(--space-4);

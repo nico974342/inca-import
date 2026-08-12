@@ -10,7 +10,7 @@ const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'];
 
 const { data: products, error } = await supabaseAdmin
   .from('products')
-  .select('id, name, category, sku, price_ht, unit, units_per_carton, in_stock, stock_quantity, position, prix_achat_moyen_ht, seuil_reappro')
+  .select('id, name, category, sku, price_ht, unit, units_per_carton, in_stock, stock_quantity, position, prix_achat_moyen_ht, seuil_reappro, created_at')
   .order('position', { ascending: true })
   .order('name', { ascending: true });
 
@@ -127,7 +127,7 @@ const rows = filteredProducts.map(p => {
   const pump = (p as any).prix_achat_moyen_ht ?? null;
   const prix = p.price_ht ?? null;
   const margePct = pump == null || prix == null || prix === 0 ? null : ((prix - pump) / prix) * 100;
-  const vitesseVente = computeVitesseVente(recentQtyByProduct.get(p.id) ?? 0);
+  const vitesseVente = computeVitesseVente(recentQtyByProduct.get(p.id) ?? 0, (p as any).created_at);
   const joursAvantRupture = computeJoursAvantRupture(p.stock_quantity, vitesseVente);
 
   // ── Per-row figures the search banner sums client-side ──

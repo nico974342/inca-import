@@ -162,10 +162,38 @@ export function rotationColorClass(value: number | null): 'green' | 'amber' | 'r
  *  smooths out week-to-week noise without going stale on trend shifts. */
 export const REAPPRO_WEEKS_LOOKBACK = 10;
 
+/** Below this many weeks of history the velocity rests on very little data
+ *  and should be presented as less reliable. */
+export const VITESSE_SHORT_HISTORY_WEEKS = 4;
+
+/** Minimum divisor, in weeks. A product created two days ago would otherwise
+ *  divide by ~0.3 and report a wildly overstated weekly pace. */
+const VITESSE_MIN_HISTORY_WEEKS = 1;
+
+/** How many weeks of history actually back the velocity: the lookback window,
+ *  capped by the product's age so a recently listed product isn't averaged
+ *  over weeks it did not exist, and floored so the divisor can't approach 0.
+ *  Falls back to the full window when the creation date is unknown. */
+export function effectiveHistoryWeeks(createdAt: string | Date | null | undefined): number {
+  if (!createdAt) return REAPPRO_WEEKS_LOOKBACK;
+  const createdMs = new Date(createdAt).getTime();
+  if (!Number.isFinite(createdMs)) return REAPPRO_WEEKS_LOOKBACK;
+  const ageWeeks = (Date.now() - createdMs) / (7 * 24 * 60 * 60 * 1000);
+  return Math.min(REAPPRO_WEEKS_LOOKBACK, Math.max(VITESSE_MIN_HISTORY_WEEKS, ageWeeks));
+}
+
 /** Cartons/week, from total quantity sold (confirmed+ orders) over the
- *  lookback window. */
-export function computeVitesseVente(qtyOverWindow: number): number {
-  return qtyOverWindow / REAPPRO_WEEKS_LOOKBACK;
+ *  lookback window. Dividing by the product's effective history rather than
+ *  a flat 10 keeps a product listed three weeks ago from reading as though
+ *  it sold nothing for the seven weeks before it existed.
+ *
+ *  Note this still assumes the product was sellable for its whole life — a
+ *  long stockout inside the window still drags the figure down. */
+export function computeVitesseVente(
+  qtyOverWindow: number,
+  createdAt: string | Date | null | undefined,
+): number {
+  return qtyOverWindow / effectiveHistoryWeeks(createdAt);
 }
 
 /** Estimated days of stock remaining at the current sales pace. Null when

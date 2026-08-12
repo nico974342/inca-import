@@ -92,7 +92,7 @@ const prix = product.price_ht as number | null;
 const margePct = pump == null || prix == null || prix === 0 ? null : ((prix - pump) / prix) * 100;
 const gmroi    = computeGmroi(product.stock_quantity, pump, marge12mo);
 const rotation = computeStockRotation(product.stock_quantity, pump, cogs12mo);
-const vitesseVente = computeVitesseVente(recentQty);
+const vitesseVente = computeVitesseVente(recentQty, (product as any).created_at);
 
 // ── Réassort ─────────────────────────────────────────────────────────
 const joursAvantRupture = computeJoursAvantRupture(product.stock_quantity, vitesseVente);

@@ -40,7 +40,7 @@ const { data: salesRows } = await supabaseAdmin
   .gte('orders.created_at', lookbackIso);
 
 const soldQty = (salesRows ?? []).reduce((s, row) => s + row.quantity, 0);
-const vitesseVente = computeVitesseVente(soldQty);
+const vitesseVente = computeVitesseVente(soldQty, (product as any).created_at);
 const joursAvantRupture = computeJoursAvantRupture(product.stock_quantity, vitesseVente);
 const seuilReappro = (product as any).seuil_reappro as number | null;
 const delaiLivraisonJours = (product as any).delai_livraison_jours as number | null;
