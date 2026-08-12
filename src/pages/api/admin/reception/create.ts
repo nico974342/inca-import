@@ -60,6 +60,23 @@ export const POST: APIRoute = async ({ request, cookies }) => {
     return Response.redirect(new URL('/admin/reception/new', request.url), 303);
   }
 
+  // Réception issue d'une expédition en transit : elle sort du suivi une fois
+  // la marchandise réellement entrée en stock. Non bloquant — le stock est
+  // déjà appliqué et validé, et refuser la réception pour un statut de suivi
+  // serait pire que de la signaler.
+  const shipmentId = (form.get('shipment_id') as string | null)?.trim() || null;
+  let shipmentWarning = false;
+  if (shipmentId) {
+    const { error: shipErr } = await supabaseAdmin
+      .from('shipments')
+      .update({ status: 'receptionne' })
+      .eq('id', shipmentId);
+    if (shipErr) {
+      shipmentWarning = true;
+      console.error('[reception] passage en receptionne échoué:', shipmentId, shipErr.message);
+    }
+  }
+
   await logAdminAction({
     adminEmail:   user.email ?? 'inconnu',
     action:       'reception.creation',
@@ -72,8 +89,16 @@ export const POST: APIRoute = async ({ request, cookies }) => {
       products_count: rows.length,
       total_units:    rows.reduce((s, r) => s + r.quantity, 0),
       total_cost_ht:  rows.reduce((s, r) => s + r.quantity * r.unitCost, 0),
+      shipment_id:    shipmentId,
     },
   });
+
+  if (shipmentWarning) {
+    return Response.redirect(
+      new URL('/admin/reception?success=1&shipment_warning=1', request.url),
+      303,
+    );
+  }
 
   return Response.redirect(
     new URL(`/admin/reception?success=${stockApplied ? '1' : 'historical'}`, request.url),

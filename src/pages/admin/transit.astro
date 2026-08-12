@@ -1,0 +1,532 @@
+---
+import AdminLayout from '../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../lib/supabase';
+import { sanitizeText } from '../../lib/sanitize';
+import { logAdminAction } from '../../lib/audit';
+import ShipRoute from '../../components/admin/ShipRoute.astro';
+import {
+  SHIPMENT_STATUSES, SHIPMENT_STATUS_LABEL, SHIPMENT_ACTIVE_STATUSES,
+  computeShipmentProgress, type ShipmentStatus,
+} from '../../lib/constants';
+
+// ── Écritures : uniquement sur shipments / shipment_items. Ni products,
+//    ni stock, ni PUMP — le transit est du suivi, pas du mouvement. ──
+if (Astro.request.method === 'POST') {
+  const data   = await Astro.request.formData();
+  const action = data.get('action') as string;
+  const adminEmail = (Astro.locals as any).user?.email ?? 'inconnu';
+
+  if (action === 'create') {
+    const supplierName = sanitizeText(data.get('supplier_name') as string, 120).trim();
+    const reference    = sanitizeText(data.get('reference') as string, 80).trim() || null;
+    const departure    = (data.get('departure_date') as string)?.trim() || null;
+    const eta          = (data.get('eta') as string)?.trim() || null;
+    const notes        = sanitizeText(data.get('notes') as string, 500).trim() || null;
+    const statusRaw    = data.get('status') as string;
+    const status: ShipmentStatus = (SHIPMENT_STATUSES as readonly string[]).includes(statusRaw)
+      ? (statusRaw as ShipmentStatus) : 'commande';
+
+    if (!supplierName) return Astro.redirect('/admin/transit?err=fournisseur_requis');
+
+    const { data: created, error: insErr } = await supabaseAdmin
+      .from('shipments')
+      .insert({ supplier_name: supplierName, reference, departure_date: departure, eta, status, notes })
+      .select('id')
+      .single();
+
+    if (insErr || !created) {
+      console.error('[transit] création expédition:', insErr?.message);
+      return Astro.redirect('/admin/transit?err=creation');
+    }
+
+    const productIds = data.getAll('product_id[]') as string[];
+    const quantities = data.getAll('quantity[]') as string[];
+    const costs      = data.getAll('unit_cost_ht[]') as string[];
+
+    const items: { shipment_id: string; product_id: string; quantity: number; unit_cost_ht: number | null }[] = [];
+    for (let i = 0; i < productIds.length; i++) {
+      const pid = productIds[i]?.trim();
+      const qty = parseInt(quantities[i] ?? '0', 10);
+      const cost = costs[i]?.trim() === '' ? null : parseFloat(costs[i] ?? '0');
+      if (!pid || !Number.isFinite(qty) || qty <= 0) continue;
+      items.push({ shipment_id: created.id, product_id: pid, quantity: qty, unit_cost_ht: cost != null && Number.isFinite(cost) ? cost : null });
+    }
+
+    if (items.length > 0) {
+      const { error: itemsErr } = await supabaseAdmin.from('shipment_items').insert(items);
+      if (itemsErr) {
+        // Header without lines is worse than nothing: undo it so the admin
+        // doesn't end up tracking an empty shipment they didn't notice.
+        console.error('[transit] lignes expédition:', itemsErr.message);
+        await supabaseAdmin.from('shipments').delete().eq('id', created.id);
+        return Astro.redirect('/admin/transit?err=lignes');
+      }
+    }
+
+    await logAdminAction({
+      adminEmail, action: 'transit.creation', targetType: 'shipment',
+      targetId: created.id, targetLabel: supplierName,
+      details: { reference, eta, lignes: items.length },
+    });
+    return Astro.redirect('/admin/transit?ok=cree');
+  }
+
+  if (action === 'set_status') {
+    const id = data.get('id') as string;
+    const statusRaw = data.get('status') as string;
+    if (!id || !(SHIPMENT_STATUSES as readonly string[]).includes(statusRaw)) {
+      return Astro.redirect('/admin/transit?err=statut');
+    }
+    // 'receptionne' n'est jamais posé à la main : il découle de la validation
+    // d'une réception, seule opération qui touche au stock.
+    if (statusRaw === 'receptionne') return Astro.redirect('/admin/transit?err=receptionner');
+
+    const { error } = await supabaseAdmin.from('shipments').update({ status: statusRaw }).eq('id', id);
+    if (error) return Astro.redirect('/admin/transit?err=statut');
+    return Astro.redirect('/admin/transit?ok=statut');
+  }
+
+  if (action === 'delete') {
+    const id = data.get('id') as string;
+    if (id) {
+      // shipment_items part en cascade (FK ON DELETE CASCADE).
+      const { error } = await supabaseAdmin.from('shipments').delete().eq('id', id);
+      if (error) return Astro.redirect('/admin/transit?err=suppression');
+      await logAdminAction({ adminEmail, action: 'transit.suppression', targetType: 'shipment', targetId: id });
+    }
+    return Astro.redirect('/admin/transit?ok=supprime');
+  }
+}
+
+const { data: shipmentsRaw, error: loadErr } = await supabaseAdmin
+  .from('shipments')
+  .select('id, supplier_name, reference, departure_date, eta, status, notes, created_at, shipment_items(id, quantity, unit_cost_ht, products(id, name, sku, unit))')
+  .in('status', SHIPMENT_ACTIVE_STATUSES as readonly string[])
+  .order('eta', { ascending: true, nullsFirst: false });
+
+const tableMissing = loadErr?.code === 'PGRST205' || loadErr?.code === '42P01';
+
+const { data: products } = await supabaseAdmin
+  .from('products')
+  .select('id, name, sku, prix_achat_moyen_ht')
+  .order('name');
+
+const { data: supplierRows } = await supabaseAdmin.from('suppliers').select('name').order('name');
+const supplierNames = (supplierRows ?? []).map(s => s.name);
+
+const now = new Date();
+const shipments = (shipmentsRaw ?? []).map(s => {
+  const items = ((s as any).shipment_items ?? []) as any[];
+  const totalQty  = items.reduce((n, it) => n + (it.quantity ?? 0), 0);
+  const totalCost = items.reduce((n, it) => n + (it.unit_cost_ht != null ? Number(it.unit_cost_ht) * it.quantity : 0), 0);
+  const anyMissingCost = items.some(it => it.unit_cost_ht == null);
+  return {
+    ...s,
+    items,
+    totalQty,
+    totalCost,
+    anyMissingCost,
+    progress: computeShipmentProgress(s.departure_date, s.eta, s.status, now),
+  };
+});
+
+const totalEnTransit = shipments.reduce((n, s) => n + s.totalQty, 0);
+
+const ok  = Astro.url.searchParams.get('ok');
+const err = Astro.url.searchParams.get('err');
+const OK_MSG: Record<string, string> = {
+  cree: 'Expédition enregistrée.', statut: 'Statut mis à jour.',
+  supprime: 'Expédition supprimée.', modifie: 'Expédition modifiée.',
+  receptionne: "Réception validée — l'expédition est passée en « Réceptionné » et sort du suivi.",
+};
+const ERR_MSG: Record<string, string> = {
+  fournisseur_requis: 'Le nom du fournisseur est obligatoire.',
+  creation: "L'expédition n'a pas pu être créée.",
+  lignes: "Les lignes produits n'ont pas pu être enregistrées — l'expédition a été annulée.",
+  statut: 'Le changement de statut a échoué.',
+  receptionner: "Le statut « Réceptionné » se pose en validant une réception, pas à la main.",
+  suppression: 'La suppression a échoué.',
+  introuvable: 'Expédition introuvable.',
+};
+
+const today = new Date().toISOString().split('T')[0];
+function fmtDate(d: string | null): string {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+function fmtPrice(n: number): string {
+  return n.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
+}
+---
+<AdminLayout title="Transit" activeNav="transit">
+  <p class="intro">
+    Marchandises parties de chez le fournisseur et pas encore arrivées.
+    <strong>Ce suivi ne touche ni au stock ni au PUMP</strong> : ils ne bougent qu'à la réception réelle,
+    en cliquant « Réceptionner » une fois la marchandise arrivée.
+  </p>
+
+  {tableMissing ? (
+    <div class="alert alert--error" role="alert">
+      Les tables <code>shipments</code> / <code>shipment_items</code> n'existent pas encore.
+      Lancez <code>supabase/migrations/shipments_table.sql</code> dans Supabase, puis rechargez.
+    </div>
+  ) : (
+    <>
+      {ok  && <div class="alert alert--ok"    role="status">{OK_MSG[ok] ?? 'Enregistré.'}</div>}
+      {err && <div class="alert alert--error" role="alert">{ERR_MSG[err] ?? 'Une erreur est survenue.'}</div>}
+
+      <details class="create-panel">
+        <summary class="create-summary">+ Nouvelle expédition</summary>
+        <form method="post" class="create-form">
+          <input type="hidden" name="action" value="create" />
+          <div class="form-grid">
+            <div class="field">
+              <label class="label" for="sh-supplier">Fournisseur <span class="req">*</span></label>
+              <input type="text" id="sh-supplier" name="supplier_name" required maxlength="120" list="supplierList" autocomplete="off" placeholder="Nom du fournisseur" />
+              <datalist id="supplierList">{supplierNames.map(n => <option value={n}></option>)}</datalist>
+            </div>
+            <div class="field">
+              <label class="label" for="sh-ref">Référence <span class="opt">(conteneur / BL)</span></label>
+              <input type="text" id="sh-ref" name="reference" maxlength="80" autocomplete="off" placeholder="MSCU1234567" />
+            </div>
+            <div class="field">
+              <label class="label" for="sh-dep">Date de départ</label>
+              <input type="date" id="sh-dep" name="departure_date" value={today} />
+            </div>
+            <div class="field">
+              <label class="label" for="sh-eta">Arrivée estimée (ETA)</label>
+              <input type="date" id="sh-eta" name="eta" />
+            </div>
+            <div class="field">
+              <label class="label" for="sh-status">Statut</label>
+              <select id="sh-status" name="status">
+                {SHIPMENT_STATUSES.filter(s => s !== 'receptionne').map(s => (
+                  <option value={s} selected={s === 'en_transit'}>{SHIPMENT_STATUS_LABEL[s]}</option>
+                ))}
+              </select>
+            </div>
+            <div class="field field--full">
+              <label class="label" for="sh-notes">Notes</label>
+              <input type="text" id="sh-notes" name="notes" maxlength="500" placeholder="Transitaire, incoterm, remarques…" />
+            </div>
+          </div>
+
+          <div class="items-head">
+            <h3 class="items-title">Produits expédiés</h3>
+            <button type="button" id="addRowBtn" class="btn btn-ghost">+ Ajouter un produit</button>
+          </div>
+          <div class="items-wrap">
+            <table class="items-table">
+              <thead>
+                <tr>
+                  <th>Produit</th>
+                  <th class="num">Quantité</th>
+                  <th class="num">Coût unitaire HT</th>
+                  <th class="num">Total</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="itemsBody"></tbody>
+            </table>
+          </div>
+          <p class="items-hint" id="itemsHint">Ajoutez au moins un produit.</p>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Enregistrer l'expédition</button>
+          </div>
+        </form>
+      </details>
+
+      {shipments.length === 0 ? (
+        <div class="empty-state">
+          <p class="empty-title">Aucune expédition en cours.</p>
+          <p class="empty-body">Les marchandises en route apparaissent ici jusqu'à leur réception.</p>
+        </div>
+      ) : (
+        <>
+          <p class="summary-line">
+            {shipments.length} expédition{shipments.length > 1 ? 's' : ''} en cours ·
+            {' '}{totalEnTransit.toLocaleString('fr-FR')} cartons en transit
+          </p>
+
+          <div class="shipments">
+            {shipments.map(s => (
+              <article class={`shipment ${s.progress.late ? 'shipment--late' : ''}`}>
+                <header class="sh-head">
+                  <div class="sh-id">
+                    <h2 class="sh-supplier">{s.supplier_name}</h2>
+                    {s.reference && <span class="sh-ref">{s.reference}</span>}
+                  </div>
+                  <div class="sh-actions">
+                    <form method="post" class="status-form">
+                      <input type="hidden" name="action" value="set_status" />
+                      <input type="hidden" name="id" value={s.id} />
+                      <select name="status" onchange="this.form.submit()" aria-label={`Statut de l'expédition ${s.supplier_name}`}>
+                        {SHIPMENT_STATUSES.filter(st => st !== 'receptionne').map(st => (
+                          <option value={st} selected={st === s.status}>{SHIPMENT_STATUS_LABEL[st as ShipmentStatus]}</option>
+                        ))}
+                      </select>
+                    </form>
+                    <a href={`/admin/transit/${s.id}/edit`} class="link-action">Modifier</a>
+                    <a href={`/admin/reception/new?shipment=${s.id}`} class="btn btn-primary btn-sm">Réceptionner</a>
+                  </div>
+                </header>
+
+                <ShipRoute
+                  percent={s.progress.percent}
+                  late={s.progress.late}
+                  daysLate={s.progress.daysLate}
+                  departureLabel={fmtDate(s.departure_date)}
+                  etaLabel={fmtDate(s.eta)}
+                />
+
+                <div class="sh-body">
+                  <table class="sh-items">
+                    <tbody>
+                      {s.items.map((it: any) => (
+                        <tr>
+                          <td class="it-name">{it.products?.name ?? 'Produit supprimé'}</td>
+                          <td class="it-qty">{it.quantity} {it.products?.unit ?? 'cartons'}</td>
+                          <td class="it-cost">
+                            {it.unit_cost_ht != null
+                              ? `${Number(it.unit_cost_ht).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })} /u`
+                              : <span class="muted">coût non renseigné</span>}
+                          </td>
+                        </tr>
+                      ))}
+                      {s.items.length === 0 && (
+                        <tr><td colspan="3" class="muted">Aucune ligne produit — <a href={`/admin/transit/${s.id}/edit`}>en ajouter</a></td></tr>
+                      )}
+                    </tbody>
+                  </table>
+
+                  <div class="sh-totals">
+                    <span class="t-qty">{s.totalQty.toLocaleString('fr-FR')} cartons</span>
+                    <span class="t-cost">
+                      {s.totalCost > 0 ? fmtPrice(s.totalCost) : '—'}
+                      {s.anyMissingCost && s.totalCost > 0 && <span class="t-partial" title="Certaines lignes n'ont pas de coût unitaire">*</span>}
+                    </span>
+                    {s.notes && <p class="sh-notes">{s.notes}</p>}
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        </>
+      )}
+    </>
+  )}
+</AdminLayout>
+
+<script define:vars={{ products }}>
+  const PRODUCTS = products ?? [];
+  const body = document.getElementById('itemsBody');
+  const hint = document.getElementById('itemsHint');
+
+  function usedIds() {
+    const s = new Set();
+    document.querySelectorAll('[data-product-select]').forEach(sel => { if (sel.value) s.add(sel.value); });
+    return s;
+  }
+
+  function refreshSelects() {
+    const used = usedIds();
+    document.querySelectorAll('[data-product-select]').forEach(sel => {
+      Array.from(sel.options).forEach(o => {
+        if (!o.value) return;
+        o.disabled = used.has(o.value) && o.value !== sel.value;
+      });
+    });
+  }
+
+  function updateRowTotal(tr) {
+    const qty  = parseFloat(tr.querySelector('[name="quantity[]"]')?.value) || 0;
+    const cost = parseFloat(tr.querySelector('[name="unit_cost_ht[]"]')?.value) || 0;
+    const cell = tr.querySelector('[data-total]');
+    if (cell) cell.textContent = qty && cost
+      ? (qty * cost).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })
+      : '—';
+  }
+
+  function addRow() {
+    if (!body) return;
+    const tr = document.createElement('tr');
+    const opts = PRODUCTS.map(p => `<option value="${p.id}">${p.name}${p.sku ? ' (' + p.sku + ')' : ''}</option>`).join('');
+    tr.innerHTML = `
+      <td><select name="product_id[]" data-product-select required>
+        <option value="">— Choisir un produit —</option>${opts}
+      </select></td>
+      <td class="num"><input type="number" name="quantity[]" min="1" step="1" placeholder="0" required /></td>
+      <td class="num"><input type="number" name="unit_cost_ht[]" min="0" step="0.01" placeholder="—" /></td>
+      <td class="num" data-total>—</td>
+      <td class="num"><button type="button" class="remove-btn" title="Retirer">×</button></td>
+    `;
+    body.appendChild(tr);
+
+    tr.querySelector('[data-product-select]').addEventListener('change', () => {
+      const p = PRODUCTS.find(x => x.id === tr.querySelector('[data-product-select]').value);
+      const costIn = tr.querySelector('[name="unit_cost_ht[]"]');
+      // Pre-fill with the known average cost as a starting point; the real
+      // invoice figure usually differs and stays editable.
+      if (p && p.prix_achat_moyen_ht != null && !costIn.value) costIn.value = Number(p.prix_achat_moyen_ht).toFixed(2);
+      refreshSelects();
+      updateRowTotal(tr);
+    });
+    tr.querySelectorAll('input').forEach(i => i.addEventListener('input', () => updateRowTotal(tr)));
+    tr.querySelector('.remove-btn').addEventListener('click', () => { tr.remove(); refreshSelects(); toggleHint(); });
+
+    refreshSelects();
+    toggleHint();
+  }
+
+  function toggleHint() {
+    if (hint) hint.hidden = (body?.children.length ?? 0) > 0;
+  }
+
+  document.getElementById('addRowBtn')?.addEventListener('click', addRow);
+  toggleHint();
+</script>
+
+<style>
+.intro {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  margin-bottom: var(--space-5);
+  max-width: 80ch;
+}
+.intro strong { color: var(--color-ink); }
+
+.alert {
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  font-size: var(--text-sm);
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+}
+.alert code { font-family: var(--font-mono); font-size: 0.9em; }
+.alert--ok    { color: oklch(0.40 0.12 150); background: oklch(0.96 0.04 150); border-color: oklch(0.86 0.08 150); }
+.alert--error { color: oklch(0.46 0.18 25);  background: oklch(0.97 0.03 25);  border-color: oklch(0.88 0.07 25); }
+
+/* ── Formulaire de création ── */
+.create-panel {
+  margin-bottom: var(--space-5);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.create-summary {
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-primary-deep);
+  cursor: pointer;
+  list-style: none;
+}
+.create-summary::-webkit-details-marker { display: none; }
+.create-form { padding: 0 var(--space-4) var(--space-4); }
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field--full { grid-column: 1 / -1; }
+.label { font-size: 0.6875rem; font-weight: 600; color: var(--color-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.req { color: oklch(0.55 0.19 25); }
+.opt { font-weight: 400; text-transform: none; letter-spacing: 0; opacity: 0.8; }
+.field input, .field select,
+.items-table input, .items-table select,
+.status-form select {
+  padding: 0.45rem 0.6rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+.field input:focus, .field select:focus,
+.items-table input:focus, .items-table select:focus { border-color: var(--color-primary); }
+
+.items-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-2); }
+.items-title { font-size: var(--text-sm); font-weight: 600; color: var(--color-ink); margin: 0; }
+.items-wrap { overflow-x: auto; }
+.items-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.items-table th {
+  padding: var(--space-2);
+  text-align: left;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--color-border);
+}
+.items-table td { padding: var(--space-2); border-bottom: 1px solid var(--color-border); }
+.items-table .num { text-align: right; }
+.items-table input { width: 110px; text-align: right; font-family: var(--font-mono); }
+.items-table select { width: 100%; min-width: 200px; }
+.remove-btn {
+  padding: 0.2rem 0.5rem;
+  font-size: var(--text-base);
+  line-height: 1;
+  color: var(--color-muted);
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.remove-btn:hover { color: oklch(0.46 0.18 25); border-color: oklch(0.80 0.10 25); }
+.items-hint { margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--color-muted); }
+.form-actions { display: flex; justify-content: flex-end; margin-top: var(--space-4); }
+
+.summary-line { margin: 0 0 var(--space-3); font-size: var(--text-xs); color: var(--color-muted); }
+
+/* ── Cartes expédition ── */
+.shipments { display: flex; flex-direction: column; gap: var(--space-4); }
+.shipment {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+.shipment--late { border-color: oklch(0.84 0.10 70); }
+
+.sh-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-3); }
+.sh-id { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; }
+.sh-supplier { margin: 0; font-size: var(--text-base); font-weight: 600; color: var(--color-ink); }
+.sh-ref { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-muted); }
+.sh-actions { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.status-form select { font-size: var(--text-xs); padding: 0.3rem 0.5rem; }
+.link-action { font-size: var(--text-sm); font-weight: 500; color: var(--color-primary-deep); text-decoration: none; }
+.link-action:hover { text-decoration: underline; }
+.btn-sm { padding: 0.35rem 0.75rem; font-size: var(--text-xs); }
+
+.sh-body { display: flex; gap: var(--space-5); flex-wrap: wrap; align-items: flex-start; margin-top: var(--space-3); }
+.sh-items { flex: 1 1 320px; border-collapse: collapse; font-size: var(--text-sm); }
+.sh-items td { padding: var(--space-1) 0; border-bottom: 1px dashed var(--color-border); }
+.sh-items tr:last-child td { border-bottom: none; }
+.it-name { color: var(--color-ink); }
+.it-qty  { text-align: right; font-family: var(--font-mono); white-space: nowrap; padding-left: var(--space-4) !important; }
+.it-cost { text-align: right; font-size: var(--text-xs); color: var(--color-muted); white-space: nowrap; padding-left: var(--space-4) !important; }
+.muted { color: var(--color-muted); }
+.muted a { color: var(--color-primary-deep); }
+
+.sh-totals { flex: 0 0 auto; text-align: right; min-width: 140px; }
+.t-qty  { display: block; font-size: 1.05rem; font-weight: 700; color: var(--color-ink); font-variant-numeric: tabular-nums; }
+.t-cost { display: block; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-muted); }
+.t-partial { color: oklch(0.55 0.15 60); cursor: help; }
+.sh-notes { margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--color-muted); font-style: italic; max-width: 30ch; }
+
+.empty-state {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-16) var(--space-8);
+  text-align: center;
+}
+.empty-title { font-weight: 600; color: var(--color-ink); margin-bottom: var(--space-2); }
+.empty-body  { color: var(--color-muted); }
+</style>

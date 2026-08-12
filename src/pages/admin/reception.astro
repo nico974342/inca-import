@@ -7,6 +7,7 @@ const success         = successParam === '1';
 const successHisto    = successParam === 'historical';
 const successUpdate   = successParam === 'updated';
 const successDeleted  = successParam === 'deleted';
+const shipmentWarning = !!Astro.url.searchParams.get('shipment_warning');
 
 const { data: receptions } = await supabaseAdmin
   .from('stock_receptions')
@@ -27,6 +28,12 @@ function formatPrice(p: number) {
   {success && (
     <div class="alert alert--success" role="alert">
       Réception enregistrée — stock et PUMP mis à jour.
+    </div>
+  )}
+  {shipmentWarning && (
+    <div class="alert alert--histo" role="alert">
+      Réception enregistrée et stock à jour, mais l'expédition liée n'a pas pu passer en
+      « Réceptionné » — elle reste dans <a href="/admin/transit">le suivi transit</a>, à clôturer à la main.
     </div>
   )}
   {successHisto && (

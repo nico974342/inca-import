@@ -326,6 +326,59 @@ export function estimatedArrivalDate(delaiJours: number, from: Date = new Date()
   return new Date(from.getTime() + delaiJours * 24 * 60 * 60 * 1000);
 }
 
+// ── Suivi des expéditions (transit) ─────────────────────────────────────
+export const SHIPMENT_STATUSES = ['commande', 'en_transit', 'arrive_port', 'dedouanement', 'receptionne'] as const;
+export type ShipmentStatus = (typeof SHIPMENT_STATUSES)[number];
+
+export const SHIPMENT_STATUS_LABEL: Record<ShipmentStatus, string> = {
+  commande:     'Commandé',
+  en_transit:   'En transit',
+  arrive_port:  'Arrivé au port',
+  dedouanement: 'Dédouanement',
+  receptionne:  'Réceptionné',
+};
+
+/** Statuses that still count as "on the water" — the active list, and the
+ *  quantities the order simulator reports as already under way. */
+export const SHIPMENT_ACTIVE_STATUSES = ['commande', 'en_transit', 'arrive_port', 'dedouanement'] as const;
+
+/** Late only while the goods are still genuinely en route: once a shipment
+ *  is at the port or in customs, a passed ETA is expected, not a delay. */
+const SHIPMENT_LATE_STATUSES: readonly string[] = ['commande', 'en_transit'];
+
+export type ShipmentProgress = {
+  /** 0-100, position of the boat along the route. */
+  percent: number;
+  /** Whole days past the ETA, 0 when on time or not applicable. */
+  daysLate: number;
+  late: boolean;
+};
+
+/** Where the boat sits between departure and ETA. Missing dates leave it at
+ *  the quayside (0%) rather than guessing a position. */
+export function computeShipmentProgress(
+  departureDate: string | Date | null | undefined,
+  eta: string | Date | null | undefined,
+  status: string,
+  now: Date = new Date(),
+): ShipmentProgress {
+  const dep = departureDate ? new Date(departureDate).getTime() : NaN;
+  const arr = eta ? new Date(eta).getTime() : NaN;
+  const t = now.getTime();
+
+  const etaKnown = Number.isFinite(arr);
+  const daysLate = etaKnown && t > arr ? Math.floor((t - arr) / 86_400_000) : 0;
+  const late = etaKnown && daysLate > 0 && SHIPMENT_LATE_STATUSES.includes(status);
+
+  if (!Number.isFinite(dep) || !etaKnown || arr <= dep) {
+    // Not enough to interpolate: park it at 0, or at 100 once the ETA is past.
+    return { percent: etaKnown && t >= arr ? 100 : 0, daysLate, late };
+  }
+
+  const raw = ((t - dep) / (arr - dep)) * 100;
+  return { percent: Math.min(100, Math.max(0, raw)), daysLate, late };
+}
+
 /** Task 1's flag condition: stock at or below the reorder point. */
 export function isAtOrBelowSeuil(
   stockQuantity: number | null | undefined,

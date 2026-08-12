@@ -9,6 +9,34 @@ const { data: products } = await supabaseAdmin
 
 const today = new Date().toISOString().split('T')[0];
 const preselectProductId = Astro.url.searchParams.get('product') ?? null;
+
+// ── Pré-remplissage depuis une expédition en transit. C'est ici, et
+//    seulement ici, que la marchandise en route devient du stock : la
+//    validation de ce formulaire appelle reception_create, qui applique le
+//    stock et recalcule le PUMP. Le transit lui-même n'a rien touché. ──
+const shipmentId = Astro.url.searchParams.get('shipment');
+let prefill: { supplierName: string; notes: string | null; items: { product_id: string; quantity: number; unit_cost_ht: number | null }[] } | null = null;
+
+if (shipmentId) {
+  const { data: shipment } = await supabaseAdmin
+    .from('shipments')
+    .select('id, supplier_name, reference, notes, shipment_items(product_id, quantity, unit_cost_ht)')
+    .eq('id', shipmentId)
+    .single();
+
+  if (shipment) {
+    const ref = (shipment as any).reference;
+    prefill = {
+      supplierName: shipment.supplier_name ?? '',
+      notes: ref ? `Réception expédition ${ref}` : (shipment as any).notes ?? null,
+      items: (((shipment as any).shipment_items ?? []) as any[]).map(it => ({
+        product_id: it.product_id,
+        quantity: it.quantity,
+        unit_cost_ht: it.unit_cost_ht != null ? Number(it.unit_cost_ht) : null,
+      })),
+    };
+  }
+}
 ---
 <AdminLayout title="Nouvelle réception fournisseur" activeNav="reception">
 
@@ -17,14 +45,23 @@ const preselectProductId = Astro.url.searchParams.get('product') ?? null;
     <h1 class="page-title">Nouvelle réception fournisseur</h1>
   </div>
 
+  {prefill && (
+    <div class="prefill-note" role="status">
+      Pré-rempli depuis une expédition en transit. Ajustez les quantités et les coûts réellement reçus :
+      c'est <strong>cette validation</strong> qui met à jour le stock et le PUMP, puis bascule l'expédition
+      en « Réceptionné ».
+    </div>
+  )}
+
   <form method="post" action="/api/admin/reception/create" class="reception-form" id="receptionForm">
+    {shipmentId && <input type="hidden" name="shipment_id" value={shipmentId} />}
 
     <section class="form-section">
       <h2 class="section-title">Informations réception</h2>
       <div class="form-grid">
         <div class="field">
           <label for="supplier_name" class="label">Fournisseur <span class="required">*</span></label>
-          <input type="text" id="supplier_name" name="supplier_name" required class="input" placeholder="Nom du fournisseur" autocomplete="off" />
+          <input type="text" id="supplier_name" name="supplier_name" required class="input" placeholder="Nom du fournisseur" autocomplete="off" value={prefill?.supplierName ?? ''} />
         </div>
         <div class="field">
           <label for="received_at" class="label">Date de réception <span class="required">*</span></label>
@@ -33,7 +70,7 @@ const preselectProductId = Astro.url.searchParams.get('product') ?? null;
         </div>
         <div class="field field--full">
           <label for="notes" class="label">Notes (optionnel)</label>
-          <input type="text" id="notes" name="notes" class="input" placeholder="Numéro BL fournisseur, remarques…" />
+          <input type="text" id="notes" name="notes" class="input" placeholder="Numéro BL fournisseur, remarques…" value={prefill?.notes ?? ''} />
         </div>
       </div>
     </section>
@@ -81,7 +118,7 @@ const preselectProductId = Astro.url.searchParams.get('product') ?? null;
   </form>
 </AdminLayout>
 
-<script define:vars={{ products, preselectProductId }}>
+<script define:vars={{ products, preselectProductId, prefillItems: prefill?.items ?? [] }}>
 const PRODUCTS = products ?? [];
 
 const productMap = {};
@@ -245,11 +282,39 @@ function checkDateHint() {
 dateInput?.addEventListener('change', checkDateHint);
 checkDateHint();
 
-// Start with one empty row — pre-selected if we arrived via a "réassort" link
-addRow(preselectProductId && PRODUCTS.some(p => p.id === preselectProductId) ? preselectProductId : null);
+// Arrived from a shipment: rebuild its lines so the admin only has to
+// correct what actually differs from what was announced.
+const PREFILL_ITEMS = (prefillItems ?? []).filter(it => PRODUCTS.some(p => p.id === it.product_id));
+
+if (PREFILL_ITEMS.length > 0) {
+  PREFILL_ITEMS.forEach(it => {
+    addRow(it.product_id);
+    const tr = document.querySelector('#itemsBody tr:last-child');
+    if (!tr) return;
+    const qtyIn  = tr.querySelector('[name="quantity[]"]');
+    const costIn = tr.querySelector('[name="unit_cost_ht[]"]');
+    if (qtyIn)  qtyIn.value  = it.quantity;
+    if (costIn && it.unit_cost_ht != null) costIn.value = it.unit_cost_ht;
+  });
+  updateTotal();
+} else {
+  // Start with one empty row — pre-selected if we arrived via a "réassort" link
+  addRow(preselectProductId && PRODUCTS.some(p => p.id === preselectProductId) ? preselectProductId : null);
+}
 </script>
 
 <style>
+.prefill-note {
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-5);
+  font-size: var(--text-sm);
+  color: oklch(0.38 0.09 220);
+  background: oklch(0.96 0.03 220);
+  border: 1px solid oklch(0.86 0.06 220);
+  border-radius: var(--radius-sm);
+}
+.prefill-note strong { font-weight: 700; }
+
 .page-header {
   margin-bottom: var(--space-6);
 }

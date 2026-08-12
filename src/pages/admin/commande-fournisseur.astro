@@ -5,7 +5,7 @@ import {
   REAPPRO_WEEKS_LOOKBACK, computeVitesseVente,
   effectiveHistoryWeeks, VITESSE_SHORT_HISTORY_WEEKS,
   COUVERTURE_HORIZON_MONTHS, couvertureHorizonWeeks,
-  computeCouvertureWeeks, computeOrderQty,
+  computeCouvertureWeeks, computeOrderQty, SHIPMENT_ACTIVE_STATUSES,
   DELAI_LIVRAISON_DEFAUT_JOURS, resolveDelaiLivraison,
   estimatedArrivalDate, estimatedRuptureDate,
   type ModeCommande,
@@ -78,6 +78,26 @@ const suppliersTableMissing = suppliersErr?.code === 'PGRST205' || suppliersErr?
 const delaiBySupplier = new Map<string, number | null>();
 for (const s of (supplierRows ?? [])) delaiBySupplier.set(s.name, s.delai_livraison_jours);
 
+// ── Quantités déjà en route, pour ne pas recommander ce qui est parti.
+//    Affiché seulement : la quantité suggérée n'est pas diminuée
+//    automatiquement, l'arbitrage restant une décision d'achat. ──
+const { data: transitRows } = await supabaseAdmin
+  .from('shipment_items')
+  .select('product_id, quantity, shipments!inner(status, eta)')
+  .in('shipments.status', SHIPMENT_ACTIVE_STATUSES as readonly string[]);
+
+const transitByProduct = new Map<string, { qty: number; eta: string | null }>();
+for (const row of (transitRows ?? [])) {
+  if (!row.product_id) continue;
+  const eta = (row as any).shipments?.eta ?? null;
+  const cur = transitByProduct.get(row.product_id) ?? { qty: 0, eta: null };
+  cur.qty += row.quantity ?? 0;
+  // On retient l'arrivée la plus proche : c'est celle qui décide s'il faut
+  // recommander maintenant ou attendre.
+  if (eta && (cur.eta == null || eta < cur.eta)) cur.eta = eta;
+  transitByProduct.set(row.product_id, cur);
+}
+
 const UNGROUPED_LABEL = 'Fournisseur non renseigné';
 const today = new Date();
 
@@ -107,6 +127,9 @@ const rows = allProducts.map(p => {
   const upc = (p as any).units_per_carton ?? null;
   const shortHistory = historyWeeks < VITESSE_SHORT_HISTORY_WEEKS;
 
+  const transit = transitByProduct.get(p.id) ?? null;
+  const transitEtaLabel = transit?.eta ? fmtDate(new Date(transit.eta)) : null;
+
   return {
     ...p,
     vitesseVente, historyWeeks, shortHistory,
@@ -117,12 +140,16 @@ const rows = allProducts.map(p => {
     delai, arrival, rupture, ruptureBeforeArrival,
     arrivalLabel: fmtDate(arrival),
     ruptureLabel: rupture ? fmtDate(rupture) : null,
+    transitQty: transit?.qty ?? 0,
+    transitEtaLabel,
     pump,
     unitsPerCarton: upc != null && upc > 0 ? upc : null,
     supplier: supplierName ?? UNGROUPED_LABEL,
     // Silence is the normal state: a subline appears only when a line has
     // something worth reacting to.
-    hasAlert: delai.source === 'defaut' || ruptureBeforeArrival || shortHistory,
+    // Une quantité déjà en route change la décision d'achat : elle mérite
+    // d'être vue au même titre qu'un délai inconnu ou une rupture imminente.
+    hasAlert: delai.source === 'defaut' || ruptureBeforeArrival || shortHistory || (transit?.qty ?? 0) > 0,
   };
 });
 
@@ -262,6 +289,14 @@ const MODE_HELP: Record<ModeCommande, string> = {
                         <span class={p.ruptureBeforeArrival ? 'a-rupture' : ''}>
                           rupture ~{p.ruptureLabel}{p.ruptureBeforeArrival ? ' ⚠' : ''}
                         </span>
+                      </>
+                    )}
+                    {p.transitQty > 0 && (
+                      <>
+                        <span class="a-sep">·</span>
+                        <a href="/admin/transit" class="a-transit" title="Déjà expédié par le fournisseur, pas encore reçu — non déduit de la quantité suggérée">
+                          🚢 {p.transitQty} en transit{p.transitEtaLabel ? ` · arrivée ~${p.transitEtaLabel}` : ''}
+                        </a>
                       </>
                     )}
                     {p.shortHistory && (
@@ -626,6 +661,13 @@ const MODE_HELP: Record<ModeCommande, string> = {
 .a-delai { font-weight: 600; }
 .a-rupture { font-weight: 700; }
 .a-short { font-style: italic; cursor: help; }
+.a-transit {
+  color: oklch(0.45 0.10 220);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.a-transit:hover { text-decoration: underline; }
 
 /* 2 — secondaire : stock et rythme, en gris */
 .td-secondary { color: var(--color-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
