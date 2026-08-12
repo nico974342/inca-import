@@ -2,7 +2,7 @@
 import AdminLayout from '../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../lib/supabase';
 import {
-  marginColorClass, computeGmroi, gmroiColorClass, computeStockRotation, rotationColorClass,
+  marginColorClass,
   REAPPRO_WEEKS_LOOKBACK, computeVitesseVente, computeJoursAvantRupture, isAtOrBelowSeuil,
 } from '../../../lib/constants';
 
@@ -14,10 +14,14 @@ const { data: products, error } = await supabaseAdmin
   .order('position', { ascending: true })
   .order('name', { ascending: true });
 
-// ── GMROI + rotation: both derive from the same 12-month order_items pull —
-//    GMROI's numerator is gross margin (qty × (price − PUMP)), rotation's
-//    is cost of goods sold (qty × PUMP) — same denominator (stock value). ──
+// ── One 12-month order_items pull feeds the search banner totals and the
+//    per-month sales columns. Month boundaries use the same
+//    new Date(y, m, 1) convention as the dashboard, so "mois en cours"
+//    means the same thing on both pages. ──
+const now = new Date();
 const twelveMonthsAgoIso = new Date(new Date().setMonth(new Date().getMonth() - 12)).toISOString();
+const currentMonthStartMs = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+const prevMonthStartMs    = new Date(now.getFullYear(), now.getMonth() - 1, 1).getTime();
 const { data: marginRows } = await supabaseAdmin
   .from('order_items')
   .select('product_id, quantity, price_ht_snapshot, pump_snapshot, orders!inner(status, created_at)')
@@ -25,12 +29,14 @@ const { data: marginRows } = await supabaseAdmin
   .gte('orders.created_at', twelveMonthsAgoIso);
 
 const margin12moByProduct = new Map<string, number>();
-const cogs12moByProduct = new Map<string, number>();
 // Quantities and revenue feed the search summary banner. They use looser gates
-// than margin/COGS on purpose: a line still sold and still earned even when its
+// than margin on purpose: a line still sold and still earned even when its
 // PUMP snapshot is missing, so only the margin sums skip those rows.
 const qty12moByProduct = new Map<string, number>();
 const revenue12moByProduct = new Map<string, number>();
+// Cartons sold per calendar month, for the two sales columns.
+const qtyCurrentMonthByProduct = new Map<string, number>();
+const qtyPrevMonthByProduct = new Map<string, number>();
 for (const row of (marginRows ?? [])) {
   if (!row.product_id) continue;
   const prix = row.price_ht_snapshot != null ? Number(row.price_ht_snapshot) : null;
@@ -39,17 +45,21 @@ for (const row of (marginRows ?? [])) {
   if (prix != null) {
     revenue12moByProduct.set(row.product_id, (revenue12moByProduct.get(row.product_id) ?? 0) + prix * row.quantity);
   }
+
+  const createdAt = (row as any).orders?.created_at;
+  const ts = createdAt ? new Date(createdAt).getTime() : null;
+  if (ts != null) {
+    // The pull starts 12 months back, so anything older than last month
+    // simply falls through both buckets.
+    if (ts >= currentMonthStartMs) {
+      qtyCurrentMonthByProduct.set(row.product_id, (qtyCurrentMonthByProduct.get(row.product_id) ?? 0) + row.quantity);
+    } else if (ts >= prevMonthStartMs) {
+      qtyPrevMonthByProduct.set(row.product_id, (qtyPrevMonthByProduct.get(row.product_id) ?? 0) + row.quantity);
+    }
+  }
+
   if (prix == null || pump == null) continue;
   margin12moByProduct.set(row.product_id, (margin12moByProduct.get(row.product_id) ?? 0) + (prix - pump) * row.quantity);
-  cogs12moByProduct.set(row.product_id, (cogs12moByProduct.get(row.product_id) ?? 0) + pump * row.quantity);
-}
-
-function productGmroi(p: { id: string; stock_quantity: number | null; prix_achat_moyen_ht: number | null }): number | null {
-  return computeGmroi(p.stock_quantity, p.prix_achat_moyen_ht, margin12moByProduct.get(p.id) ?? null);
-}
-
-function productRotation(p: { id: string; stock_quantity: number | null; prix_achat_moyen_ht: number | null }): number | null {
-  return computeStockRotation(p.stock_quantity, p.prix_achat_moyen_ht, cogs12moByProduct.get(p.id) ?? null);
 }
 
 // ── Vitesse de vente / jours avant rupture — same order_items pull
@@ -87,9 +97,9 @@ const filteredProducts = filterCat
   : (products ?? []);
 
 // ── Sortable columns ───────────────────────────────────────────────────
-// Marge/GMROI/rotation are computed values, so sorting happens in-memory
+// Marge and the monthly sales totals are computed values, so sorting happens in-memory
 // here rather than pushed down to the DB query.
-const SORT_KEYS = ['nom', 'categorie', 'prix', 'stock', 'marge', 'gmroi', 'rotation', 'rupture'] as const;
+const SORT_KEYS = ['nom', 'categorie', 'prix', 'stock', 'marge', 'ventes_mois', 'ventes_prec', 'rupture'] as const;
 type SortKey = (typeof SORT_KEYS)[number];
 
 const sortParam = Astro.url.searchParams.get('sort') ?? '';
@@ -129,9 +139,16 @@ const rows = filteredProducts.map(p => {
   const hasUnits = upc != null && upc > 0;
   const hasPumpValue = pump != null && pump > 0;
 
+  // ── Sales columns: cartons are always known, units only where the
+  // conditioning is recorded (null renders as "—"). ──
+  const cartonsMois = qtyCurrentMonthByProduct.get(p.id) ?? 0;
+  const cartonsPrec = qtyPrevMonthByProduct.get(p.id) ?? 0;
+
   return {
-    ...p, margePct, gmroi: productGmroi(p as any), rotation: productRotation(p as any),
+    ...p, margePct,
     vitesseVente, joursAvantRupture,
+    cartonsMois, unitesMois: hasUnits ? cartonsMois * upc : null,
+    cartonsPrec, unitesPrec: hasUnits ? cartonsPrec * upc : null,
     needsReappro: isAtOrBelowSeuil(p.stock_quantity, (p as any).seuil_reappro ?? null),
     agg: {
       cartonsSold,
@@ -164,9 +181,10 @@ if (currentSort) {
       case 'categorie': return dir * (CAT_LABEL[a.category] ?? a.category).localeCompare(CAT_LABEL[b.category] ?? b.category, 'fr');
       case 'prix':      return compareNullableNumber(a.price_ht, b.price_ht, dir as 1 | -1);
       case 'stock':     return compareNullableNumber(a.stock_quantity, b.stock_quantity, dir as 1 | -1);
-      case 'marge':     return compareNullableNumber(a.margePct, b.margePct, dir as 1 | -1);
-      case 'gmroi':     return compareNullableNumber(a.gmroi, b.gmroi, dir as 1 | -1);
-      case 'rotation':  return compareNullableNumber(a.rotation, b.rotation, dir as 1 | -1);
+      case 'marge':       return compareNullableNumber(a.margePct, b.margePct, dir as 1 | -1);
+      // Sorted on cartons — units are the same figure scaled per product.
+      case 'ventes_mois': return compareNullableNumber(a.cartonsMois, b.cartonsMois, dir as 1 | -1);
+      case 'ventes_prec': return compareNullableNumber(a.cartonsPrec, b.cartonsPrec, dir as 1 | -1);
       case 'rupture':   return compareNullableNumber(a.joursAvantRupture, b.joursAvantRupture, dir as 1 | -1);
       default:          return 0;
     }
@@ -181,6 +199,21 @@ function formatPrice(p: number | null) {
 function formatUnitPrice(priceHt: number | null, unitsPerCarton: number | null): string | null {
   if (priceHt == null || !unitsPerCarton || unitsPerCarton <= 0) return null;
   return formatPrice(priceHt / unitsPerCarton);
+}
+
+function formatQty(n: number): string {
+  return n.toLocaleString('fr-FR');
+}
+
+/** "12 cartons" / "1 carton" — plural agreement on the unit label. */
+function formatCartons(n: number): string {
+  return `${formatQty(n)} carton${n === 1 ? '' : 's'}`;
+}
+
+/** Units sub-line; null when units_per_carton is not recorded. */
+function formatUnites(n: number | null): string {
+  if (n == null) return '—';
+  return `${formatQty(n)} unité${n === 1 ? '' : 's'}`;
 }
 
 function margeClass(marge: number | null): string {
@@ -302,25 +335,25 @@ const DELETE_ERROR_MSG: Record<string, string> = {
               </a>
             </th>
             <th>
-              <a href={sortUrl('gmroi')} class={`th-sort ${currentSort === 'gmroi' ? 'th-sort--active' : ''}`}>
-                GMROI
-                {currentSort === 'gmroi' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
+              <a href={sortUrl('ventes_mois')} class={`th-sort ${currentSort === 'ventes_mois' ? 'th-sort--active' : ''}`}>
+                Ventes mois en cours
+                {currentSort === 'ventes_mois' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
               </a>
               <span
                 class="help-icon"
                 tabindex="0"
-                title="Combien vous rapporte chaque euro immobilisé en stock sur ce produit. GMROI = marge brute générée sur 12 mois ÷ valeur du stock actuel (stock × coût moyen). > 2 = excellent, 1-2 = correct, < 1 = ce produit immobilise plus de capital qu'il ne rapporte."
+                title="Quantité vendue depuis le 1er du mois en cours (commandes confirmées, en préparation, expédiées ou livrées). Le mois n'étant pas terminé, ce chiffre n'est pas comparable tel quel au mois précédent."
               >?</span>
             </th>
             <th>
-              <a href={sortUrl('rotation')} class={`th-sort ${currentSort === 'rotation' ? 'th-sort--active' : ''}`}>
-                Rotation
-                {currentSort === 'rotation' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
+              <a href={sortUrl('ventes_prec')} class={`th-sort ${currentSort === 'ventes_prec' ? 'th-sort--active' : ''}`}>
+                Ventes mois précédent
+                {currentSort === 'ventes_prec' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
               </a>
               <span
                 class="help-icon"
                 tabindex="0"
-                title="Combien de fois votre stock se renouvelle par an sur ce produit. Rotation = coût des ventes sur 12 mois ÷ valeur du stock actuel. > 6x/an = excellent, 3-6x/an = correct, < 3x/an = stock qui tourne lentement, capital immobilisé trop longtemps."
+                title="Quantité vendue sur le mois calendaire précédent complet (commandes confirmées, en préparation, expédiées ou livrées)."
               >?</span>
             </th>
             <th>
@@ -383,14 +416,24 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                 return <td><span class={`marge-chip ${mi.cls}`}>{mi.label}</span></td>;
               })()}
               <td>
-                <span class={`marge-chip marge--${gmroiColorClass(p.gmroi)}`}>
-                  {p.gmroi != null ? p.gmroi.toFixed(1) + '×' : '—'}
-                </span>
+                {p.cartonsMois > 0 ? (
+                  <>
+                    <span class="sales-main">{formatCartons(p.cartonsMois)}</span>
+                    <p class="td-sub">{formatUnites(p.unitesMois)}</p>
+                  </>
+                ) : (
+                  <span class="sales-none" title="Aucune vente sur la période">0</span>
+                )}
               </td>
               <td>
-                <span class={`marge-chip marge--${rotationColorClass(p.rotation)}`}>
-                  {p.rotation != null ? p.rotation.toFixed(1) + 'x/an' : '—'}
-                </span>
+                {p.cartonsPrec > 0 ? (
+                  <>
+                    <span class="sales-main">{formatCartons(p.cartonsPrec)}</span>
+                    <p class="td-sub">{formatUnites(p.unitesPrec)}</p>
+                  </>
+                ) : (
+                  <span class="sales-none" title="Aucune vente sur la période">0</span>
+                )}
               </td>
               <td>
                 <div class="stock-cell">
@@ -633,6 +676,18 @@ const DELETE_ERROR_MSG: Record<string, string> = {
   margin: var(--space-2) 0 0;
   font-size: var(--text-xs);
   color: var(--color-muted);
+}
+
+/* ── Sales columns ───────────────────────────────────────────────────── */
+.sales-main {
+  font-weight: 600;
+  color: var(--color-ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.sales-none {
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Search summary banner ───────────────────────────────────────────── */
