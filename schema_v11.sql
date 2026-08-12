@@ -1,8 +1,30 @@
--- schema_v11.sql
--- Links client_accounts rows to their auth.users account, created when a
--- visitor completes /inscription. Needed to merge /admin/contacts and
--- /admin/clients into one unified admin view.
--- Run this in the Supabase SQL editor.
+-- schema_v11.sql — OBSOLÈTE / NE PAS APPLIQUER
+--
+-- Cette migration n'a jamais été appliquée en production et ne doit pas
+-- l'être. Le DDL ci-dessous est volontairement commenté.
+--
+-- Intention d'origine : lier client_accounts à auth.users via une colonne
+-- user_id, pour fusionner /admin/contacts et /admin/clients en une seule vue.
+--
+-- Ce qui s'est réellement passé : la colonne n'a jamais été créée sur la base
+-- distante, mais du code a continué à la référencer. PostgREST rejette alors
+-- la requête entière (42703, "column ... does not exist") :
+--   * /api/admin/clients/[id]/delete.ts sélectionnait `user_id` → la lecture
+--     échouait, le client paraissait introuvable, et le bouton "Supprimer"
+--     renvoyait un 404 muet sans rien supprimer ;
+--   * /api/admin/clients/[id]/set-admin.ts écrivait `user_id` dans le même
+--     UPDATE que `status` → tout l'UPDATE était rejeté, et la promotion d'un
+--     client en admin n'appliquait jamais `status: 'actif'`.
+--
+-- Décision : le lien entre un client et son compte auth se fait UNIQUEMENT
+-- par email, ce qui est déjà la convention du reste de l'application
+-- (lib/clients.ts, inscription.astro, admin/clients/performances.astro).
+-- Le point d'entrée unique est findAuthUserIdByEmail() dans src/lib/clients.ts.
+--
+-- Si vous pensez avoir besoin de cette colonne : ajouter le DDL ne suffit pas.
+-- Il faudrait aussi remplir user_id pour les comptes existants, gérer les
+-- clients sans compte auth, et migrer tous les appels au linking par email.
+-- Tant que ce travail n'est pas fait, laisser ce fichier inactif.
 
-ALTER TABLE client_accounts ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id);
-CREATE INDEX IF NOT EXISTS idx_client_accounts_user_id ON client_accounts(user_id);
+-- ALTER TABLE client_accounts ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id);
+-- CREATE INDEX IF NOT EXISTS idx_client_accounts_user_id ON client_accounts(user_id);
