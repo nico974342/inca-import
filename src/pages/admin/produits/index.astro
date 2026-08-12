@@ -26,10 +26,19 @@ const { data: marginRows } = await supabaseAdmin
 
 const margin12moByProduct = new Map<string, number>();
 const cogs12moByProduct = new Map<string, number>();
+// Quantities and revenue feed the search summary banner. They use looser gates
+// than margin/COGS on purpose: a line still sold and still earned even when its
+// PUMP snapshot is missing, so only the margin sums skip those rows.
+const qty12moByProduct = new Map<string, number>();
+const revenue12moByProduct = new Map<string, number>();
 for (const row of (marginRows ?? [])) {
   if (!row.product_id) continue;
   const prix = row.price_ht_snapshot != null ? Number(row.price_ht_snapshot) : null;
   const pump = row.pump_snapshot != null ? Number(row.pump_snapshot) : null;
+  qty12moByProduct.set(row.product_id, (qty12moByProduct.get(row.product_id) ?? 0) + row.quantity);
+  if (prix != null) {
+    revenue12moByProduct.set(row.product_id, (revenue12moByProduct.get(row.product_id) ?? 0) + prix * row.quantity);
+  }
   if (prix == null || pump == null) continue;
   margin12moByProduct.set(row.product_id, (margin12moByProduct.get(row.product_id) ?? 0) + (prix - pump) * row.quantity);
   cogs12moByProduct.set(row.product_id, (cogs12moByProduct.get(row.product_id) ?? 0) + pump * row.quantity);
@@ -110,10 +119,32 @@ const rows = filteredProducts.map(p => {
   const margePct = pump == null || prix == null || prix === 0 ? null : ((prix - pump) / prix) * 100;
   const vitesseVente = computeVitesseVente(recentQtyByProduct.get(p.id) ?? 0);
   const joursAvantRupture = computeJoursAvantRupture(p.stock_quantity, vitesseVente);
+
+  // ── Per-row figures the search banner sums client-side ──
+  // Quantities are in cartons throughout (order_items.quantity, stock_quantity),
+  // so units only exist where units_per_carton is known.
+  const upc = (p as any).units_per_carton ?? null;
+  const cartonsSold = qty12moByProduct.get(p.id) ?? 0;
+  const stockCartons = p.stock_quantity ?? 0;
+  const hasUnits = upc != null && upc > 0;
+  const hasPumpValue = pump != null && pump > 0;
+
   return {
     ...p, margePct, gmroi: productGmroi(p as any), rotation: productRotation(p as any),
     vitesseVente, joursAvantRupture,
     needsReappro: isAtOrBelowSeuil(p.stock_quantity, (p as any).seuil_reappro ?? null),
+    agg: {
+      cartonsSold,
+      unitsSold: hasUnits ? cartonsSold * upc : 0,
+      stockCartons,
+      stockValue: hasPumpValue ? stockCartons * pump : 0,
+      caHt: revenue12moByProduct.get(p.id) ?? 0,
+      margeHt: margin12moByProduct.get(p.id) ?? 0,
+      // Flags so the banner can say its totals are understated rather than
+      // quietly reporting a number that is too low.
+      partialUnits: !hasUnits && cartonsSold > 0,
+      partialStock: !hasPumpValue && stockCartons > 0,
+    },
   };
 });
 
@@ -208,6 +239,37 @@ const DELETE_ERROR_MSG: Record<string, string> = {
     <p class="search-results-count" id="searchResultsCount" hidden aria-live="polite"></p>
   </div>
 
+  {/* Aggregate of every product matching the active search. Populated and
+      toggled client-side, since the search itself filters rows in the browser. */}
+  <div class="search-summary" id="searchSummary" hidden aria-live="polite">
+    <div class="ss-head">
+      <span class="ss-count" id="ssCount"></span>
+      <span class="ss-query" id="ssQuery"></span>
+    </div>
+    <div class="ss-stats">
+      <div class="ss-stat">
+        <span class="ss-label">Unités vendues <span class="ss-period">12 mois</span></span>
+        <span class="ss-value" id="ssUnits"></span>
+        <span class="ss-sub" id="ssCartonsSold"></span>
+      </div>
+      <div class="ss-stat">
+        <span class="ss-label">Stock actuel</span>
+        <span class="ss-value" id="ssStockCartons"></span>
+        <span class="ss-sub" id="ssStockValue"></span>
+      </div>
+      <div class="ss-stat">
+        <span class="ss-label">CA HT généré <span class="ss-period">12 mois</span></span>
+        <span class="ss-value" id="ssCa"></span>
+      </div>
+      <div class="ss-stat">
+        <span class="ss-label">Marge HT générée <span class="ss-period">12 mois</span></span>
+        <span class="ss-value ss-value--accent" id="ssMarge"></span>
+        <span class="ss-sub" id="ssMargePct"></span>
+      </div>
+    </div>
+    <p class="ss-note" id="ssNote" hidden></p>
+  </div>
+
   {rows && rows.length > 0 ? (
     <div class="table-wrap">
       <table class="data-table">
@@ -284,7 +346,17 @@ const DELETE_ERROR_MSG: Record<string, string> = {
         </thead>
         <tbody>
           {rows.map(p => (
-            <tr data-search={p.name.toLowerCase()}>
+            <tr
+              data-search={p.name.toLowerCase()}
+              data-units-sold={p.agg.unitsSold}
+              data-cartons-sold={p.agg.cartonsSold}
+              data-stock-cartons={p.agg.stockCartons}
+              data-stock-value={p.agg.stockValue}
+              data-ca={p.agg.caHt}
+              data-marge={p.agg.margeHt}
+              data-partial-units={p.agg.partialUnits ? '1' : null}
+              data-partial-stock={p.agg.partialStock ? '1' : null}
+            >
               <td class="td-strong">
                 <a href={`/admin/produits/${p.id}/performance`} class="product-link">{p.name}</a>
               </td>
@@ -389,15 +461,74 @@ const DELETE_ERROR_MSG: Record<string, string> = {
   const noResults      = document.getElementById('noResults') as HTMLElement | null;
   const rows           = document.querySelectorAll<HTMLTableRowElement>('.data-table tbody tr');
 
+  const summary = document.getElementById('searchSummary') as HTMLElement | null;
+  const el = (id: string) => document.getElementById(id);
+
+  const eur = new Intl.NumberFormat('fr-FR', {
+    style: 'currency', currency: 'EUR', maximumFractionDigits: 0,
+  });
+  const num = new Intl.NumberFormat('fr-FR');
+
+  const numAttr = (row: HTMLElement, key: string) => Number(row.dataset[key] ?? '0') || 0;
+
+  /** Sums the matching rows into the banner. Only shown for an active search
+   *  with at least 2 matches — a single product's own row already says this. */
+  function updateSummary(query: string, matched: HTMLTableRowElement[]) {
+    if (!summary) return;
+    if (!query || matched.length < 2) {
+      summary.hidden = true;
+      return;
+    }
+
+    let units = 0, cartonsSold = 0, stockCartons = 0, stockValue = 0, ca = 0, marge = 0;
+    let partialUnits = false, partialStock = false;
+
+    for (const row of matched) {
+      units        += numAttr(row, 'unitsSold');
+      cartonsSold  += numAttr(row, 'cartonsSold');
+      stockCartons += numAttr(row, 'stockCartons');
+      stockValue   += numAttr(row, 'stockValue');
+      ca           += numAttr(row, 'ca');
+      marge        += numAttr(row, 'marge');
+      if (row.dataset.partialUnits) partialUnits = true;
+      if (row.dataset.partialStock) partialStock = true;
+    }
+
+    const setText = (id: string, text: string) => { const n = el(id); if (n) n.textContent = text; };
+
+    setText('ssCount', `${matched.length} produits`);
+    setText('ssQuery', `« ${searchInput?.value.trim() ?? ''} »`);
+    setText('ssUnits', `${num.format(Math.round(units))} unités`);
+    setText('ssCartonsSold', `${num.format(Math.round(cartonsSold))} cartons`);
+    setText('ssStockCartons', `${num.format(Math.round(stockCartons))} cartons`);
+    setText('ssStockValue', `${eur.format(stockValue)} de stock`);
+    setText('ssCa', eur.format(ca));
+    setText('ssMarge', eur.format(marge));
+    setText('ssMargePct', ca > 0 ? `${((marge / ca) * 100).toFixed(1)} % du CA` : '—');
+
+    // Say so when a total is understated rather than letting it read as exact.
+    const notes: string[] = [];
+    if (partialUnits) notes.push('unités partielles (conditionnement non défini pour certains produits)');
+    if (partialStock) notes.push('valeur de stock partielle (PUMP non défini pour certains produits)');
+    const noteEl = el('ssNote');
+    if (noteEl) {
+      noteEl.textContent = notes.length ? `* ${notes.join(' · ')}` : '';
+      noteEl.hidden = notes.length === 0;
+    }
+
+    summary.hidden = false;
+  }
+
   function applySearch() {
     if (!searchInput) return;
     const query = searchInput.value.trim().toLowerCase();
-    let visible = 0;
+    const matched: HTMLTableRowElement[] = [];
     rows.forEach(row => {
       const show = !query || (row.dataset.search ?? '').includes(query);
       row.hidden = !show;
-      if (show) visible++;
+      if (show) matched.push(row);
     });
+    const visible = matched.length;
     if (noResults) noResults.hidden = visible > 0;
     if (resultsCountEl) {
       if (query) {
@@ -407,6 +538,7 @@ const DELETE_ERROR_MSG: Record<string, string> = {
         resultsCountEl.hidden = true;
       }
     }
+    updateSummary(query, matched);
   }
 
   searchInput?.addEventListener('input', applySearch);
@@ -501,6 +633,86 @@ const DELETE_ERROR_MSG: Record<string, string> = {
   margin: var(--space-2) 0 0;
   font-size: var(--text-xs);
   color: var(--color-muted);
+}
+
+/* ── Search summary banner ───────────────────────────────────────────── */
+.search-summary {
+  padding: var(--space-4) var(--space-5);
+  margin-bottom: var(--space-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+.search-summary[hidden] { display: none; }
+
+.ss-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+.ss-count {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--color-ink);
+}
+.ss-query {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
+
+.ss-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-4);
+}
+.ss-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ss-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.ss-period {
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.75;
+}
+.ss-value {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--color-ink);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+.ss-value--accent { color: var(--color-primary-deep); }
+.ss-sub {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+}
+.ss-note {
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  font-style: italic;
+}
+.ss-note[hidden] { display: none; }
+
+@media (max-width: 640px) {
+  .search-summary { padding: var(--space-3) var(--space-4); }
+  .ss-stats { grid-template-columns: repeat(2, 1fr); gap: var(--space-3); }
+  .ss-value { font-size: 1rem; }
 }
 
 .product-link { color: inherit; text-decoration: none; }
