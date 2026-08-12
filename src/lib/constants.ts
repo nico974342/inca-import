@@ -346,12 +346,90 @@ export const SHIPMENT_ACTIVE_STATUSES = ['commande', 'en_transit', 'arrive_port'
  *  is at the port or in customs, a passed ETA is expected, not a delay. */
 const SHIPMENT_LATE_STATUSES: readonly string[] = ['commande', 'en_transit'];
 
+/** Physically arrived, whatever the ETA said. The status is the truth here:
+ *  a shipment can reach the port a week early. */
+const SHIPMENT_ARRIVED_STATUSES: readonly string[] = ['arrive_port', 'dedouanement'];
+
+// ── Cargo embarqué ──────────────────────────────────────────────────────
+/**
+ * Couleurs des conteneurs, une par famille de produits. Plus saturées que les
+ * badges catégorie, qui sont des fonds de pastille : ici ce sont des blocs de
+ * 6 px qui doivent se distinguer à taille réelle.
+ *
+ * Les clartés sont volontairement étagées (0.46 → 0.70) en plus des teintes :
+ * la couleur portant ici une donnée, deux catégories ne doivent pas se
+ * distinguer par la seule teinte — bleu 220 et teal 180 à clarté égale
+ * devenaient indiscernables une fois réduits.
+ */
+export const CATEGORY_CARGO_COLOR: Record<string, string> = {
+  divers:      'oklch(0.46 0.110 285)',
+  boissons:    'oklch(0.52 0.130 235)',
+  confiseries: 'oklch(0.58 0.140 340)',
+  chips:       'oklch(0.64 0.090 180)',
+  snacks:      'oklch(0.71 0.140 62)',
+};
+
+/** Libellés des familles, pour décrire la cargaison sans recourir à la
+ *  couleur. Trois pages portent encore leur propre copie de cette table. */
+export const CATEGORY_LABEL: Record<string, string> = {
+  boissons: 'boissons', snacks: 'snacks', chips: 'chips',
+  confiseries: 'confiseries', divers: 'divers',
+};
+
+/** Emplacements de conteneurs sur le pont. */
+export const CARGO_SLOTS = 12;
+
+/**
+ * Répartit les emplacements du pont selon la composition réelle de
+ * l'expédition, à la plus forte moyenne (méthode des plus forts restes) pour
+ * que le total tombe exactement sur le nombre d'emplacements.
+ *
+ * Une expédition mono-catégorie donne une pile uniforme : c'est l'information,
+ * pas un appauvrissement du visuel.
+ */
+export function allocateCargoSlots(
+  mix: { category: string | null | undefined; quantity: number }[],
+  slots: number = CARGO_SLOTS,
+): string[] {
+  const byCategory = new Map<string, number>();
+  for (const line of mix) {
+    const cat = line.category ?? 'divers';
+    if (!(line.quantity > 0)) continue;
+    byCategory.set(cat, (byCategory.get(cat) ?? 0) + line.quantity);
+  }
+
+  const total = [...byCategory.values()].reduce((s, q) => s + q, 0);
+  if (total <= 0) return [];
+
+  const entries = [...byCategory.entries()].map(([category, qty]) => {
+    const exact = (qty / total) * slots;
+    const floor = Math.floor(exact);
+    return { category, qty, floor, remainder: exact - floor };
+  });
+
+  let assigned = entries.reduce((s, e) => s + e.floor, 0);
+  // Les restes les plus forts emportent les emplacements qui subsistent ;
+  // à égalité, la plus grosse quantité passe devant.
+  const byRemainder = [...entries].sort((a, b) => b.remainder - a.remainder || b.qty - a.qty);
+  for (let i = 0; assigned < slots && i < byRemainder.length * slots; i++) {
+    byRemainder[i % byRemainder.length].floor++;
+    assigned++;
+  }
+
+  // Catégorie dominante en premier : la pile se lit de gauche à droite.
+  return entries
+    .sort((a, b) => b.floor - a.floor || a.category.localeCompare(b.category))
+    .flatMap(e => Array<string>(e.floor).fill(e.category));
+}
+
 export type ShipmentProgress = {
   /** 0-100, position of the boat along the route. */
   percent: number;
   /** Whole days past the ETA, 0 when on time or not applicable. */
   daysLate: number;
   late: boolean;
+  /** À quai : le navire est arrivé, la mer se calme. */
+  arrived: boolean;
 };
 
 /** Where the boat sits between departure and ETA. Missing dates leave it at
@@ -369,14 +447,19 @@ export function computeShipmentProgress(
   const etaKnown = Number.isFinite(arr);
   const daysLate = etaKnown && t > arr ? Math.floor((t - arr) / 86_400_000) : 0;
   const late = etaKnown && daysLate > 0 && SHIPMENT_LATE_STATUSES.includes(status);
+  const arrived = SHIPMENT_ARRIVED_STATUSES.includes(status);
+
+  // Arrivé au port : la position est acquise, quelle que soit l'ETA — un
+  // navire peut accoster avec une semaine d'avance.
+  if (arrived) return { percent: 100, daysLate, late: false, arrived: true };
 
   if (!Number.isFinite(dep) || !etaKnown || arr <= dep) {
     // Not enough to interpolate: park it at 0, or at 100 once the ETA is past.
-    return { percent: etaKnown && t >= arr ? 100 : 0, daysLate, late };
+    return { percent: etaKnown && t >= arr ? 100 : 0, daysLate, late, arrived: false };
   }
 
   const raw = ((t - dep) / (arr - dep)) * 100;
-  return { percent: Math.min(100, Math.max(0, raw)), daysLate, late };
+  return { percent: Math.min(100, Math.max(0, raw)), daysLate, late, arrived: false };
 }
 
 /** Task 1's flag condition: stock at or below the reorder point. */

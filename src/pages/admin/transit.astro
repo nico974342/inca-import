@@ -6,7 +6,7 @@ import { logAdminAction } from '../../lib/audit';
 import ShipRoute from '../../components/admin/ShipRoute.astro';
 import {
   SHIPMENT_STATUSES, SHIPMENT_STATUS_LABEL, SHIPMENT_ACTIVE_STATUSES,
-  computeShipmentProgress, type ShipmentStatus,
+  computeShipmentProgress, allocateCargoSlots, type ShipmentStatus,
 } from '../../lib/constants';
 
 // ── Écritures : uniquement sur shipments / shipment_items. Ni products,
@@ -100,7 +100,7 @@ if (Astro.request.method === 'POST') {
 
 const { data: shipmentsRaw, error: loadErr } = await supabaseAdmin
   .from('shipments')
-  .select('id, supplier_name, reference, departure_date, eta, status, notes, created_at, shipment_items(id, quantity, unit_cost_ht, products(id, name, sku, unit))')
+  .select('id, supplier_name, reference, departure_date, eta, status, notes, created_at, shipment_items(id, quantity, unit_cost_ht, products(id, name, sku, unit, category))')
   .in('status', SHIPMENT_ACTIVE_STATUSES as readonly string[])
   .order('eta', { ascending: true, nullsFirst: false });
 
@@ -127,6 +127,12 @@ const shipments = (shipmentsRaw ?? []).map(s => {
     totalCost,
     anyMissingCost,
     progress: computeShipmentProgress(s.departure_date, s.eta, s.status, now),
+    // La cargaison dessinée sur le pont est la composition réelle de
+    // l'expédition, pas une décoration.
+    cargo: allocateCargoSlots(items.map(it => ({
+      category: it.products?.category ?? null,
+      quantity: it.quantity ?? 0,
+    }))),
   };
 });
 
@@ -275,9 +281,11 @@ function fmtPrice(n: number): string {
                 <ShipRoute
                   percent={s.progress.percent}
                   late={s.progress.late}
+                  arrived={s.progress.arrived}
                   daysLate={s.progress.daysLate}
                   departureLabel={fmtDate(s.departure_date)}
                   etaLabel={fmtDate(s.eta)}
+                  cargo={s.cargo}
                   seed={s.id}
                 />
 

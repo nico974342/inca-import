@@ -1,147 +1,188 @@
 ---
-// Trajet d'une expédition : quai de départ à gauche, port d'arrivée à droite,
-// porte-conteneurs positionné par interpolation entre le départ et l'ETA.
+import { CATEGORY_CARGO_COLOR, CATEGORY_LABEL, CARGO_SLOTS } from '../../lib/constants';
+
+// Ligne d'acheminement : quai de départ à gauche, port d'arrivée à droite.
+// Le navire se place par interpolation entre la date de départ et l'ETA, et
+// sa cargaison reprend la composition réelle de l'expédition.
 interface Props {
   percent: number;
   late: boolean;
+  arrived: boolean;
   daysLate: number;
   departureLabel: string;
   etaLabel: string;
-  /** Sert à décaler la phase du tangage : deux navires côte à côte ne
-   *  doivent pas rouler à l'unisson. */
+  /** Catégories déjà réparties sur les emplacements du pont. */
+  cargo?: string[];
+  /** Décale la phase du tangage : deux navires ne roulent pas à l'unisson. */
   seed?: string;
 }
-const { percent, late, daysLate, departureLabel, etaLabel, seed = '' } = Astro.props;
+const {
+  percent, late, arrived, daysLate,
+  departureLabel, etaLabel, cargo = [], seed = '',
+} = Astro.props;
 
 const pos = Math.min(100, Math.max(0, percent));
-const arrived = pos >= 100;
 
-// Déphasage déterministe tiré de l'id : stable d'un rendu à l'autre, donc
-// pas de saut visuel au rechargement.
+// Déphasage déterministe tiré de l'id : stable d'un rendu à l'autre.
 let hash = 0;
 for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) % 997;
-const phase = (hash % 60) / 10; // 0 → 5,9 s
-
-// Identifiant des <defs> : dérivé de l'id d'expédition, car deux navires de
-// même phase partageraient sinon le même gradient.
+const phase = (hash % 60) / 10;
 const uid = (seed || `s${hash}`).replace(/[^a-zA-Z0-9]/g, '').slice(0, 12) || `s${hash}`;
 
-// Conteneurs aux couleurs des familles de produits — clin d'œil à ce que le
-// navire transporte. Teintes reprises des badges catégorie, remontées en
-// saturation pour rester lisibles à cette taille.
-const C = {
-  boissons:    'oklch(0.58 0.13 220)',
-  snacks:      'oklch(0.68 0.14 60)',
-  chips:       'oklch(0.58 0.11 180)',
-  confiseries: 'oklch(0.60 0.14 330)',
-  divers:      'oklch(0.55 0.13 275)',
-};
-// [x, y, couleur] — piles de hauteurs inégales, plus basses vers la proue.
-const containers: [number, number, string][] = [
-  [30.5, 15.1, C.boissons], [30.5, 12.7, C.snacks], [30.5, 10.3, C.confiseries],
-  [35.3, 15.1, C.divers],   [35.3, 12.7, C.chips],
-  [40.1, 15.1, C.snacks],   [40.1, 12.7, C.boissons], [40.1, 10.3, C.divers],
-  [44.9, 15.1, C.confiseries], [44.9, 12.7, C.chips],
-  [49.7, 15.1, C.boissons],
+// ── Pont : 5 piles de hauteurs inégales, 12 emplacements, plus basses vers
+//    la proue. L'ordre de remplissage est bas-en-haut puis bâbord-tribord,
+//    donc la catégorie dominante forme le bloc de gauche. ──
+const STACKS: { x: number; rows: number }[] = [
+  { x: 35.0, rows: 3 }, { x: 41.5, rows: 2 }, { x: 48.0, rows: 3 },
+  { x: 54.5, rows: 2 }, { x: 61.0, rows: 2 },
 ];
+const ROW_Y = [17.4, 14.3, 11.2]; // bas → haut
+const CW = 5.9, CH = 3.1;
+
+const slots: { x: number; y: number; color: string; category: string }[] = [];
+let i = 0;
+for (const stack of STACKS) {
+  for (let r = 0; r < stack.rows; r++) {
+    const category = cargo[i++];
+    if (!category) continue; // pont partiellement chargé : on laisse vide
+    slots.push({
+      x: stack.x, y: ROW_Y[r],
+      color: CATEGORY_CARGO_COLOR[category] ?? CATEGORY_CARGO_COLOR.divers,
+      category,
+    });
+  }
+}
+const empty = slots.length === 0;
+
+// L'état de mer est l'état de l'expédition : calme à quai, agitée en retard.
+const seaState = arrived ? 'arrived' : late ? 'rough' : 'sailing';
+
+// La cargaison est encodée par la couleur : elle doit aussi se lire sans
+// elle. Le décompte par famille part dans l'aria-label et l'infobulle.
+const tally = new Map<string, number>();
+for (const s of slots) tally.set(s.category, (tally.get(s.category) ?? 0) + 1);
+const cargoSummary = [...tally.entries()]
+  .sort((a, b) => b[1] - a[1])
+  .map(([cat, n]) => `${n} ${CATEGORY_LABEL[cat] ?? cat}`)
+  .join(', ');
+
+const progressLabel =
+  `Avancement : ${Math.round(pos)} %` +
+  (arrived ? ', arrivé au port' : late ? `, retard de ${daysLate} jour${daysLate > 1 ? 's' : ''}` : '') +
+  (empty
+    ? ', aucune ligne produit'
+    : ` — cargaison sur ${CARGO_SLOTS} emplacements : ${cargoSummary}`);
 ---
-<div class={`route ${late ? 'route--late' : ''}`} style={`--phase: ${phase}`}>
-  <div class="route-track" role="img" aria-label={`Avancement : ${Math.round(pos)} %${late ? `, retard de ${daysLate} jour${daysLate > 1 ? 's' : ''}` : ''}`}>
+<div class={`route route--${seaState}`} style={`--phase: ${phase}`}>
+  <div class="route-track" role="img" aria-label={progressLabel} title={progressLabel}>
     <div class="route-line"></div>
     <div class="route-done" style={`width: ${pos}%`}></div>
 
-    {/* Position calée pour que le navire reste entier dans la piste : à 0 %
-        sa poupe touche le quai, à 100 % sa proue touche le port. Un simple
-        left:% le ferait déborder d'une demi-longueur aux extrémités. */}
-    <div class="route-boat" style={`left: calc(31px + (100% - 62px) * ${pos / 100})`}>
+    {/* Position calée pour que le navire reste entier dans la piste : poupe au
+        quai à 0 %, proue au port à 100 %. */}
+    <div class="route-boat" style={`left: calc(38px + (100% - 76px) * ${pos / 100})`}>
       <span class="boat-heave">
-        <svg class="boat-svg" width="62" height="30" viewBox="0 0 62 30" fill="none" aria-hidden="true">
+        <svg class="boat-svg" width="76" height="36" viewBox="0 0 76 36" fill="none" aria-hidden="true">
           <defs>
             <linearGradient id={`wake-${uid}`} x1="0" y1="0" x2="1" y2="0">
               <stop offset="0%"   stop-color="currentColor" stop-opacity="0"/>
-              <stop offset="100%" stop-color="currentColor" stop-opacity="0.30"/>
+              <stop offset="100%" stop-color="currentColor" stop-opacity="0.32"/>
             </linearGradient>
-            {/* Masque plutôt que stroke dégradé : les vagues gardent ainsi
-                leurs couleurs CSS, et currentColor dans un <defs> ne se
-                résout pas de la même façon selon les navigateurs. */}
+            {/* Masque plutôt que stroke dégradé : les vagues gardent leurs
+                couleurs CSS, et currentColor dans un <defs> ne se résout pas
+                de la même façon selon les navigateurs. */}
             <linearGradient id={`fade-${uid}`} x1="0" y1="0" x2="1" y2="0">
               <stop offset="0%"   stop-color="#fff" stop-opacity="0"/>
-              <stop offset="20%"  stop-color="#fff" stop-opacity="1"/>
+              <stop offset="22%"  stop-color="#fff" stop-opacity="1"/>
               <stop offset="80%"  stop-color="#fff" stop-opacity="1"/>
               <stop offset="100%" stop-color="#fff" stop-opacity="0"/>
             </linearGradient>
             <mask id={`sea-${uid}`}>
-              <rect x="-8" y="19" width="78" height="14" fill={`url(#fade-${uid})`}/>
+              <rect x="-8" y="24" width="94" height="14" fill={`url(#fade-${uid})`}/>
             </mask>
           </defs>
 
-          <!-- Sillage : traînée qui s'estompe derrière la poupe -->
-          <path class="boat-wake" d="M0,21.6 C5,20.9 11,20.6 17,20.6 L17,22.9 C11,22.9 5,22.7 0,22.2 Z"
+          <!-- Sillage : présent tant que le navire avance -->
+          <path class="boat-wake" d="M0,24.4 C7,23.6 14,23.2 20,23.2 L20,26.6 C14,26.6 7,26.2 0,25.4 Z"
                 fill={`url(#wake-${uid})`}/>
 
           <g class="boat-roll">
-            <!-- Coque : longue et basse, proue inclinée vers l'avant -->
-            <path class="hull" d="M17.5,17.4 H55 L60,18.8 L57,23 H20 Z"/>
-            <!-- Liseré de franc-bord -->
-            <path class="hull-line" d="M18.6,18.9 H56.4" stroke-width="0.9" stroke-linecap="round"/>
+            <!-- Coque : longue et basse, proue inclinée, tonture marquée -->
+            <path class="hull" d="M20.4,20.4 H66.5 L74,22.6 L69.6,27.6 H24.2 Z"/>
+            <path class="hull-boot" d="M22,24.6 H68.2" stroke-width="1.05" stroke-linecap="round"/>
 
-            <!-- Conteneurs -->
-            {containers.map(([x, y, fill]) => (
+            <!-- Cargaison : une couleur par famille de produits -->
+            {slots.map(s => (
               <g>
-                <rect x={x} y={y} width="4.2" height="2.2" rx="0.3" fill={fill}/>
-                <path d={`M${x + 0.7},${y} V${y + 2.2}`} stroke="rgba(255,255,255,0.28)" stroke-width="0.35"/>
-                <path d={`M${x + 2.1},${y} V${y + 2.2}`} stroke="rgba(255,255,255,0.28)" stroke-width="0.35"/>
-                <path d={`M${x + 3.5},${y} V${y + 2.2}`} stroke="rgba(255,255,255,0.28)" stroke-width="0.35"/>
+                <rect x={s.x} y={s.y} width={CW} height={CH} rx="0.4" fill={s.color}/>
+                <path d={`M${s.x + 1.5},${s.y} V${s.y + CH}`} stroke="#fff" stroke-opacity="0.22" stroke-width="0.4"/>
+                <path d={`M${s.x + 2.95},${s.y} V${s.y + CH}`} stroke="#fff" stroke-opacity="0.22" stroke-width="0.4"/>
+                <path d={`M${s.x + 4.4},${s.y} V${s.y + CH}`} stroke="#fff" stroke-opacity="0.22" stroke-width="0.4"/>
               </g>
             ))}
 
             <!-- Château, vers l'arrière -->
-            <rect class="hull" x="21" y="9.6" width="7.6" height="7.8" rx="0.5"/>
-            <rect class="bridge" x="21.7" y="10.4" width="6.2" height="1.5" rx="0.3"/>
-            <circle class="porthole" cx="23"   cy="13.6" r="0.55"/>
-            <circle class="porthole" cx="24.8" cy="13.6" r="0.55"/>
-            <circle class="porthole" cx="26.6" cy="13.6" r="0.55"/>
-            <circle class="porthole" cx="23"   cy="15.6" r="0.55"/>
-            <circle class="porthole" cx="24.8" cy="15.6" r="0.55"/>
+            <path class="hull" d="M24,20.4 V11.6 h9 V20.4 Z"/>
+            <rect class="bridge" x="24.9" y="12.5" width="7.2" height="1.8" rx="0.4"/>
+            <circle class="porthole" cx="26.5" cy="16.4" r="0.62"/>
+            <circle class="porthole" cx="28.5" cy="16.4" r="0.62"/>
+            <circle class="porthole" cx="30.5" cy="16.4" r="0.62"/>
+            <circle class="porthole" cx="26.5" cy="18.6" r="0.62"/>
+            <circle class="porthole" cx="28.5" cy="18.6" r="0.62"/>
 
-            <!-- Cheminée, avec sa bande coral -->
-            <path class="hull" d="M23.6,9.6 V6.1 h2.7 V9.6 Z"/>
-            <rect class="funnel-band" x="23.6" y="6.6" width="2.7" height="1.1"/>
+            <!-- Cheminée : la bande coral est la seule marque de marque -->
+            <path class="hull" d="M27,11.6 V6.4 h3.2 V11.6 Z"/>
+            <rect class="funnel-band" x="27" y="7.2" width="3.2" height="1.5"/>
           </g>
 
-          <!-- Deux vagues sous la coque, déphasées entre elles et par rapport
-               au navire. Étendue calée sur le navire, extrémités fondues. -->
+          <!-- Deux vagues sous la coque, déphasées entre elles et du navire -->
           <g mask={`url(#sea-${uid})`}>
-            <path class="wave wave--1" d="M-2,25.2 q4,-1.5 8,0 t8,0 t8,0 t8,0 t8,0 t8,0 t8,0 t8,0"/>
-            <path class="wave wave--2" d="M-4,27.3 q5,-1.2 10,0 t10,0 t10,0 t10,0 t10,0 t10,0 t10,0"/>
+            <path class="wave wave--1" d="M-2,29.6 q5,-1.7 10,0 t10,0 t10,0 t10,0 t10,0 t10,0 t10,0 t10,0"/>
+            <path class="wave wave--2" d="M-6,32 q6,-1.4 12,0 t12,0 t12,0 t12,0 t12,0 t12,0 t12,0"/>
           </g>
         </svg>
       </span>
     </div>
 
     <span class="route-port route-port--start" aria-hidden="true"></span>
-    <span class={`route-port route-port--end ${arrived ? 'is-reached' : ''}`} aria-hidden="true"></span>
+    <span class={`route-port route-port--end ${pos >= 100 ? 'is-reached' : ''}`} aria-hidden="true"></span>
   </div>
 
   <div class="route-labels">
     <span class="route-label">Départ <span class="route-date">{departureLabel}</span></span>
     {late ? (
-      <span class="route-late">Retard de {daysLate} jour{daysLate > 1 ? 's' : ''} · ETA {etaLabel}</span>
+      <span class="route-note route-note--late">Retard de {daysLate} jour{daysLate > 1 ? 's' : ''} · ETA {etaLabel}</span>
+    ) : arrived ? (
+      <span class="route-note route-note--arrived">À quai · ETA {etaLabel}</span>
     ) : (
       <span class="route-label route-label--end">Arrivée estimée <span class="route-date">{etaLabel}</span></span>
     )}
   </div>
 </div>
 
+<script>
+  // Les boucles au repos s'arrêtent hors écran : sur une liste longue, une
+  // dizaine de navires animés en permanence coûtent pour rien.
+  const routes = document.querySelectorAll('.route');
+  if (routes.length && 'IntersectionObserver' in window) {
+    const io = new IntersectionObserver(
+      entries => entries.forEach(e => e.target.classList.toggle('is-becalmed', !e.isIntersecting)),
+      { rootMargin: '96px' },
+    );
+    routes.forEach(r => io.observe(r));
+  }
+</script>
+
 <style>
 .route { margin: var(--space-4) 0 var(--space-2); }
 
 .route-track {
   position: relative;
-  height: 34px;
+  height: 40px;
   margin: 0 4px;
 }
 
+/* La voie : parcourue en accent océan, restante en simple séparateur. */
 .route-line {
   position: absolute;
   top: 50%;
@@ -149,21 +190,20 @@ const containers: [number, number, string][] = [
   right: 0;
   height: 3px;
   margin-top: -1.5px;
-  border-radius: 2px;
+  border-radius: var(--radius-full);
   background: var(--color-border);
 }
-
 .route-done {
   position: absolute;
   top: 50%;
   left: 0;
   height: 3px;
   margin-top: -1.5px;
-  border-radius: 2px;
-  background: oklch(0.62 0.11 220);
-  transition: width var(--dur-slow, 400ms) ease;
+  border-radius: var(--radius-full);
+  background: oklch(0.52 0.088 210);
+  transition: width var(--dur-slow) var(--ease-out-expo);
 }
-.route--late .route-done { background: oklch(0.70 0.14 70); }
+.route--rough .route-done { background: oklch(0.62 0.135 65); }
 
 .route-port {
   position: absolute;
@@ -178,56 +218,63 @@ const containers: [number, number, string][] = [
 }
 .route-port--start { left: -4px; }
 .route-port--end   { right: -4px; }
-.route-port--end.is-reached { border-color: oklch(0.62 0.11 220); background: oklch(0.62 0.11 220); }
-.route--late .route-port--end.is-reached { border-color: oklch(0.70 0.14 70); background: oklch(0.70 0.14 70); }
+.route-port--end.is-reached {
+  border-color: oklch(0.52 0.088 210);
+  background: oklch(0.52 0.088 210);
+}
+.route--rough .route-port--end.is-reached {
+  border-color: oklch(0.62 0.135 65);
+  background: oklch(0.62 0.135 65);
+}
 
-/* Le navire : positionné le long du trajet, la coque assise sur la ligne. */
 /* Largeur et hauteur explicites : sans elles, une boîte absolue en largeur
-   auto est réduite en shrink-to-fit par le bord droit du conteneur. Près de
-   100 %, elle tombait à 0 px et translate(-50%) ne décalait plus rien — le
-   navire en retard sortait entièrement du cadre. */
+   auto est réduite en shrink-to-fit par le bord droit du conteneur, et près
+   de 100 % translate(-50%) ne décale plus rien. */
 .route-boat {
   position: absolute;
   top: 50%;
-  width: 62px;
-  height: 30px;
+  width: 76px;
+  height: 36px;
   transform: translate(-50%, -50%);
   line-height: 0;
   z-index: 2;
   pointer-events: none;
 }
 /* La teinte du sillage est portée par le <svg> : le currentColor des stops
-   du gradient se résout depuis le <defs>, qui hérite de la racine SVG, et
-   non depuis le <path> qui référence le gradient. */
-.boat-svg { display: block; overflow: visible; color: oklch(0.55 0.06 240); }
-.route--late .boat-svg { color: oklch(0.58 0.11 60); }
+   se résout depuis le <defs>, qui hérite de la racine SVG. */
+.boat-svg {
+  display: block;
+  overflow: visible;
+  color: oklch(0.62 0.030 210);
+}
 
-/* Coque en ink : silhouette sombre qui laisse ressortir les conteneurs. */
-.hull        { fill: oklch(0.30 0.035 250); }
-.hull-line   { stroke: oklch(0.52 0.05 250); }
-.bridge      { fill: oklch(0.72 0.05 230); }
-.porthole    { fill: oklch(0.86 0.06 230); }
+/* Coque en ink système : la seule couleur saturée du navire est la bande
+   coral de la cheminée, et les conteneurs, qui portent une donnée. */
+.hull        { fill: var(--color-ink); }
+.hull-boot   { stroke: oklch(0.42 0.055 210); }
+.bridge      { fill: oklch(0.72 0.045 210); }
+.porthole    { fill: oklch(0.86 0.050 210); }
 .funnel-band { fill: var(--color-primary); }
 
 .wave {
   fill: none;
-  stroke: oklch(0.72 0.07 225);
-  stroke-width: 1.1;
+  stroke: oklch(0.74 0.055 210);
+  stroke-width: 1.2;
   stroke-linecap: round;
 }
-.wave--2 { stroke: oklch(0.80 0.05 225); stroke-width: 0.9; }
+.wave--2 { stroke: oklch(0.83 0.038 210); stroke-width: 1; }
 
-/* Mer agitée : tout passe en ambre quand le navire est en retard. */
-.route--late .hull      { fill: oklch(0.36 0.07 60); }
-.route--late .hull-line { stroke: oklch(0.58 0.10 60); }
-.route--late .wave      { stroke: oklch(0.74 0.11 65); }
-.route--late .wave--2   { stroke: oklch(0.82 0.08 65); }
+/* Mer agitée : la coque vire à l'ambre avec le reste de la ligne. */
+.route--rough .hull      { fill: oklch(0.34 0.075 60); }
+.route--rough .hull-boot { stroke: oklch(0.55 0.100 60); }
+.route--rough .boat-svg  { color: oklch(0.62 0.090 60); }
+.route--rough .wave      { stroke: oklch(0.76 0.100 65); }
+.route--rough .wave--2   { stroke: oklch(0.84 0.070 65); }
 
 /* ── Tangage ──────────────────────────────────────────────────────────
-   Deux axes séparés, à des durées volontairement non multiples l'une de
-   l'autre : la combinaison ne se referme jamais sur un cycle court, ce qui
-   évite l'effet mécanique. Le déphasage --phase désynchronise les navires
-   affichés ensemble. */
+   Deux axes séparés, à des durées volontairement non multiples : la
+   combinaison ne se referme jamais sur un cycle court. --phase
+   désynchronise les navires affichés ensemble. */
 .boat-heave {
   display: inline-block;
   animation: boat-heave 5.5s ease-in-out infinite;
@@ -236,23 +283,20 @@ const containers: [number, number, string][] = [
 }
 .boat-roll {
   transform-box: fill-box;
-  transform-origin: 50% 80%;
+  transform-origin: 50% 82%;
   animation: boat-roll 4s ease-in-out infinite;
   animation-delay: calc(var(--phase, 0) * -1s);
   will-change: transform;
 }
-
 @keyframes boat-heave {
-  0%, 100% { transform: translateY(0.9px); }
-  50%      { transform: translateY(-1.6px); }
+  0%, 100% { transform: translateY(1px); }
+  50%      { transform: translateY(-1.8px); }
 }
 @keyframes boat-roll {
   0%, 100% { transform: rotate(-2.4deg); }
   50%      { transform: rotate(2.4deg); }
 }
 
-/* Vagues : périodes encore différentes, et décalage propre pour qu'elles
-   n'accompagnent pas le navire en cadence. */
 .wave--1 {
   animation: wave-1 4.7s ease-in-out infinite;
   animation-delay: calc(var(--phase, 0) * -1s - 0.8s);
@@ -263,35 +307,52 @@ const containers: [number, number, string][] = [
 }
 @keyframes wave-1 {
   0%, 100% { transform: translate(0, 0); }
-  50%      { transform: translate(-3px, -0.8px); }
+  50%      { transform: translate(-3.5px, -0.9px); }
 }
 @keyframes wave-2 {
   0%, 100% { transform: translate(0, 0.4px); }
-  50%      { transform: translate(3px, -0.5px); }
+  50%      { transform: translate(3.5px, -0.6px); }
 }
-
 .boat-wake {
   animation: wake-fade 5.5s ease-in-out infinite;
   animation-delay: calc(var(--phase, 0) * -1s);
 }
 @keyframes wake-fade {
-  0%, 100% { opacity: 0.9; }
+  0%, 100% { opacity: 0.95; }
   50%      { opacity: 0.55; }
 }
 
-/* Mer agitée : plus ample et plus lent. */
-.route--late .boat-heave { animation-duration: 8s;   animation-name: boat-heave-rough; }
-.route--late .boat-roll  { animation-duration: 6.5s; animation-name: boat-roll-rough; }
+/* Mer agitée : plus ample, plus lente. */
+.route--rough .boat-heave { animation-duration: 8s;   animation-name: boat-heave-rough; }
+.route--rough .boat-roll  { animation-duration: 6.5s; animation-name: boat-roll-rough; }
 @keyframes boat-heave-rough {
-  0%, 100% { transform: translateY(1.8px); }
-  50%      { transform: translateY(-2.8px); }
+  0%, 100% { transform: translateY(1.9px); }
+  50%      { transform: translateY(-3px); }
 }
 @keyframes boat-roll-rough {
   0%, 100% { transform: rotate(-4.2deg); }
   50%      { transform: rotate(4.2deg); }
 }
-.route--late .wave--1 { animation-duration: 6.5s; }
-.route--late .wave--2 { animation-duration: 8.4s; }
+.route--rough .wave--1 { animation-duration: 6.5s; }
+.route--rough .wave--2 { animation-duration: 8.4s; }
+
+/* À quai : la mer se calme pour de bon. Plus de tangage, plus de houle, plus
+   de sillage — le navire ne va nulle part, et le visuel le dit. */
+.route--arrived .boat-heave,
+.route--arrived .boat-roll,
+.route--arrived .wave,
+.route--arrived .boat-wake { animation: none; }
+.route--arrived .boat-roll { transform: rotate(0deg); }
+.route--arrived .boat-wake { opacity: 0; }
+.route--arrived .wave    { stroke: oklch(0.82 0.030 210); }
+.route--arrived .wave--2 { stroke: oklch(0.88 0.022 210); }
+
+/* Hors écran : on suspend plutôt que de supprimer, la reprise est ainsi
+   invisible quand la carte revient. */
+.route.is-becalmed .boat-heave,
+.route.is-becalmed .boat-roll,
+.route.is-becalmed .wave,
+.route.is-becalmed .boat-wake { animation-play-state: paused; }
 
 .route-labels {
   display: flex;
@@ -303,14 +364,14 @@ const containers: [number, number, string][] = [
 }
 .route-label--end { text-align: right; }
 .route-date { color: var(--color-ink); font-weight: 600; }
-.route-late { color: oklch(0.45 0.15 60); font-weight: 700; text-align: right; }
+.route-note { font-weight: 700; text-align: right; }
+.route-note--late    { color: oklch(0.45 0.150 60); }
+.route-note--arrived { color: oklch(0.40 0.080 210); }
 
-/* Préférence système : tout est figé. Le navire garde sa position sur le
-   trajet, qui est la seule information réellement portée par le visuel. */
-/* Préférence système : tout est figé, y compris l'état « mer agitée ».
-   Les sélecteurs sont préfixés par .route pour peser (0,2,0), à égalité avec
-   les règles .route--late : une media query n'ajoute aucune spécificité, et
-   sans ce préfixe les navires en retard continuaient de tanguer. */
+/* Préférence système : tout est figé, y compris « mer agitée ». Les
+   sélecteurs sont préfixés par .route pour peser (0,2,0), à égalité avec les
+   règles .route--rough — une media query n'ajoute aucune spécificité, et sans
+   ce préfixe les navires en retard continuaient de tanguer. */
 @media (prefers-reduced-motion: reduce) {
   .route .boat-heave,
   .route .boat-roll,
