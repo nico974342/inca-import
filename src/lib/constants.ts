@@ -198,6 +198,46 @@ export function computeSuggestedReorderQty(
   return suggested > 0 ? suggested : 0;
 }
 
+// ── Simulateur de commande fournisseur ──────────────────────────────────
+/** Planning horizon for the supplier order simulator: 3 months of cover. */
+export const COUVERTURE_DEFAULT_WEEKS = 13;
+
+/** 13 weeks / 3 months — the single source both the default horizon and the
+ *  1/2/3/6-month selector derive from, so they can never drift apart. */
+export const COUVERTURE_WEEKS_PER_MONTH = COUVERTURE_DEFAULT_WEEKS / 3;
+
+/** Horizons offered by the on-page selector, in months. */
+export const COUVERTURE_HORIZON_MONTHS = [1, 2, 3, 6] as const;
+
+export function couvertureHorizonWeeks(months: number): number {
+  return months * COUVERTURE_WEEKS_PER_MONTH;
+}
+
+/** Weeks of cover the current stock represents at the current sales pace.
+ *  Null when there's no velocity to divide by — a product that hasn't sold
+ *  has no meaningful runway, which is distinct from a runway of zero. */
+export function computeCouvertureWeeks(
+  stockQuantity: number | null | undefined,
+  vitesseVenteWeekly: number | null | undefined,
+): number | null {
+  if (!vitesseVenteWeekly || vitesseVenteWeekly <= 0) return null;
+  return (stockQuantity ?? 0) / vitesseVenteWeekly;
+}
+
+/** Cartons to order so stock covers `horizonWeeks` of sales at the current
+ *  pace: (weekly rate × horizon) − stock on hand, rounded up, floored at 0.
+ *  Null when there's no velocity to size an order from — the caller shows
+ *  "pas d'historique" and suggests 0 rather than treating it as a real 0. */
+export function computeCouvertureOrderQty(
+  vitesseVenteWeekly: number | null | undefined,
+  horizonWeeks: number,
+  stockQuantity: number | null | undefined,
+): number | null {
+  if (!vitesseVenteWeekly || vitesseVenteWeekly <= 0) return null;
+  const qty = Math.ceil(vitesseVenteWeekly * horizonWeeks - (stockQuantity ?? 0));
+  return qty > 0 ? qty : 0;
+}
+
 /** Task 1's flag condition: stock at or below the reorder point. */
 export function isAtOrBelowSeuil(
   stockQuantity: number | null | undefined,

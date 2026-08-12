@@ -105,6 +105,8 @@ function urgencyClass(jours: number | null): string {
   <p class="intro">
     Produits dont le stock est au seuil de réapprovisionnement ou en-dessous, triés par urgence.
     La vitesse de vente est calculée sur les {REAPPRO_WEEKS_LOOKBACK} dernières semaines (commandes confirmées ou livrées).
+    Pour chiffrer une commande complète sur plusieurs mois, utilisez le
+    <a href="/admin/commande-fournisseur">simulateur de commande fournisseur →</a>
   </p>
 
   {rows.length === 0 ? (
@@ -185,6 +187,7 @@ function urgencyClass(jours: number | null): string {
   margin-bottom: var(--space-6);
   max-width: 68ch;
 }
+.intro a { color: var(--color-primary-deep); }
 
 .groups {
   display: flex;
