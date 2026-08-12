@@ -176,6 +176,23 @@ const CLIENT_ERROR_MSG: Record<string, string> = {
   erreur:        "Une erreur est survenue lors de l'enregistrement du client.",
 };
 
+const deleteError  = Astro.url.searchParams.get('delete_error');
+const deleteDetail = Astro.url.searchParams.get('detail');
+const authWarning  = Astro.url.searchParams.get('auth_warning');
+const DELETE_ERROR_MSG: Record<string, string> = {
+  lecture:              "Impossible de lire la fiche client.",
+  introuvable:          "Ce client n'existe plus (il a peut-être déjà été supprimé).",
+  auth_lookup:          "Impossible de retrouver le compte de connexion associé.",
+  lecture_commandes:    "Impossible de lire les commandes du client.",
+  lecture_lignes:       "Impossible de lire les lignes de commande.",
+  restauration_stock:   "Le stock des commandes livrées n'a pas pu être restauré — suppression annulée.",
+  suppression_lignes:   "Impossible de supprimer les lignes de commande.",
+  suppression_commandes:"Impossible de supprimer les commandes.",
+  suppression_bl:       "Impossible de supprimer les bons de livraison.",
+  suppression_panier:   "Impossible de vider le panier du client.",
+  suppression_client:   "Impossible de supprimer la fiche client.",
+};
+
 const CLIENT_STATUS_LABELS: Record<string, string> = {
   prospect:   'Prospect',
   en_attente: 'Client en attente',
@@ -335,6 +352,30 @@ function formatDate(iso: string) {
         <path d="M5 8l2 2 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       Client supprimé avec succès.
+    </div>
+  )}
+  {authWarning && (
+    <div class="error-alert" role="alert">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M8 5v3.5M8 11h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      <span>
+        La fiche client a bien été supprimée, mais son compte de connexion existe toujours.
+        <span class="alert-detail">{authWarning}</span>
+      </span>
+    </div>
+  )}
+  {deleteError && (
+    <div class="error-alert" role="alert">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M8 5v3.5M8 11h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      <span>
+        Suppression impossible — {DELETE_ERROR_MSG[deleteError] ?? "une erreur est survenue."} Le client n'a pas été supprimé.
+        {deleteDetail && <span class="alert-detail">{deleteDetail}</span>}
+      </span>
     </div>
   )}
   {clientError && (
@@ -569,6 +610,16 @@ function formatDate(iso: string) {
   margin-bottom: var(--space-5);
 }
 .error-alert svg { flex-shrink: 0; }
+
+/* Raw DB message under the plain-language line — for reporting a bug. */
+.alert-detail {
+  display: block;
+  margin-top: var(--space-1);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--text-xs);
+  opacity: 0.75;
+  word-break: break-word;
+}
 
 .pagination {
   display: flex;

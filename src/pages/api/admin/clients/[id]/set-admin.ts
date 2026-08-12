@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
 import { logAdminAction } from '../../../../../lib/audit';
-import { normalizeEmail } from '../../../../../lib/clients';
+import { findAuthUserIdByEmail } from '../../../../../lib/clients';
 
 export const POST: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -30,23 +30,15 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
     return new Response('Ce client n\'a pas d\'email enregistré.', { status: 400 });
   }
 
-  // Resolve auth user ID: prefer stored user_id, fallback to email search
-  // (paginated — Supabase caps each page, so loop until exhausted)
-  let authUserId: string | null = (client as any).user_id ?? null;
-  if (!authUserId) {
-    const wanted = normalizeEmail(client.email);
-    let page = 1;
-    while (!authUserId) {
-      const { data: users } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: 1000 });
-      const batch = users?.users ?? [];
-      const found = batch.find((u: any) => normalizeEmail(u.email) === wanted);
-      authUserId = found?.id ?? null;
-      if (batch.length < 1000) break;
-      page++;
-    }
-  }
-
   const base = new URL(request.url).origin;
+
+  // client_accounts has no user_id column — email is the only link to auth.users.
+  let authUserId: string | null;
+  try {
+    authUserId = await findAuthUserIdByEmail(client.email);
+  } catch {
+    return Response.redirect(`${base}/admin/clients/${id}?role_error=update_failed`, 303);
+  }
 
   if (!authUserId) {
     return Response.redirect(`${base}/admin/clients/${id}?role_error=no_auth_user`, 303);
@@ -61,11 +53,18 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
     return Response.redirect(`${base}/admin/clients/${id}?role_error=update_failed`, 303);
   }
 
-  // Store user_id for future use; activate account when promoting
-  await supabaseAdmin.from('client_accounts').update({
-    user_id: authUserId,
-    ...(action === 'promote' ? { status: 'actif' } : {}),
-  }).eq('id', id);
+  // Activate account when promoting. client_accounts has no user_id column —
+  // writing one here made PostgREST reject the whole update, so the status
+  // change silently never applied.
+  if (action === 'promote') {
+    const { error: statusErr } = await supabaseAdmin
+      .from('client_accounts')
+      .update({ status: 'actif' })
+      .eq('id', id);
+    if (statusErr) {
+      return Response.redirect(`${base}/admin/clients/${id}?role_error=update_failed`, 303);
+    }
+  }
 
   await logAdminAction({
     adminEmail: user.email ?? 'inconnu',
