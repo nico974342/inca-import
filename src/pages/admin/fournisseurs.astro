@@ -1,0 +1,311 @@
+---
+import AdminLayout from '../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../lib/supabase';
+import { sanitizeText } from '../../lib/sanitize';
+import { DELAI_LIVRAISON_DEFAUT_JOURS } from '../../lib/constants';
+
+if (Astro.request.method === 'POST') {
+  const data   = await Astro.request.formData();
+  const action = data.get('action') as string;
+
+  /** Empty means "unknown" — stored as NULL so the default takes over,
+   *  which is different from a supplier that genuinely delivers in 0 days. */
+  const parseDelai = (raw: FormDataEntryValue | null): number | null => {
+    const s = (raw as string ?? '').trim();
+    if (s === '') return null;
+    const n = Number(s);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return Math.round(n);
+  };
+
+  if (action === 'add') {
+    const name = sanitizeText(data.get('name') as string, 120)?.trim();
+    if (name) {
+      const { error } = await supabaseAdmin
+        .from('suppliers')
+        .insert({ name, delai_livraison_jours: parseDelai(data.get('delai')) });
+      if (error) {
+        const reason = error.code === '23505' ? 'nom_existe' : 'erreur';
+        return Astro.redirect(`/admin/fournisseurs?err=${reason}`);
+      }
+    }
+  } else if (action === 'update') {
+    const id = data.get('id') as string;
+    if (id) {
+      const { error } = await supabaseAdmin
+        .from('suppliers')
+        .update({ delai_livraison_jours: parseDelai(data.get('delai')) })
+        .eq('id', id);
+      if (error) return Astro.redirect('/admin/fournisseurs?err=erreur');
+    }
+  }
+  return Astro.redirect('/admin/fournisseurs?ok=1');
+}
+
+const { data: suppliers, error: loadErr } = await supabaseAdmin
+  .from('suppliers')
+  .select('id, name, delai_livraison_jours, created_at')
+  .order('name', { ascending: true });
+
+// Products per supplier, via the same last-reception inference the simulator
+// uses — so this page shows how much each delay actually drives.
+const { data: receptionRows } = await supabaseAdmin
+  .from('stock_reception_items')
+  .select('product_id, created_at, stock_receptions(supplier_name)')
+  .order('created_at', { ascending: false });
+
+const supplierByProduct = new Map<string, string>();
+for (const row of (receptionRows ?? [])) {
+  if (!row.product_id || supplierByProduct.has(row.product_id)) continue;
+  const s = (row as any).stock_receptions?.supplier_name;
+  if (s) supplierByProduct.set(row.product_id, s);
+}
+const productCountBySupplier = new Map<string, number>();
+for (const s of supplierByProduct.values()) {
+  productCountBySupplier.set(s, (productCountBySupplier.get(s) ?? 0) + 1);
+}
+
+const rows = (suppliers ?? []).map(s => ({
+  ...s,
+  productCount: productCountBySupplier.get(s.name) ?? 0,
+}));
+const missingDelai = rows.filter(r => r.delai_livraison_jours == null).length;
+
+const ok  = !!Astro.url.searchParams.get('ok');
+const err = Astro.url.searchParams.get('err');
+const ERR_MSG: Record<string, string> = {
+  nom_existe: 'Un fournisseur porte déjà ce nom.',
+  erreur:     "L'enregistrement a échoué. Veuillez réessayer.",
+};
+
+// PostgREST reports an unknown table as PGRST205 ("not in the schema cache"),
+// not the raw Postgres 42P01 — accept both.
+const tableMissing = loadErr?.code === 'PGRST205' || loadErr?.code === '42P01';
+---
+<AdminLayout title="Fournisseurs" activeNav="fournisseurs">
+  <p class="intro">
+    Délai d'acheminement par fournisseur, utilisé par le
+    <a href="/admin/commande-fournisseur">simulateur de commande</a> pour savoir combien de temps
+    couvrir. Un fournisseur sans délai renseigné retombe sur {DELAI_LIVRAISON_DEFAUT_JOURS} jours par défaut.
+  </p>
+
+  {tableMissing ? (
+    <div class="alert alert--error" role="alert">
+      La table <code>suppliers</code> n'existe pas encore. Lancez la migration
+      <code>supabase/migrations/suppliers_table.sql</code> dans Supabase, puis rechargez cette page.
+    </div>
+  ) : (
+    <>
+      {ok  && <div class="alert alert--ok" role="status">Enregistré.</div>}
+      {err && <div class="alert alert--error" role="alert">{ERR_MSG[err] ?? ERR_MSG.erreur}</div>}
+      {missingDelai > 0 && (
+        <div class="alert alert--warn" role="status">
+          {missingDelai} fournisseur{missingDelai > 1 ? 's' : ''} sans délai renseigné —
+          leurs produits sont calculés sur {DELAI_LIVRAISON_DEFAUT_JOURS} j par défaut.
+        </div>
+      )}
+
+      <form method="post" class="add-form">
+        <input type="hidden" name="action" value="add" />
+        <div class="field">
+          <label class="field-label" for="sf-name">Nouveau fournisseur</label>
+          <input type="text" id="sf-name" name="name" required maxlength="120" placeholder="Nom du fournisseur" autocomplete="off" />
+        </div>
+        <div class="field field--narrow">
+          <label class="field-label" for="sf-delai">Délai (jours)</label>
+          <input type="number" id="sf-delai" name="delai" min="0" step="1" placeholder="—" />
+        </div>
+        <button type="submit" class="btn btn-primary">Ajouter</button>
+      </form>
+
+      {rows.length === 0 ? (
+        <div class="empty-state">
+          <p class="empty-title">Aucun fournisseur.</p>
+          <p class="empty-body">Ajoutez-en un ci-dessus, ou lancez la migration pour importer ceux déjà présents dans vos réceptions.</p>
+        </div>
+      ) : (
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Fournisseur</th>
+                <th class="th-num">Produits</th>
+                <th class="th-num">Délai d'acheminement</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(s => (
+                <tr class={s.delai_livraison_jours == null ? 'row--missing' : ''}>
+                  <td class="td-strong">{s.name}</td>
+                  <td class="th-num td-muted">{s.productCount || '—'}</td>
+                  <td class="th-num">
+                    <form method="post" class="inline-form">
+                      <input type="hidden" name="action" value="update" />
+                      <input type="hidden" name="id" value={s.id} />
+                      <input
+                        type="number"
+                        name="delai"
+                        class="delai-input"
+                        min="0"
+                        step="1"
+                        value={s.delai_livraison_jours ?? ''}
+                        placeholder={String(DELAI_LIVRAISON_DEFAUT_JOURS)}
+                        aria-label={`Délai en jours pour ${s.name}`}
+                      />
+                      <span class="unit">j</span>
+                      <button type="submit" class="save-btn" aria-label="Enregistrer">✓</button>
+                    </form>
+                  </td>
+                  <td class="td-note">
+                    {s.delai_livraison_jours == null && (
+                      <span class="badge-default">défaut {DELAI_LIVRAISON_DEFAUT_JOURS} j</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  )}
+</AdminLayout>
+
+<style>
+.intro {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  margin-bottom: var(--space-5);
+  max-width: 74ch;
+}
+.intro a { color: var(--color-primary-deep); }
+
+.alert {
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  font-size: var(--text-sm);
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+}
+.alert code { font-family: var(--font-mono); font-size: 0.9em; }
+.alert--ok    { color: oklch(0.40 0.12 150); background: oklch(0.96 0.04 150); border-color: oklch(0.86 0.08 150); }
+.alert--error { color: oklch(0.46 0.18 25);  background: oklch(0.97 0.03 25);  border-color: oklch(0.88 0.07 25); }
+.alert--warn  { color: oklch(0.42 0.14 60);  background: oklch(0.96 0.05 60);  border-color: oklch(0.87 0.09 60); }
+
+.add-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  margin-bottom: var(--space-5);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 200px; }
+.field--narrow { flex: 0 0 140px; min-width: 140px; }
+.field-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.field input {
+  padding: 0.5rem 0.75rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  min-height: 40px;
+  outline: none;
+}
+.field input:focus { border-color: var(--color-primary); }
+
+.table-wrap {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+.data-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.data-table thead th {
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+.th-num { text-align: right; }
+.data-table tbody td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+.data-table tbody tr:last-child td { border-bottom: none; }
+.td-strong { font-weight: 500; color: var(--color-ink); }
+.td-muted  { color: var(--color-muted); }
+.td-note   { text-align: right; white-space: nowrap; }
+
+.row--missing td { background: oklch(0.985 0.012 60); }
+
+.inline-form {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.delai-input {
+  width: 90px;
+  padding: 0.375rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  text-align: right;
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+.delai-input:focus { border-color: var(--color-primary); }
+.unit { font-size: var(--text-xs); color: var(--color-muted); }
+.save-btn {
+  padding: 0.25rem 0.6rem;
+  font-size: var(--text-sm);
+  color: var(--color-primary-deep);
+  background: none;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.save-btn:hover { background: var(--color-surface-2); }
+
+.badge-default {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: oklch(0.42 0.14 60);
+  background: oklch(0.95 0.06 60);
+  white-space: nowrap;
+}
+
+.empty-state {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-16) var(--space-8);
+  text-align: center;
+}
+.empty-title { font-weight: 600; color: var(--color-ink); margin-bottom: var(--space-2); }
+.empty-body  { color: var(--color-muted); }
+</style>

@@ -252,18 +252,78 @@ export function computeCouvertureWeeks(
   return (stockQuantity ?? 0) / vitesseVenteWeekly;
 }
 
-/** Cartons to order so stock covers `horizonWeeks` of sales at the current
- *  pace: (weekly rate × horizon) − stock on hand, rounded up, floored at 0.
- *  Null when there's no velocity to size an order from — the caller shows
- *  "pas d'historique" and suggests 0 rather than treating it as a real 0. */
-export function computeCouvertureOrderQty(
+/** Fallback transit time when neither the product nor its supplier defines
+ *  one. Deliberately conservative: under-ordering on a 50-day container is
+ *  far more costly than slightly over-ordering on a local supplier. */
+export const DELAI_LIVRAISON_DEFAUT_JOURS = 30;
+
+export type DelaiSource = 'produit' | 'fournisseur' | 'defaut';
+
+export type DelaiResolu = {
+  jours: number;
+  source: DelaiSource;
+  /** Supplier name when the delay came from the supplier, else null. */
+  fournisseur: string | null;
+};
+
+/** Transit time for a product, most specific source first:
+ *   1. the product's own override (a deliberate per-product exception)
+ *   2. its supplier's delay, from the most recent reception
+ *   3. DELAI_LIVRAISON_DEFAUT_JOURS
+ *  The source travels with the number so the UI can flag lines still resting
+ *  on the default, which are the ones needing a real delay entered. */
+export function resolveDelaiLivraison(
+  produitDelaiJours: number | null | undefined,
+  fournisseurNom: string | null | undefined,
+  fournisseurDelaiJours: number | null | undefined,
+): DelaiResolu {
+  if (produitDelaiJours != null && produitDelaiJours >= 0) {
+    return { jours: produitDelaiJours, source: 'produit', fournisseur: null };
+  }
+  if (fournisseurDelaiJours != null && fournisseurDelaiJours >= 0) {
+    return { jours: fournisseurDelaiJours, source: 'fournisseur', fournisseur: fournisseurNom ?? null };
+  }
+  return { jours: DELAI_LIVRAISON_DEFAUT_JOURS, source: 'defaut', fournisseur: null };
+}
+
+/** How an order is sized.
+ *  - 'amorcage'  — first order or catching up: cover the transit AND the
+ *                  horizon, since nothing is in the pipeline behind it.
+ *  - 'reassort'  — steady state: reorder one transit's worth at each arrival,
+ *                  so deliveries chain without a gap. Standard import practice.
+ */
+export type ModeCommande = 'amorcage' | 'reassort';
+
+/** Cartons to order, rounded up and floored at 0. Null when there's no
+ *  velocity to size an order from — the caller shows "pas d'historique" and
+ *  suggests 0 rather than treating it as a real 0. */
+export function computeOrderQty(
   vitesseVenteWeekly: number | null | undefined,
+  delaiWeeks: number,
   horizonWeeks: number,
   stockQuantity: number | null | undefined,
+  mode: ModeCommande,
 ): number | null {
   if (!vitesseVenteWeekly || vitesseVenteWeekly <= 0) return null;
-  const qty = Math.ceil(vitesseVenteWeekly * horizonWeeks - (stockQuantity ?? 0));
+  const weeksCovered = mode === 'amorcage' ? delaiWeeks + horizonWeeks : delaiWeeks;
+  const qty = Math.ceil(vitesseVenteWeekly * weeksCovered - (stockQuantity ?? 0));
   return qty > 0 ? qty : 0;
+}
+
+/** Days of stock left, as a date. Null when there's no velocity to
+ *  extrapolate — same reasoning as computeJoursAvantRupture. */
+export function estimatedRuptureDate(
+  stockQuantity: number | null | undefined,
+  vitesseVenteWeekly: number | null | undefined,
+  from: Date = new Date(),
+): Date | null {
+  const jours = computeJoursAvantRupture(stockQuantity, vitesseVenteWeekly);
+  if (jours == null) return null;
+  return new Date(from.getTime() + jours * 24 * 60 * 60 * 1000);
+}
+
+export function estimatedArrivalDate(delaiJours: number, from: Date = new Date()): Date {
+  return new Date(from.getTime() + delaiJours * 24 * 60 * 60 * 1000);
 }
 
 /** Task 1's flag condition: stock at or below the reorder point. */
