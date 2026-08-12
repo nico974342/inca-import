@@ -77,13 +77,6 @@ const { title, activeNav } = Astro.props;
           </svg>
           Stocks
         </a>
-        <a href="/admin/reappro" class={`nav-link ${activeNav === 'reappro' ? 'nav-link--active' : ''}`}>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M8 1.5v9M8 10.5 4.5 7M8 10.5 11.5 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M2 12.5h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-          Réassort
-        </a>
         <a href="/admin/commande-fournisseur" class={`nav-link ${activeNav === 'commande-fournisseur' ? 'nav-link--active' : ''}`}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path d="M1.5 2h1.8l1.6 8.2a1 1 0 0 0 1 .8h6.3a1 1 0 0 0 1-.8L14.5 5H4.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -154,20 +147,10 @@ const { title, activeNav } = Astro.props;
           </svg>
           Journal
         </a>
-        <a href="/admin/taches" class={`nav-link ${activeNav === 'taches' ? 'nav-link--active' : ''}`}>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M2.5 4.5 4 6l2.5-3M2.5 10.5 4 12l2.5-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M8.5 5h5M8.5 11h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-          Tâches
-        </a>
-        <a href="/admin/chat" class={`nav-link ${activeNav === 'chat' ? 'nav-link--active' : ''}`}>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M2 3h12v8H6l-3 3v-3H2V3Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-          </svg>
-          Chat
-          <span class="nav-badge" id="chatBadge" style="display:none">0</span>
-        </a>
+        {/* Réassort, Tâches et Chat sont volontairement masqués de la
+            navigation pour l'alléger. Les pages, les tables et l'API
+            restent en place : réafficher un lien ici suffit à les
+            remettre en service. */}
       </nav>
 
       <div class="sidebar-footer">
@@ -226,6 +209,10 @@ const { title, activeNav } = Astro.props;
     // ── Chat unread badge ──────────────────────────────────────────
     // "Unread" is tracked client-side only (localStorage last-seen
     // timestamp) — simplest option, no per-admin read-state table needed.
+    //
+    // Inert while the Chat link is hidden from the sidebar: #chatBadge no
+    // longer exists, so this returns immediately and never starts polling.
+    // Kept as-is so restoring the nav entry restores the badge with it.
     (function chatBadge() {
       const badge = document.getElementById('chatBadge');
       if (!badge) return;

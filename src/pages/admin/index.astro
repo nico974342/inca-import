@@ -30,7 +30,6 @@ const [
   { data: recentContacts },
   { data: twelveMonthOrders },
   { data: allProductsRaw },
-  { count: pendingTaskCount },
 ] = await Promise.all([
   supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }).eq('status', 'en_attente'),
   supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }).in('status', ['confirmee', 'en_preparation', 'expediee']),
@@ -43,9 +42,6 @@ const [
     .in('status', REVENUE_STATUSES)
     .gte('created_at', marginWindowStart),
   supabaseAdmin.from('products').select('id, name, stock_quantity, prix_achat_moyen_ht, price_ht'),
-  // Full task list/add/toggle now lives on its own page (/admin/taches) —
-  // the dashboard only needs a pending count for the summary card.
-  supabaseAdmin.from('weekly_tasks').select('*', { count: 'exact', head: true }).eq('done', false),
 ]);
 
 // ── Bucket the order set by month for the 6-month chart, aggregate
@@ -684,20 +680,8 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
   )}
 
   <!-- ── Actions de la semaine + activité récente ──────── -->
-  <div class="trio-grid">
+  <div class="panels-grid">
 
-    <a href="/admin/taches" class="panel task-summary-card">
-      <div class="task-summary-icon">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-          <path d="M6 4h11M6 10h11M6 16h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          <path d="M3 4.5 3 4.5M2 10l1 1 1.5-1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="3" cy="4" r="1" fill="currentColor"/>
-        </svg>
-      </div>
-      <span class="task-summary-count">{pendingTaskCount ?? 0}</span>
-      <span class="task-summary-label">tâche{(pendingTaskCount ?? 0) === 1 ? '' : 's'} en attente</span>
-      <span class="task-summary-cta">Voir les tâches →</span>
-    </a>
 
     <!-- Recent orders -->
     <div class="panel">
@@ -1002,9 +986,9 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
   align-items: start;
 }
 
-.trio-grid {
+.panels-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: var(--space-5);
   margin-bottom: var(--space-5);
   align-items: start;
@@ -1342,50 +1326,6 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
   flex-shrink: 0;
 }
 
-/* ── Tasks summary card (full widget lives on /admin/taches) ──────── */
-.task-summary-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  padding: var(--space-6) var(--space-5);
-  text-decoration: none;
-  color: inherit;
-  text-align: center;
-  transition: border-color var(--dur-fast), background var(--dur-fast);
-}
-.task-summary-card:hover {
-  border-color: var(--color-border-strong);
-  background: var(--color-surface);
-}
-.task-summary-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-sm);
-  background: oklch(0.568 0.149 45.9 / 0.09);
-  color: var(--color-primary-deep);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.task-summary-count {
-  font-size: 1.75rem;
-  font-weight: 700;
-  line-height: 1.1;
-  color: var(--color-ink);
-  letter-spacing: -0.02em;
-}
-.task-summary-label {
-  font-size: var(--text-sm);
-  color: var(--color-muted);
-}
-.task-summary-cta {
-  font-size: var(--text-xs);
-  font-weight: 600;
-  color: var(--color-primary-deep);
-  margin-top: var(--space-1);
-}
 
 /* ── Activity panels ──────────────────────────────── */
 /* Activity table */
@@ -1517,7 +1457,7 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
 }
 
 @media (max-width: 1100px) {
-  .trio-grid { grid-template-columns: 1fr; }
+  .panels-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 900px) {
