@@ -76,6 +76,42 @@ const CAT_LABEL: Record<string, string> = {
     >
       Tout mettre à 0
     </button>
+
+    {/* Dialog natif plutôt qu'un confirm() : une action à portée globale
+        (tout le catalogue en un clic, sans marche arrière automatique)
+        mérite mieux qu'un OK/Annuler qu'un doigt trop rapide franchit sans
+        lire. La confirmation exige de taper RESET, pas juste un clic. */}
+    <dialog
+      id="zeroAllDialog"
+      style="padding:0;border:none;border-radius:var(--radius-md);box-shadow:0 8px 24px oklch(0.148 0.020 45.9 / 0.14);max-width:420px;width:90vw;"
+    >
+      <form method="dialog" style="padding:var(--space-5);display:flex;flex-direction:column;gap:var(--space-4);">
+        <div>
+          <p style="font-weight:700;color:var(--color-ink);margin-bottom:var(--space-2);">Remettre tout le stock à 0 ?</p>
+          <p id="zeroAllCount" style="font-size:var(--text-sm);color:var(--color-muted);"></p>
+          <p style="font-size:var(--text-sm);color:oklch(0.50 0.19 25);margin-top:var(--space-2);">Cette action n'a pas de marche arrière automatique.</p>
+        </div>
+        <div>
+          <label for="zeroAllInput" style="display:block;font-size:var(--text-xs);font-weight:600;color:var(--color-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:var(--space-2);">
+            Tapez RESET pour confirmer
+          </label>
+          <input
+            id="zeroAllInput"
+            type="text"
+            autocomplete="off"
+            style="width:100%;padding:0.5rem 0.75rem;font-family:var(--font-mono);font-size:var(--text-sm);color:var(--color-ink);background:var(--color-bg);border:1.5px solid var(--color-border-strong);border-radius:var(--radius-sm);min-height:40px;"
+          />
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:var(--space-3);">
+          <button id="zeroAllCancel" type="button" style="padding:0.5rem 1rem;font-size:var(--text-sm);font-weight:600;color:var(--color-ink);background:var(--color-surface);border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);cursor:pointer;">
+            Annuler
+          </button>
+          <button id="zeroAllConfirm" type="button" disabled style="padding:0.5rem 1rem;font-size:var(--text-sm);font-weight:600;color:white;background:oklch(0.50 0.19 25);border:none;border-radius:var(--radius-sm);cursor:pointer;opacity:0.4;">
+            Confirmer
+          </button>
+        </div>
+      </form>
+    </dialog>
     <button
       id="exportCsvBtn"
       type="button"
@@ -114,7 +150,13 @@ const CAT_LABEL: Record<string, string> = {
   const filterCategory = document.getElementById('filterCategory');
   const filterSearch   = document.getElementById('filterSearch');
   const zeroAllBtn     = document.getElementById('zeroAllBtn');
+  const zeroAllDialog  = document.getElementById('zeroAllDialog');
+  const zeroAllCount   = document.getElementById('zeroAllCount');
+  const zeroAllInput   = document.getElementById('zeroAllInput');
+  const zeroAllConfirm = document.getElementById('zeroAllConfirm');
+  const zeroAllCancel  = document.getElementById('zeroAllCancel');
   const exportCsvBtn   = document.getElementById('exportCsvBtn');
+  const RESET_WORD     = 'RESET';
 
   function escapeHtml(str) {
     return String(str).replace(/[&<>"']/g, (c) => ({
@@ -344,9 +386,32 @@ const CAT_LABEL: Record<string, string> = {
     renderTable();
   });
 
-  zeroAllBtn?.addEventListener('click', async () => {
-    if (!confirm('Mettre tous les stocks à 0 ? Cette action est irréversible.')) return;
-    zeroAllBtn.disabled = true;
+  zeroAllBtn?.addEventListener('click', () => {
+    const withStock = allProducts.filter((p) => p.stock_quantity > 0).length;
+    if (zeroAllCount) {
+      zeroAllCount.textContent = withStock > 0
+        ? `${withStock} produit${withStock > 1 ? 's' : ''} sur ${allProducts.length} passeront à 0.`
+        : 'Aucun produit n\'a de stock actuellement.';
+    }
+    if (zeroAllInput) zeroAllInput.value = '';
+    if (zeroAllConfirm) { zeroAllConfirm.disabled = true; zeroAllConfirm.style.opacity = '0.4'; }
+    zeroAllDialog?.showModal();
+    zeroAllInput?.focus();
+  });
+
+  zeroAllInput?.addEventListener('input', () => {
+    const match = zeroAllInput.value.trim() === RESET_WORD;
+    if (zeroAllConfirm) {
+      zeroAllConfirm.disabled = !match;
+      zeroAllConfirm.style.opacity = match ? '1' : '0.4';
+    }
+  });
+
+  zeroAllCancel?.addEventListener('click', () => zeroAllDialog?.close());
+
+  zeroAllConfirm?.addEventListener('click', async () => {
+    if (zeroAllInput?.value.trim() !== RESET_WORD) return; // filet, le bouton est déjà désactivé sinon
+    zeroAllConfirm.disabled = true;
     try {
       const res = await fetch('/api/produits/stocks', {
         method: 'POST',
@@ -356,7 +421,7 @@ const CAT_LABEL: Record<string, string> = {
       const data = await res.json();
       applyData(data.products ?? []);
     } finally {
-      zeroAllBtn.disabled = false;
+      zeroAllDialog?.close();
     }
   });
 
