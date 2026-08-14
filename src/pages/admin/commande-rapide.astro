@@ -5,6 +5,7 @@ import { Resend } from 'resend';
 import { generateOrderPDF } from '../../lib/pdf';
 import { sanitizeText } from '../../lib/sanitize';
 import { normalizeEmail, applyRemise } from '../../lib/clients';
+import { createOrderChecked, describeConflicts, fetchAvailability, sellableQty } from '../../lib/stock';
 import { COMPANY, RESEND_DEFAULT_FROM } from '../../lib/constants';
 import { logAdminAction } from '../../lib/audit';
 
@@ -70,36 +71,18 @@ if (Astro.request.method === 'POST') {
 
   if (orderItems.length === 0) return Astro.redirect('/admin/commande-rapide?error=empty');
 
-  // Same stock guard as client checkout — block if any line exceeds stock
-  const stockViolations = orderItems.filter(item => {
-    const stock = productMap[item.product_id]?.stock_quantity;
-    return typeof stock === 'number' && item.quantity > stock;
-  });
-  if (stockViolations.length > 0) return Astro.redirect('/admin/commande-rapide?error=stock');
-
-  // Create order
-  const { data: order, error: orderErr } = await supabaseAdmin
-    .from('orders')
-    .insert({
+  // Même garde-fou que la commande client : le disponible (physique −
+  // réservé) est revérifié dans la transaction d'insertion, verrous posés.
+  const result = await createOrderChecked(
+    {
       user_id:   null,
       nom:       client.nom,
       societe:   client.societe ?? '',
       telephone: client.telephone ?? '',
       email:     client.email ? normalizeEmail(client.email) : null,
-      notes,
-      status:    'en_attente',
-    })
-    .select('id')
-    .single();
-
-  if (orderErr || !order) {
-    console.error('[commande-rapide] order insert error:', JSON.stringify(orderErr));
-    return Astro.redirect('/admin/commande-rapide?error=order');
-  }
-
-  const { error: itemsErr } = await supabaseAdmin.from('order_items').insert(
+      notes:     notes || null,
+    },
     orderItems.map(item => ({
-      order_id:          order.id,
       product_id:        item.product_id,
       product_name:      item.product_name,
       quantity:          item.quantity,
@@ -107,13 +90,17 @@ if (Astro.request.method === 'POST') {
       price_ht_snapshot: item.price_ht,
       tva_rate_snapshot: item.tva_rate,
       pump_snapshot:     item.pump,
-    }))
+    })),
   );
-  if (itemsErr) {
-    console.error('[commande-rapide] order_items insert error:', JSON.stringify(itemsErr));
-    await supabaseAdmin.from('orders').delete().eq('id', order.id);
+
+  if (!result.ok) {
+    if ('conflicts' in result) {
+      return Astro.redirect(`/admin/commande-rapide?error=stock&detail=${encodeURIComponent(describeConflicts(result.conflicts).slice(0, 300))}`);
+    }
     return Astro.redirect('/admin/commande-rapide?error=order');
   }
+
+  const order = { id: result.orderId };
 
   const totalHT = orderItems.reduce((s, i) => s + i.quantity * Number(i.price_ht ?? 0), 0);
   const today   = new Date().toLocaleDateString('fr-FR');
@@ -241,8 +228,12 @@ const ERROR_MSG: Record<string, string> = {
   client: 'Client introuvable.',
   empty:  'Veuillez ajouter au moins un produit.',
   order:  'Erreur lors de la création de la commande.',
-  stock:  'Certains articles dépassent le stock disponible. Ajustez les quantités.',
+  stock:  'Certains articles dépassent le disponible — une autre commande a pu passer entre-temps. Ajustez les quantités.',
 };
+
+// Détail renvoyé par la vérification atomique : quel produit, combien demandé,
+// combien réellement disponible.
+const stockDetail = Astro.url.searchParams.get('detail');
 
 const preselectId    = Astro.url.searchParams.get('client_id');
 const PRESELECT_VALUE = preselectId ? `client:${preselectId}` : null;
@@ -255,6 +246,9 @@ const PRODUCTS_JSON = JSON.stringify(products);
   {errorType && (
     <div style="padding:14px 18px;border-radius:10px;font-size:15px;font-weight:600;margin-bottom:14px;background:oklch(0.96 0.04 25);color:oklch(0.45 0.18 25);border:1px solid oklch(0.86 0.08 25);" role="alert">
       {ERROR_MSG[errorType] ?? 'Une erreur est survenue.'}
+      {errorType === 'stock' && stockDetail && (
+        <span style="display:block;margin-top:6px;font-size:13px;font-weight:500;font-variant-numeric:tabular-nums;opacity:0.85;">{stockDetail}</span>
+      )}
     </div>
   )}
 

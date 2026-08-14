@@ -302,8 +302,13 @@ test.describe.serial('Inca Import — Full E2E Flow', () => {
     await expect(invoiceLink, 'Invoice download link missing in /mes-commandes').toBeVisible({ timeout: 5_000 });
   });
 
-  // ── Step 10: Stock quantity decremented ──────────────────────────
-  test('10. Stock décrémenté après confirmation', async () => {
+  // ── Step 10: Stock réservé, pas encore décrémenté ────────────────
+  // Le physique ne bouge qu'au passage en « livrée » (étape 11+). Entre la
+  // commande et la livraison, l'unité commandée sort du disponible via la
+  // réservation — c'est ce qui empêche un autre client de la commander.
+  // Ce test affirmait un décrément du physique dès la confirmation, ce qui
+  // n'a jamais été le comportement de l'application.
+  test('10. Stock réservé après confirmation, physique inchangé', async () => {
     const { data: product, error } = await db
       .from('products')
       .select('stock_quantity')
@@ -313,7 +318,20 @@ test.describe.serial('Inca Import — Full E2E Flow', () => {
     expect(error).toBeNull();
     expect(
       product?.stock_quantity,
-      `Expected stock ${state.initialStock - 1}, got ${product?.stock_quantity}`,
+      `Le physique ne doit pas bouger avant la livraison : attendu ${state.initialStock}, obtenu ${product?.stock_quantity}`,
+    ).toBe(state.initialStock);
+
+    const { data: av, error: avErr } = await db
+      .from('product_availability')
+      .select('physical, reserved, available')
+      .eq('product_id', state.productId)
+      .single();
+
+    expect(avErr).toBeNull();
+    expect(av?.reserved, 'La commande confirmée doit réserver 1 carton').toBeGreaterThanOrEqual(1);
+    expect(
+      av?.available,
+      `Disponible attendu ${state.initialStock - 1}, obtenu ${av?.available}`,
     ).toBe(state.initialStock - 1);
   });
 

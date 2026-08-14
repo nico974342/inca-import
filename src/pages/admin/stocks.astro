@@ -1,27 +1,31 @@
 ---
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
+import { fetchReservedByProduct } from '../../lib/stock';
 
+// stock_updated_at n'a jamais existé en base (schema_v9.sql jamais lancé) :
+// cette requête échouait à chaque chargement et ne passait que par son repli,
+// la colonne « Dernière m.à.j. » restant vide. Le champ est retiré.
 let products: Array<Record<string, unknown>> = [];
 {
   const { data, error } = await supabaseAdmin
     .from('products')
-    .select('id, name, category, sku, stock_quantity, stock_updated_at, seuil_reappro')
+    .select('id, name, category, sku, stock_quantity, seuil_reappro')
     .order('stock_quantity', { ascending: true })
     .order('name', { ascending: true });
 
-  if (!error) {
-    products = data ?? [];
-  } else {
-    console.error('admin/stocks SSR query error:', error);
-    const fallback = await supabaseAdmin
-      .from('products')
-      .select('id, name, category, sku, stock_quantity, seuil_reappro')
-      .order('stock_quantity', { ascending: true })
-      .order('name', { ascending: true });
-    products = (fallback.data ?? []).map((p) => ({ ...p, stock_updated_at: null }));
-  }
+  if (error) console.error('admin/stocks SSR query error:', error);
+  products = data ?? [];
 }
+
+// Le chiffre éditable reste le physique — c'est lui que l'admin ajuste. Le
+// réservé et le disponible l'accompagnent en lecture seule.
+const reservedByProduct = await fetchReservedByProduct();
+products = products.map(p => {
+  const physical = (p.stock_quantity as number) ?? 0;
+  const reserved = reservedByProduct.get(p.id as string) ?? 0;
+  return { ...p, reserved, available: physical - reserved };
+});
 
 const CAT_LABEL: Record<string, string> = {
   boissons: 'Boissons',
@@ -88,7 +92,6 @@ const CAT_LABEL: Record<string, string> = {
           <tr>
             <th style="padding:var(--space-3) var(--space-4);text-align:left;font-size:var(--text-xs);font-weight:600;color:var(--color-muted);text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid var(--color-border);white-space:nowrap;">Produit</th>
             <th style="padding:var(--space-3) var(--space-4);text-align:right;font-size:var(--text-xs);font-weight:600;color:var(--color-muted);text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid var(--color-border);white-space:nowrap;">Stock</th>
-            <th style="padding:var(--space-3) var(--space-4);text-align:right;font-size:var(--text-xs);font-weight:600;color:var(--color-muted);text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid var(--color-border);white-space:nowrap;">Dernière m.à.j.</th>
           </tr>
         </thead>
         <tbody id="stockTbody"></tbody>
@@ -166,16 +169,21 @@ const CAT_LABEL: Record<string, string> = {
 
   function renderSummary(products) {
     if (!summaryGrid) return;
+    // Les compteurs comptent le disponible : c'est lui qui décide de ce qui
+    // est vendable. Un produit entièrement réservé n'est pas « en stock ».
+    const avail    = (p) => (p.available ?? p.stock_quantity ?? 0);
     const total    = products.length;
-    const enStock  = products.filter((p) => p.stock_quantity >= 5).length;
-    const stockBas = products.filter((p) => p.stock_quantity > 0 && p.stock_quantity < 5).length;
-    const rupture  = products.filter((p) => p.stock_quantity === 0).length;
+    const enStock  = products.filter((p) => avail(p) >= 5).length;
+    const stockBas = products.filter((p) => avail(p) > 0 && avail(p) < 5).length;
+    const rupture  = products.filter((p) => avail(p) <= 0 && (p.stock_quantity ?? 0) === 0).length;
+    const reserve  = products.filter((p) => avail(p) <= 0 && (p.stock_quantity ?? 0) > 0).length;
 
     summaryGrid.innerHTML = [
-      summaryCardHtml(total,    'Produits',        'var(--color-surface-2)', 'var(--color-ink)'),
-      summaryCardHtml(enStock,  'En stock',         'oklch(0.93 0.07 145)',   'oklch(0.30 0.13 145)'),
-      summaryCardHtml(stockBas, 'Stock bas (1-4)',  'oklch(0.95 0.08 70)',    'oklch(0.40 0.14 60)'),
-      summaryCardHtml(rupture,  'Rupture',          'oklch(0.95 0.06 25)',   'oklch(0.46 0.18 25)'),
+      summaryCardHtml(total,    'Produits',         'var(--color-surface-2)', 'var(--color-ink)'),
+      summaryCardHtml(enStock,  'Disponibles',      'oklch(0.93 0.07 145)',   'oklch(0.30 0.13 145)'),
+      summaryCardHtml(stockBas, 'Dispo. bas (1-4)', 'oklch(0.95 0.08 70)',    'oklch(0.40 0.14 60)'),
+      summaryCardHtml(reserve,  'Tout réservé',     'oklch(0.95 0.07 60)',    'oklch(0.42 0.14 60)'),
+      summaryCardHtml(rupture,  'Rupture',          'oklch(0.95 0.06 25)',    'oklch(0.46 0.18 25)'),
     ].join('');
   }
 
@@ -193,6 +201,23 @@ const CAT_LABEL: Record<string, string> = {
         style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;font-size:var(--text-sm);font-weight:700;line-height:1;color:var(--color-ink);background:var(--color-surface);border:1px solid var(--color-border-strong);border-radius:var(--radius-sm);cursor:pointer;"
         onmouseenter="this.style.background='var(--color-surface-2)'" onmouseleave="this.style.background='var(--color-surface)'"
         aria-label="Augmenter le stock">+</button>
+      ${reservedHtml(p)}
+    `;
+  }
+
+  // Réservé et disponible, en retrait sous le physique : le chiffre édité
+  // reste le physique, ces deux-là expliquent ce qui est réellement vendable.
+  function reservedHtml(p) {
+    const reserved = p.reserved ?? 0;
+    if (reserved <= 0) return '';
+    const available = p.available ?? 0;
+    const couleur = available > 0 ? 'var(--color-muted)' : 'oklch(0.42 0.14 60)';
+    const mot = available > 0 ? `${available} dispo.` : 'tout réservé';
+    return `
+      <span title="Physique ${p.stock_quantity} − réservé ${reserved} = disponible ${available}"
+        style="display:block;width:100%;margin-top:2px;font-size:var(--text-xs);color:${couleur};font-variant-numeric:tabular-nums;cursor:help;">
+        −${reserved} réservé${reserved > 1 ? 's' : ''} · ${mot}
+      </span>
     `;
   }
 
@@ -258,7 +283,6 @@ const CAT_LABEL: Record<string, string> = {
         <td style="padding:var(--space-3) var(--space-4);border-bottom:1px solid var(--color-border);vertical-align:middle;text-align:right;">
           <div id="stockCell-${p.id}" style="display:inline-flex;align-items:center;gap:var(--space-3);">${stockDisplayHtml(p)}</div>
         </td>
-        <td style="padding:var(--space-3) var(--space-4);border-bottom:1px solid var(--color-border);vertical-align:middle;text-align:right;color:var(--color-muted);font-size:var(--text-xs);white-space:nowrap;">${formatDate(p.stock_updated_at)}</td>
       </tr>
     `;
   }
@@ -337,13 +361,16 @@ const CAT_LABEL: Record<string, string> = {
   });
 
   exportCsvBtn?.addEventListener('click', () => {
-    const header = ['Nom', 'Catégorie', 'SKU', 'Stock', 'Dernière mise à jour'];
+    // L'export porte les trois chiffres : le disponible seul masquerait
+    // l'écart, et le physique seul reste le chiffre historique de l'entrepôt.
+    const header = ['Nom', 'Catégorie', 'SKU', 'Stock physique', 'Réservé', 'Disponible'];
     const rows = allProducts.map((p) => [
       p.name,
       catLabels[p.category] ?? p.category,
       p.sku ?? '',
       String(p.stock_quantity),
-      p.stock_updated_at ? formatDate(p.stock_updated_at) : '',
+      String(p.reserved ?? 0),
+      String(p.available ?? p.stock_quantity),
     ]);
     const csv = [header, ...rows]
       .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))

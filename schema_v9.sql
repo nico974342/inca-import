@@ -1,6 +1,24 @@
--- schema_v9.sql
--- Track when a product's stock was last adjusted
--- Run this in Supabase SQL editor
+-- schema_v9.sql — OBSOLÈTE / NE PAS APPLIQUER
+--
+-- Cette migration n'a jamais été lancée, et la colonne qu'elle ajoute a été
+-- retirée du code plutôt qu'ajoutée à la base. Le DDL ci-dessous est
+-- volontairement commenté.
+--
+-- Intention d'origine : horodater la dernière modification de stock d'un
+-- produit, pour une colonne « Dernière m.à.j. » sur /admin/stocks.
+--
+-- Ce qui s'est réellement passé : la colonne n'ayant jamais été créée, la
+-- colonne d'affichage est restée vide depuis toujours. Plus grave, la RPC
+-- product_adjust_stock écrivait stock_updated_at sans repli et levait donc
+-- à chaque appel :
+--   column "stock_updated_at" of relation "products" does not exist
+-- Les boutons +/− de /admin/stocks ne modifiaient rien, l'API journalisant
+-- l'erreur sans la remonter. Corrigé par product_adjust_stock_fix.sql.
+--
+-- Décision : l'horodatage n'ayant jamais servi, la colonne n'est pas ajoutée
+-- et toutes ses références ont été retirées du code. Si le besoin de tracer
+-- les mouvements de stock revient, admin_audit_logs est le bon support : il
+-- porte l'auteur et le détail, pas seulement une date.
 
-ALTER TABLE products
-  ADD COLUMN IF NOT EXISTS stock_updated_at TIMESTAMPTZ;
+-- ALTER TABLE products
+--   ADD COLUMN IF NOT EXISTS stock_updated_at TIMESTAMPTZ;

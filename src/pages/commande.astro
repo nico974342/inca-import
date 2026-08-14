@@ -7,6 +7,7 @@ import { Resend } from 'resend';
 import { generateOrderPDF } from '../lib/pdf';
 import { sanitizeText } from '../lib/sanitize';
 import { normalizeEmail, findClientByEmail, applyRemise } from '../lib/clients';
+import { createOrderChecked, describeConflicts, fetchAvailability, sellableQty } from '../lib/stock';
 import { COMPANY, RESEND_DEFAULT_FROM } from '../lib/constants';
 
 const user = Astro.locals.user;
@@ -36,55 +37,45 @@ if (Astro.request.method === 'POST') {
 
   if (!items?.length) return Astro.redirect('/catalogue');
 
-  // Block if any item exceeds available stock (race-condition guard)
-  const stockViolations = items.filter(item => {
-    const p = item.products as any;
-    return typeof p?.stock_quantity === 'number' && item.quantity > p.stock_quantity;
-  });
-  if (stockViolations.length > 0) return Astro.redirect('/commande?error=stock');
-
-  // Create order record
-  const { data: order, error: orderError } = await supabaseAdmin
-    .from('orders')
-    .insert({
+  // Création contrôlée : le disponible (physique − réservé) est revérifié
+  // dans la même transaction que l'insertion, verrous posés sur les produits.
+  // Contrôler ici en JS ne protégerait de rien — deux clients simultanés
+  // franchiraient le test tous les deux avant que l'un ait inséré.
+  const result = await createOrderChecked(
+    {
       user_id:   user.id,
       nom:       user.user_metadata?.nom ?? '',
       societe:   user.user_metadata?.societe ?? '',
       telephone: user.user_metadata?.telephone ?? '',
       email:     normalizeEmail(user.email),
-      notes,
-      status:    'en_attente',
-    })
-    .select('id')
-    .single();
-
-  if (orderError || !order) return Astro.redirect('/commande?error=1');
-
-  // Snapshot order items (price/TVA/PUMP at order time — price includes the
-  // client's negotiated remise; PUMP stays the real cost for margin math)
-  const { error: itemsError } = await supabaseAdmin.from('order_items').insert(
+      notes:     notes || null,
+    },
     items.map(item => {
       const p = item.products as any;
       return {
-        order_id:          order.id,
-        product_id:        p?.id ?? null,
+        product_id:        p?.id,
         product_name:      p?.name ?? 'Produit inconnu',
         quantity:          item.quantity,
         unit:              p?.unit ?? null,
+        // le prix intègre la remise négociée du client ; le PUMP reste le
+        // coût réel, pour que la marge de la commande ne s'en trouve pas faussée
         price_ht_snapshot: applyRemise(p?.price_ht ?? null, remisePct),
         tva_rate_snapshot: p?.tva_rate ?? null,
         pump_snapshot:     p?.prix_achat_moyen_ht ?? null,
       };
-    })
+    }),
   );
 
-  // If the items insert failed, remove the orphan order and keep the cart
-  // so the client can retry — never leave an order without its lines.
-  if (itemsError) {
-    console.error('[commande] order_items insert failed:', JSON.stringify(itemsError));
-    await supabaseAdmin.from('orders').delete().eq('id', order.id);
+  if (!result.ok) {
+    // Le panier est conservé : le client doit pouvoir ajuster les quantités
+    // refusées plutôt que de tout ressaisir.
+    if ('conflicts' in result) {
+      return Astro.redirect(`/commande?error=stock&detail=${encodeURIComponent(describeConflicts(result.conflicts).slice(0, 300))}`);
+    }
     return Astro.redirect('/commande?error=1');
   }
+
+  const order = { id: result.orderId };
 
   // Clear cart
   await supabaseAdmin.from('cart_items').delete().eq('user_id', user.id);
@@ -169,6 +160,9 @@ const success    = !!Astro.url.searchParams.get('success');
 const errorParam = Astro.url.searchParams.get('error');
 const hasError   = !!errorParam && errorParam !== 'stock';
 const stockError = errorParam === 'stock';
+// Détail renvoyé par la vérification atomique : quel produit, combien demandé,
+// combien réellement disponible. Sans lui, le client ne sait pas quoi ajuster.
+const stockDetail = Astro.url.searchParams.get('detail');
 const orderId    = Astro.url.searchParams.get('order');
 
 type SuccessItem = { product_name: string; quantity: number; unit: string | null };
@@ -289,7 +283,9 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
       )}
       {stockError && !success && (
         <p class="order-error" role="alert">
-          Certains articles dépassent le stock disponible. Ajustez les quantités ci-dessous avant de confirmer.
+          Certains articles dépassent le stock disponible — une autre commande a pu être passée entre-temps.
+          Ajustez les quantités ci-dessous avant de confirmer.
+          {stockDetail && <span class="order-error-detail">{stockDetail}</span>}
         </p>
       )}
 
@@ -576,6 +572,14 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
   border-radius: var(--radius-sm);
   padding: var(--space-3) var(--space-4);
   margin-bottom: var(--space-6);
+}
+/* Le détail par produit, en retrait : la consigne d'action reste en tête. */
+.order-error-detail {
+  display: block;
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
 }
 
 /* ── Stock alerts ───────────────────────────────── */

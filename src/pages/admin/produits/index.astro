@@ -5,6 +5,7 @@ import {
   marginColorClass,
   REAPPRO_WEEKS_LOOKBACK, computeVitesseVente, computeJoursAvantRupture, isAtOrBelowSeuil,
 } from '../../../lib/constants';
+import { fetchAvailability, toAvailability } from '../../../lib/stock';
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'];
 
@@ -13,6 +14,9 @@ const { data: products, error } = await supabaseAdmin
   .select('id, name, category, sku, price_ht, unit, units_per_carton, in_stock, stock_quantity, position, prix_achat_moyen_ht, seuil_reappro, created_at')
   .order('position', { ascending: true })
   .order('name', { ascending: true });
+
+// Physique / réservé / disponible : les trois chiffres, pas seulement le stock.
+const availability = await fetchAvailability(products ?? []);
 
 // ── One 12-month order_items pull feeds the search banner totals and the
 //    per-month sales columns. Month boundaries use the same
@@ -128,7 +132,16 @@ const rows = filteredProducts.map(p => {
   const prix = p.price_ht ?? null;
   const margePct = pump == null || prix == null || prix === 0 ? null : ((prix - pump) / prix) * 100;
   const vitesseVente = computeVitesseVente(recentQtyByProduct.get(p.id) ?? 0, (p as any).created_at);
-  const joursAvantRupture = computeJoursAvantRupture(p.stock_quantity, vitesseVente);
+  // La rupture s'estime sur le disponible : du stock entièrement réservé ne
+  // tiendra personne, il est déjà promis.
+  const dispo = availability.get(p.id) ?? toAvailability(p.stock_quantity, 0);
+  const joursAvantRupture = computeJoursAvantRupture(Math.max(0, dispo.available), vitesseVente);
+  // État calculé ici : les comparaisons `<=` dans le JSX Astro sont lues
+  // comme des ouvertures de balise.
+  const stockState: 'reserved' | 'out' | 'low' | 'ok' =
+    dispo.available > 0 ? (dispo.available < 5 ? 'low' : 'ok')
+    : dispo.physical > 0 ? 'reserved'
+    : 'out';
 
   // ── Per-row figures the search banner sums client-side ──
   // Quantities are in cartons throughout (order_items.quantity, stock_quantity),
@@ -145,7 +158,7 @@ const rows = filteredProducts.map(p => {
   const cartonsPrec = qtyPrevMonthByProduct.get(p.id) ?? 0;
 
   return {
-    ...p, margePct,
+    ...p, margePct, dispo, stockState,
     vitesseVente, joursAvantRupture,
     cartonsMois, unitesMois: hasUnits ? cartonsMois * upc : null,
     cartonsPrec, unitesPrec: hasUnits ? cartonsPrec * upc : null,
@@ -437,12 +450,19 @@ const DELETE_ERROR_MSG: Record<string, string> = {
               </td>
               <td>
                 <div class="stock-cell">
-                  {(p.stock_quantity ?? 0) === 0 ? (
+                  {/* Le chiffre mis en avant est le disponible : c'est lui qui
+                      décide de ce qui est vendable. « Tout réservé » distingue
+                      un entrepôt vide d'un entrepôt entièrement engagé. */}
+                  {p.stockState === 'reserved' ? (
+                    <span class="stock-chip stock-chip--reserved" title={`${p.dispo.physical} en stock, ${p.dispo.reserved} réservés sur des commandes non livrées`}>
+                      Tout réservé
+                    </span>
+                  ) : p.stockState === 'out' ? (
                     <span class="stock-chip stock-chip--out">Rupture</span>
-                  ) : (p.stock_quantity ?? 0) < 5 ? (
-                    <span class="stock-chip stock-chip--low" title="Stock bas">{p.stock_quantity}</span>
+                  ) : p.stockState === 'low' ? (
+                    <span class="stock-chip stock-chip--low" title="Disponible bas">{p.dispo.available}</span>
                   ) : (
-                    <span class="stock-chip stock-chip--ok">{p.stock_quantity}</span>
+                    <span class="stock-chip stock-chip--ok">{p.dispo.available}</span>
                   )}
                   {p.needsReappro && (
                     <span class="reappro-badge" title={`Seuil de réapprovisionnement : ${(p as any).seuil_reappro} cartons`}>
@@ -450,6 +470,11 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                     </span>
                   )}
                 </div>
+                {p.dispo.reserved > 0 && (
+                  <p class="stock-breakdown" title={`Physique ${p.dispo.physical} − réservé ${p.dispo.reserved} = disponible ${p.dispo.available}`}>
+                    {p.dispo.physical} phys. · <span class="reserved-num">−{p.dispo.reserved} rés.</span>
+                  </p>
+                )}
               </td>
               <td>
                 {p.joursAvantRupture != null ? (
@@ -905,6 +930,25 @@ const DELETE_ERROR_MSG: Record<string, string> = {
   gap: var(--space-2);
   flex-wrap: wrap;
 }
+
+/* Stock présent mais entièrement engagé : ni disponible, ni vraiment vide. */
+.stock-chip--reserved {
+  background: oklch(0.95 0.045 60);
+  color: oklch(0.42 0.13 60);
+  cursor: help;
+}
+
+/* Décomposition physique / réservé, en retrait : le disponible reste le
+   chiffre qu'on lit, celui-ci n'est là que pour expliquer l'écart. */
+.stock-breakdown {
+  margin: 3px 0 0;
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: help;
+}
+.reserved-num { color: oklch(0.52 0.11 60); }
 
 .reappro-badge {
   display: inline-flex;

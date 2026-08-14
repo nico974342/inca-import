@@ -1,23 +1,11 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../lib/supabase';
 
-// stock_updated_at only exists once schema_v9.sql has been run — fall back
-// gracefully so the page still works (without timestamps) before that migration runs.
-let hasStockUpdatedAt = true;
-
+// products.stock_updated_at n'a jamais existé : schema_v9.sql, qui l'ajoutait,
+// n'a jamais été lancé. Les replis qui vivaient ici masquaient l'absence de
+// colonne, mais la RPC product_adjust_stock l'écrivait sans repli et échouait
+// donc à chaque appel. La colonne et son horodatage sont retirés.
 async function listProducts() {
-  if (hasStockUpdatedAt) {
-    const { data, error } = await supabaseAdmin
-      .from('products')
-      .select('id, name, category, sku, stock_quantity, stock_updated_at, seuil_reappro')
-      .order('stock_quantity', { ascending: true })
-      .order('name', { ascending: true });
-
-    if (!error) return data ?? [];
-    if (error.code !== '42703') console.error('listProducts error:', error);
-    hasStockUpdatedAt = false;
-  }
-
   const { data, error } = await supabaseAdmin
     .from('products')
     .select('id, name, category, sku, stock_quantity, seuil_reappro')
@@ -25,37 +13,15 @@ async function listProducts() {
     .order('name', { ascending: true });
 
   if (error) console.error('listProducts error:', error);
-  return (data ?? []).map((p) => ({ ...p, stock_updated_at: null }));
+  return data ?? [];
 }
 
-async function touchStock(id: string, fields: { stock_quantity: number; in_stock: boolean }) {
-  if (hasStockUpdatedAt) {
-    const { error } = await supabaseAdmin
-      .from('products')
-      .update({ ...fields, stock_updated_at: new Date().toISOString() })
-      .eq('id', id);
-
-    if (!error) return;
-    if (error.code !== '42703') console.error('touchStock error:', error);
-    hasStockUpdatedAt = false;
-  }
-
+async function setStock(id: string, fields: { stock_quantity: number; in_stock: boolean }) {
   const { error } = await supabaseAdmin.from('products').update(fields).eq('id', id);
-  if (error) console.error('touchStock error:', error);
+  if (error) console.error('setStock error:', error);
 }
 
 async function zeroAllStock() {
-  if (hasStockUpdatedAt) {
-    const { error } = await supabaseAdmin
-      .from('products')
-      .update({ stock_quantity: 0, in_stock: false, stock_updated_at: new Date().toISOString() })
-      .gte('stock_quantity', 0);
-
-    if (!error) return;
-    if (error.code !== '42703') console.error('zeroAllStock error:', error);
-    hasStockUpdatedAt = false;
-  }
-
   const { error } = await supabaseAdmin
     .from('products')
     .update({ stock_quantity: 0, in_stock: false })
@@ -92,7 +58,7 @@ export const POST: APIRoute = async ({ request, cookies }) => {
   } else if (body?.id && typeof body.value === 'number') {
     // Absolute set — no read needed, single atomic update
     const newQty = Math.max(0, Math.trunc(body.value));
-    await touchStock(body.id, { stock_quantity: newQty, in_stock: newQty > 0 });
+    await setStock(body.id, { stock_quantity: newQty, in_stock: newQty > 0 });
   } else if (body?.id && typeof body.delta === 'number') {
     // Relative adjust — atomic in Postgres, no read-then-write race
     const { error } = await supabaseAdmin.rpc('product_adjust_stock', {

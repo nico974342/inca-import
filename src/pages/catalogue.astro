@@ -3,12 +3,19 @@ import Base from '../layouts/Base.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import { supabaseAdmin, createAuthClient } from '../lib/supabase';
+import { fetchAvailability, sellableQty } from '../lib/stock';
 
 const { data: products } = await supabaseAdmin
   .from('products')
   .select('id, name, slug, category, description, image_url, unit, units_per_carton, price_ht, tva_rate, stock_quantity')
   .order('position', { ascending: true })
   .order('name', { ascending: true });
+
+// Côté client, « disponible » veut dire commandable : physique − réservé,
+// jamais négatif. Un produit entièrement réservé est en rupture pour lui,
+// même s'il reste de la marchandise dans l'entrepôt.
+const availability = await fetchAvailability(products ?? []);
+const dispo = (id: string) => sellableQty(availability.get(id));
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -52,7 +59,7 @@ const totalCartTTC = Object.entries(cartMap).reduce(
 );
 
 const total   = products?.length ?? 0;
-const inStock = products?.filter(p => (p.stock_quantity ?? 0) > 0).length ?? 0;
+const inStock = products?.filter(p => dispo(p.id) > 0).length ?? 0;
 
 const CAT_LABEL: Record<string, string> = {
   boissons:    'Boissons',
@@ -81,7 +88,8 @@ const productsMetaJSON = JSON.stringify(
     units_per_carton: p.units_per_carton ?? null,
     image_url: p.image_url ?? null,
     category: p.category ?? null,
-    stock_quantity: p.stock_quantity ?? null,
+    // Le plafond des sélecteurs est le disponible, pas le physique.
+    stock_quantity: dispo(p.id),
   }))
 ).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
 ---
@@ -197,7 +205,7 @@ const productsMetaJSON = JSON.stringify(
                 : null;
               return (
               <article
-                class={`product-card${(p.stock_quantity ?? 0) === 0 ? ' product-card--oos' : ''}`}
+                class={`product-card${dispo(p.id) === 0 ? ' product-card--oos' : ''}`}
                 data-cat={p.category}
                 data-search={`${p.name} ${p.description ?? ''}`.toLowerCase()}
               >
@@ -213,7 +221,7 @@ const productsMetaJSON = JSON.stringify(
                   ) : (
                     <span class="img-letter" aria-hidden="true">{p.name[0].toUpperCase()}</span>
                   )}
-                  {(p.stock_quantity ?? 0) === 0 && (
+                  {dispo(p.id) === 0 && (
                     <span class="oos-badge" aria-label="Disponible prochainement">Disponible prochainement</span>
                   )}
                 </a>
@@ -251,17 +259,17 @@ const productsMetaJSON = JSON.stringify(
                     <p class="product-unit">{p.unit}</p>
                   ) : null}
 
-                  {isClient && !isPending && (p.stock_quantity ?? 0) > 0 && (
-                    <p class={`prod-stock prod-stock--${(p.stock_quantity ?? 0) < 5 ? 'low' : 'ok'}`}>
-                      {p.stock_quantity === 1
+                  {isClient && !isPending && dispo(p.id) > 0 && (
+                    <p class={`prod-stock prod-stock--${dispo(p.id) < 5 ? 'low' : 'ok'}`}>
+                      {dispo(p.id) === 1
                         ? `1 ${p.unit ?? 'carton'} disponible`
-                        : `${p.stock_quantity} ${p.unit ?? 'carton'}s disponibles`}
+                        : `${dispo(p.id)} ${p.unit ?? 'carton'}s disponibles`}
                     </p>
                   )}
 
                   {p.description && <p class="product-desc">{p.description}</p>}
 
-                  {isClient && !isPending && (p.stock_quantity ?? 0) > 0 ? (
+                  {isClient && !isPending && dispo(p.id) > 0 ? (
                     <>
                       <div
                         class="cart-controls"
@@ -269,7 +277,7 @@ const productsMetaJSON = JSON.stringify(
                         data-initial-qty={cartMap[p.id] ?? 0}
                         data-price={priceMap[p.id] ?? 0}
                         data-tva={tvaMap[p.id] ?? 0.085}
-                        data-stock={p.stock_quantity !== null ? String(p.stock_quantity) : ''}
+                        data-stock={String(dispo(p.id))}
                         data-unit={p.unit ?? 'carton'}
                       >
                         <button type="button" class="qty-btn qty-btn--dec" aria-label={`Retirer un ${p.unit ?? 'carton'} de ${p.name} du panier`}>−</button>
