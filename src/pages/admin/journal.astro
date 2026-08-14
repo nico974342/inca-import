@@ -32,9 +32,10 @@ const ACTION_LABELS: Record<string, string> = {
   'client.promotion_admin': 'Promu Admin',
   'client.retrogradation':  'Rétrogradé Client',
   'client.modification':    'Client modifié',
-  'produit.modification':   'Produit modifié',
-  'produit.creation':       'Produit créé',
-  'produit.suppression':    'Produit supprimé',
+  'produit.modification':      'Produit modifié',
+  'produit.creation':          'Produit créé',
+  'produit.suppression':       'Produit supprimé',
+  'produit.stock_ajustement':  'Stock ajusté',
   'reception.creation':     'Réception stock',
   'reception.modification': 'Réception modifiée',
   'reception.suppression':  'Réception supprimée',
@@ -53,9 +54,10 @@ const ACTION_COLOR: Record<string, string> = {
   'client.promotion_admin': 'purple',
   'client.retrogradation':  'amber',
   'client.modification':    'blue',
-  'produit.modification':   'blue',
-  'produit.creation':       'green',
-  'produit.suppression':    'red',
+  'produit.modification':      'blue',
+  'produit.creation':          'green',
+  'produit.suppression':       'red',
+  'produit.stock_ajustement':  'amber',
   'reception.creation':     'green',
   'reception.modification': 'blue',
   'reception.suppression':  'red',
@@ -87,6 +89,19 @@ function formatDetails(details: Record<string, unknown> | null, action: string):
   }
   if (action === 'client.promotion_admin' || action === 'client.retrogradation') {
     return `Rôle : ${details.nouveau_role ?? ''}`;
+  }
+  if (action === 'produit.stock_ajustement') {
+    const METHOD_FR: Record<string, string> = {
+      boutons:        'boutons +/−',
+      saisie_directe: 'saisie directe',
+      tout_a_zero:    'tout mettre à 0',
+    };
+    const methode = METHOD_FR[details.method as string] ?? String(details.method ?? '');
+    if (details.method === 'tout_a_zero') {
+      return `${details.count ?? 0} produit(s) remis à 0 (${methode})`;
+    }
+    const delta = typeof details.delta === 'number' ? ` (${details.delta > 0 ? '+' : ''}${details.delta})` : '';
+    return `${details.avant} → ${details.apres}${delta} · ${methode}`;
   }
   if (action === 'commande.modification') {
     return typeof details.resume === 'string' ? details.resume : '';
