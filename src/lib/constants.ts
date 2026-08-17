@@ -171,14 +171,21 @@ export const VITESSE_SHORT_HISTORY_WEEKS = 4;
 const VITESSE_MIN_HISTORY_WEEKS = 1;
 
 /** How many weeks of history actually back the velocity: the lookback window,
- *  capped by the product's age so a recently listed product isn't averaged
- *  over weeks it did not exist, and floored so the divisor can't approach 0.
- *  Falls back to the full window when the creation date is unknown. */
-export function effectiveHistoryWeeks(createdAt: string | Date | null | undefined): number {
-  if (!createdAt) return REAPPRO_WEEKS_LOOKBACK;
-  const createdMs = new Date(createdAt).getTime();
-  if (!Number.isFinite(createdMs)) return REAPPRO_WEEKS_LOOKBACK;
-  const ageWeeks = (Date.now() - createdMs) / (7 * 24 * 60 * 60 * 1000);
+ *  capped by how long the product has actually been sellable, and floored so
+ *  the divisor can't approach 0. Falls back to the full window when that date
+ *  is unknown.
+ *
+ *  The caller resolves what "sellable since" means — usually
+ *  max(products.created_at, date of the product's first reception), since a
+ *  product listed in the catalogue on day 1 but only physically received on
+ *  day 30 could not have sold anything in between. Passing created_at alone
+ *  is still valid; it just means "assume sellable from creation," which is
+ *  the best available answer when no reception exists yet. */
+export function effectiveHistoryWeeks(sellableSince: string | Date | null | undefined): number {
+  if (!sellableSince) return REAPPRO_WEEKS_LOOKBACK;
+  const sinceMs = new Date(sellableSince).getTime();
+  if (!Number.isFinite(sinceMs)) return REAPPRO_WEEKS_LOOKBACK;
+  const ageWeeks = (Date.now() - sinceMs) / (7 * 24 * 60 * 60 * 1000);
   return Math.min(REAPPRO_WEEKS_LOOKBACK, Math.max(VITESSE_MIN_HISTORY_WEEKS, ageWeeks));
 }
 
@@ -187,13 +194,14 @@ export function effectiveHistoryWeeks(createdAt: string | Date | null | undefine
  *  a flat 10 keeps a product listed three weeks ago from reading as though
  *  it sold nothing for the seven weeks before it existed.
  *
- *  Note this still assumes the product was sellable for its whole life — a
- *  long stockout inside the window still drags the figure down. */
+ *  Note this still assumes the product was sellable for its whole
+ *  effective-history span — a stockout inside that span still drags the
+ *  figure down; see effectiveHistoryWeeks for the "sellable since" caveat. */
 export function computeVitesseVente(
   qtyOverWindow: number,
-  createdAt: string | Date | null | undefined,
+  sellableSince: string | Date | null | undefined,
 ): number {
-  return qtyOverWindow / effectiveHistoryWeeks(createdAt);
+  return qtyOverWindow / effectiveHistoryWeeks(sellableSince);
 }
 
 /** Estimated days of stock remaining at the current sales pace. Null when
@@ -286,44 +294,146 @@ export function resolveDelaiLivraison(
   return { jours: DELAI_LIVRAISON_DEFAUT_JOURS, source: 'defaut', fournisseur: null };
 }
 
+export type CycleSource = 'fournisseur' | 'delai';
+
+export type CycleResolu = {
+  jours: number;
+  source: CycleSource;
+};
+
+/** Order-cycle length for a product's supplier, most specific source first:
+ *   1. the supplier's own cycle_commande_jours (how often *this* supplier is
+ *      actually reordered — set on /admin/fournisseurs)
+ *   2. the supplier's delivery delay (the assumption "I reorder at each
+ *      arrival" — a reasonable default until the real cadence is known)
+ *   3. the delay already resolved for this product (resolveDelaiLivraison's
+ *      result), when the supplier itself has neither value set.
+ *  Deliberately NOT a single page-wide value: two suppliers with different
+ *  reorder rhythms must not share one cycle, or the réassort formula's
+ *  chaining logic silently misrepresents whichever supplier didn't set the
+ *  page-wide number. */
+export function resolveCycleCommande(
+  fournisseurCycleJours: number | null | undefined,
+  fournisseurDelaiJours: number | null | undefined,
+  delaiResoluJours: number,
+): CycleResolu {
+  // > 0 ici (pas >= 0) : un cycle de commande de 0 jour n'a pas de sens,
+  // contrairement au délai qui peut légitimement être 0 (fournisseur local
+  // livré le jour même) — cohérent avec la contrainte CHECK en base sur
+  // cycle_commande_jours. Le repli sur le délai, lui, hérite du délai tel
+  // quel : un délai à 0 j reste une valeur valide pour ce repli.
+  if (fournisseurCycleJours != null && fournisseurCycleJours > 0) {
+    return { jours: fournisseurCycleJours, source: 'fournisseur' };
+  }
+  if (fournisseurDelaiJours != null && fournisseurDelaiJours >= 0) {
+    return { jours: fournisseurDelaiJours, source: 'delai' };
+  }
+  return { jours: delaiResoluJours, source: 'delai' };
+}
+
 /** How an order is sized.
  *  - 'amorcage'  — first order or catching up: cover the transit AND the
  *                  horizon, since nothing is in the pipeline behind it.
- *  - 'reassort'  — steady state: reorder one transit's worth at each arrival,
- *                  so deliveries chain without a gap. Standard import practice.
+ *  - 'reassort'  — steady state: reorder one order-cycle's worth at each
+ *                  arrival, so deliveries chain without a gap. Standard
+ *                  import practice — see computeWeeksCovered for why this
+ *                  needs the cycle length, not just the transit delay.
  */
 export type ModeCommande = 'amorcage' | 'reassort';
 
-/** Cartons to order, rounded up and floored at 0. Null when there's no
- *  velocity to size an order from — the caller shows "pas d'historique" and
- *  suggests 0 rather than treating it as a real 0. */
-export function computeOrderQty(
-  vitesseVenteWeekly: number | null | undefined,
+/** The span of time (in weeks) an order needs to cover, before the security
+ *  margin and stock on hand are factored in.
+ *
+ *  Amorçage: délai + horizon. First order, or catching up — nothing is
+ *  already in the pipeline, so the order must bridge the transit AND the
+ *  whole planning horizon on its own.
+ *
+ *  Réassort: délai + cycle_de_commande, NOT délai alone. A réassort order
+ *  sized on the transit delay by itself only replaces what a single
+ *  shipment will sell THROUGH — by the time that shipment lands, nothing is
+ *  behind it, and stock runs out again the moment it depletes. Adding the
+ *  reorder cycle (how often orders actually get placed with this supplier)
+ *  means each order also covers the gap until the NEXT order's shipment
+ *  arrives, so shipments chain without a hole between them. */
+export function computeWeeksCovered(
+  mode: ModeCommande,
   delaiWeeks: number,
   horizonWeeks: number,
+  cycleWeeks: number,
+): number {
+  return mode === 'amorcage' ? delaiWeeks + horizonWeeks : delaiWeeks + cycleWeeks;
+}
+
+/** Security-stock buffer, in cartons, added on top of the base need.
+ *  Computed from the ADJUSTED velocity (post seasonal-coefficient), same as
+ *  the rest of the order-sizing math — a safety margin sized on last
+ *  season's pace would defeat its own purpose during a spike. 0 when there's
+ *  no velocity or no days configured, never negative. */
+export function computeSecuriteCartons(
+  vitesseAdjustedWeekly: number | null | undefined,
+  joursSecurite: number | null | undefined,
+): number {
+  if (!vitesseAdjustedWeekly || vitesseAdjustedWeekly <= 0) return 0;
+  return vitesseAdjustedWeekly * ((joursSecurite ?? 0) / 7);
+}
+
+/** Cartons to order, rounded up and floored at 0. Null when there's no
+ *  velocity to size an order from — the caller shows "pas d'historique" and
+ *  suggests 0 rather than treating it as a real 0.
+ *
+ *  vitesseAdjustedWeekly is the velocity AFTER the seasonal coefficient has
+ *  been applied (V × coef/100) — this function has no opinion on seasonality,
+ *  it just multiplies whatever pace it's given. weeksCovered comes from
+ *  computeWeeksCovered; securiteCartons from computeSecuriteCartons.
+ *  stockQuantity is the available stock (physical − reserved), not physical
+ *  alone — cartons already promised to a client can't absorb future demand. */
+export function computeOrderQty(
+  vitesseAdjustedWeekly: number | null | undefined,
+  weeksCovered: number,
+  securiteCartons: number,
   stockQuantity: number | null | undefined,
-  mode: ModeCommande,
 ): number | null {
-  if (!vitesseVenteWeekly || vitesseVenteWeekly <= 0) return null;
-  const weeksCovered = mode === 'amorcage' ? delaiWeeks + horizonWeeks : delaiWeeks;
-  const qty = Math.ceil(vitesseVenteWeekly * weeksCovered - (stockQuantity ?? 0));
+  if (!vitesseAdjustedWeekly || vitesseAdjustedWeekly <= 0) return null;
+  const qty = Math.ceil(vitesseAdjustedWeekly * weeksCovered + securiteCartons - (stockQuantity ?? 0));
   return qty > 0 ? qty : 0;
 }
 
+export function addDays(date: Date, days: number): Date {
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
 /** Days of stock left, as a date. Null when there's no velocity to
- *  extrapolate — same reasoning as computeJoursAvantRupture. */
+ *  extrapolate — same reasoning as computeJoursAvantRupture.
+ *
+ *  Pass the ADJUSTED velocity (post seasonal-coefficient): this date feeds
+ *  the "rupture before arrival" alert, which is exactly the forward-looking
+ *  decision the coefficient exists to inform — a rupture date computed on
+ *  last season's pace during a spike would silently mislead. */
 export function estimatedRuptureDate(
   stockQuantity: number | null | undefined,
-  vitesseVenteWeekly: number | null | undefined,
+  vitesseAdjustedWeekly: number | null | undefined,
   from: Date = new Date(),
 ): Date | null {
-  const jours = computeJoursAvantRupture(stockQuantity, vitesseVenteWeekly);
+  const jours = computeJoursAvantRupture(stockQuantity, vitesseAdjustedWeekly);
   if (jours == null) return null;
-  return new Date(from.getTime() + jours * 24 * 60 * 60 * 1000);
+  return addDays(from, jours);
 }
 
 export function estimatedArrivalDate(delaiJours: number, from: Date = new Date()): Date {
-  return new Date(from.getTime() + delaiJours * 24 * 60 * 60 * 1000);
+  return addDays(from, delaiJours);
+}
+
+/** The arrival date shifted by the security margin, for the "rupture before
+ *  arrival" comparison: an order landing exactly the day stock hits zero is
+ *  already a dangerous outcome, not a narrowly-avoided one, so the margin
+ *  pushes the comparison point earlier rather than only sizing the order
+ *  quantity. */
+export function estimatedArrivalWithMargin(
+  delaiJours: number,
+  joursSecurite: number | null | undefined,
+  from: Date = new Date(),
+): Date {
+  return addDays(estimatedArrivalDate(delaiJours, from), joursSecurite ?? 0);
 }
 
 // ── Suivi des expéditions (transit) ─────────────────────────────────────

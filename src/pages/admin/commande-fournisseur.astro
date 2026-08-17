@@ -1,13 +1,15 @@
 ---
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
+import { fetchAvailability } from '../../lib/stock';
 import {
   REAPPRO_WEEKS_LOOKBACK, computeVitesseVente,
   effectiveHistoryWeeks, VITESSE_SHORT_HISTORY_WEEKS,
   COUVERTURE_HORIZON_MONTHS, couvertureHorizonWeeks,
-  computeCouvertureWeeks, computeOrderQty, SHIPMENT_ACTIVE_STATUSES,
-  DELAI_LIVRAISON_DEFAUT_JOURS, resolveDelaiLivraison,
-  estimatedArrivalDate, estimatedRuptureDate,
+  computeCouvertureWeeks, computeWeeksCovered, computeSecuriteCartons, computeOrderQty,
+  SHIPMENT_ACTIVE_STATUSES,
+  DELAI_LIVRAISON_DEFAUT_JOURS, resolveDelaiLivraison, resolveCycleCommande,
+  estimatedArrivalDate, estimatedArrivalWithMargin, estimatedRuptureDate,
   type ModeCommande,
 } from '../../lib/constants';
 
@@ -19,8 +21,12 @@ const CAT_LABEL: Record<string, string> = {
 };
 
 // ── Réglages globaux, via query string. Mode et horizon changent le calcul
-//    serveur ; le coefficient saisonnier s'applique côté client pour rester
-//    instantané et ne pas écraser les lignes déjà ajustées à la main. ──
+//    serveur (rechargement) ; seul le coefficient saisonnier s'applique côté
+//    client pour rester instantané sans écraser les lignes déjà ajustées à
+//    la main. Le cycle de commande, lui, N'EST PAS un réglage de page : il
+//    est propre à chaque fournisseur (voir resolveCycleCommande plus bas) —
+//    un cycle commun à tous les fournisseurs serait faux dès que deux
+//    d'entre eux ont des rythmes de commande différents. ──
 const modeParam = Astro.url.searchParams.get('mode');
 const mode: ModeCommande = modeParam === 'reassort' ? 'reassort' : 'amorcage';
 
@@ -38,6 +44,12 @@ const { data: products } = await supabaseAdmin
 const allProducts = products ?? [];
 const productIds = allProducts.map(p => p.id);
 
+// ── Stock disponible (physique − réservé), pas le seul physique : des
+//    cartons déjà promis à un client ne peuvent pas absorber une nouvelle
+//    commande. Même définition que product_availability, via le helper déjà
+//    utilisé par le catalogue et /admin/produits. ──
+const availability = await fetchAvailability(allProducts);
+
 // ── Vitesse de vente sur la fenêtre de référence ──
 const salesQtyByProduct = new Map<string, number>();
 if (productIds.length > 0) {
@@ -53,34 +65,68 @@ if (productIds.length > 0) {
   }
 }
 
-// ── Fournisseur déduit de la dernière réception du produit ──
+// ── Fournisseur déduit de la dernière réception du produit, ET date de la
+//    PREMIÈRE réception (pour le début d'historique réel — un produit créé
+//    au catalogue le 1er juillet mais reçu seulement le 1er août n'était
+//    vendable que depuis le 1er août). Une seule requête sert les deux. ──
 const supplierByProduct = new Map<string, string>();
+const firstReceptionByProduct = new Map<string, string>();
 if (productIds.length > 0) {
   const { data: receptionRows } = await supabaseAdmin
     .from('stock_reception_items')
-    .select('product_id, created_at, stock_receptions(supplier_name)')
+    .select('product_id, created_at, stock_receptions(supplier_name, received_at)')
     .order('created_at', { ascending: false });
   for (const row of (receptionRows ?? [])) {
-    if (!row.product_id || supplierByProduct.has(row.product_id)) continue;
-    const s = (row as any).stock_receptions?.supplier_name;
-    if (s) supplierByProduct.set(row.product_id, s);
+    if (!row.product_id) continue;
+    const rec = (row as any).stock_receptions;
+    if (rec?.supplier_name && !supplierByProduct.has(row.product_id)) {
+      supplierByProduct.set(row.product_id, rec.supplier_name);
+    }
+    if (rec?.received_at) {
+      const cur = firstReceptionByProduct.get(row.product_id);
+      if (!cur || rec.received_at < cur) firstReceptionByProduct.set(row.product_id, rec.received_at);
+    }
   }
 }
 
-// ── Délais fournisseurs. La table peut ne pas exister si la migration n'a
-//    pas encore été lancée : on dégrade proprement sur le défaut. ──
-const { data: supplierRows, error: suppliersErr } = await supabaseAdmin
-  .from('suppliers')
-  .select('name, delai_livraison_jours');
-// PostgREST reports an unknown table as PGRST205 ("not in the schema cache"),
-// not the raw Postgres 42P01 — accept both.
-const suppliersTableMissing = suppliersErr?.code === 'PGRST205' || suppliersErr?.code === '42P01';
-const delaiBySupplier = new Map<string, number | null>();
-for (const s of (supplierRows ?? [])) delaiBySupplier.set(s.name, s.delai_livraison_jours);
+// ── Délais + stock de sécurité + cycle de commande, par fournisseur. La
+//    table peut ne pas exister si sa migration n'a pas été lancée ; les deux
+//    colonnes jours_securite et cycle_commande_jours sont plus récentes et
+//    peuvent chacune manquer indépendamment de l'autre — sondées séparément
+//    plutôt que déduites d'un seul essai/erreur, pour rester correct quelle
+//    que soit la combinaison de migrations déjà lancées. ──
+let delaiBySupplier = new Map<string, number | null>();
+let securiteBySupplier = new Map<string, number | null>();
+let cycleBySupplier = new Map<string, number | null>();
+let suppliersTableMissing = false;
+let securiteColumnMissing = false;
+let cycleColumnMissing = false;
+{
+  const probe = await supabaseAdmin.from('suppliers').select('id').limit(1);
+  if (probe.error?.code === 'PGRST205' || probe.error?.code === '42P01') {
+    suppliersTableMissing = true;
+  } else {
+    const probeSecurite = await supabaseAdmin.from('suppliers').select('jours_securite').limit(1);
+    securiteColumnMissing = probeSecurite.error?.code === '42703';
+    const probeCycle = await supabaseAdmin.from('suppliers').select('cycle_commande_jours').limit(1);
+    cycleColumnMissing = probeCycle.error?.code === '42703';
+
+    const cols = ['name', 'delai_livraison_jours'];
+    if (!securiteColumnMissing) cols.push('jours_securite');
+    if (!cycleColumnMissing) cols.push('cycle_commande_jours');
+    const res = await supabaseAdmin.from('suppliers').select(cols.join(', '));
+    for (const s of (res.data ?? []) as any[]) {
+      delaiBySupplier.set(s.name, s.delai_livraison_jours);
+      securiteBySupplier.set(s.name, securiteColumnMissing ? null : s.jours_securite);
+      cycleBySupplier.set(s.name, cycleColumnMissing ? null : s.cycle_commande_jours);
+    }
+  }
+}
 
 // ── Quantités déjà en route, pour ne pas recommander ce qui est parti.
 //    Affiché seulement : la quantité suggérée n'est pas diminuée
-//    automatiquement, l'arbitrage restant une décision d'achat. ──
+//    automatiquement, l'arbitrage restant une décision d'achat — mais les
+//    lignes où la suggestion ignore un transit non nul sont signalées. ──
 const { data: transitRows } = await supabaseAdmin
   .from('shipment_items')
   .select('product_id, quantity, shipments!inner(status, eta)')
@@ -92,8 +138,6 @@ for (const row of (transitRows ?? [])) {
   const eta = (row as any).shipments?.eta ?? null;
   const cur = transitByProduct.get(row.product_id) ?? { qty: 0, eta: null };
   cur.qty += row.quantity ?? 0;
-  // On retient l'arrivée la plus proche : c'est celle qui décide s'il faut
-  // recommander maintenant ou attendre.
   if (eta && (cur.eta == null || eta < cur.eta)) cur.eta = eta;
   transitByProduct.set(row.product_id, cur);
 }
@@ -104,9 +148,20 @@ const today = new Date();
 const fmtDate = (d: Date) => d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
 
 const rows = allProducts.map(p => {
+  // ── Début d'historique réel : au plus tôt la création catalogue, au plus
+  //    tard (donc jamais avant) sa première réception effective. ──
+  const receivedSince = firstReceptionByProduct.get(p.id) ?? null;
   const createdAt = (p as any).created_at ?? null;
-  const historyWeeks = effectiveHistoryWeeks(createdAt);
-  const vitesseVente = computeVitesseVente(salesQtyByProduct.get(p.id) ?? 0, createdAt);
+  const sellableSince = receivedSince && (!createdAt || receivedSince > createdAt) ? receivedSince : createdAt;
+
+  const historyWeeks = effectiveHistoryWeeks(sellableSince);
+  // Vitesse brute, observée — sert d'affichage factuel (colonne grise) et de
+  // base au coefficient saisonnier, qui s'applique ICI, avant toute
+  // soustraction de stock, jamais sur une quantité déjà nette.
+  const vitesseVente = computeVitesseVente(salesQtyByProduct.get(p.id) ?? 0, sellableSince);
+  // Rendu serveur = coefficient 100 % : ajustée == brute au premier chargement,
+  // le script reprend le calcul à partir de là dès que le coefficient change.
+  const vitesseAjustee = vitesseVente;
 
   const supplierName = supplierByProduct.get(p.id) ?? null;
   const delai = resolveDelaiLivraison(
@@ -114,42 +169,76 @@ const rows = allProducts.map(p => {
     supplierName,
     supplierName ? delaiBySupplier.get(supplierName) ?? null : null,
   );
+  const joursSecurite = (supplierName ? securiteBySupplier.get(supplierName) : null) ?? 0;
+  // Cycle propre à ce fournisseur — jamais un cycle de page partagé entre
+  // tous les fournisseurs, qui serait faux dès que deux d'entre eux ont des
+  // rythmes de commande différents.
+  const cycle = resolveCycleCommande(
+    supplierName ? cycleBySupplier.get(supplierName) ?? null : null,
+    supplierName ? delaiBySupplier.get(supplierName) ?? null : null,
+    delai.jours,
+  );
 
-  const suggested = computeOrderQty(vitesseVente, delai.jours / 7, horizonWeeks, p.stock_quantity, mode);
-  const couvertureWeeks = computeCouvertureWeeks(p.stock_quantity, vitesseVente);
+  const dispo = availability.get(p.id);
+  const stockPhysique = p.stock_quantity ?? 0;
+  const stockReserve = dispo?.reserved ?? 0;
+  const stockDisponible = dispo?.available ?? stockPhysique;
+
+  const weeksCovered = computeWeeksCovered(mode, delai.jours / 7, horizonWeeks, cycle.jours / 7);
+  const securiteCartons = computeSecuriteCartons(vitesseAjustee, joursSecurite);
+  const suggested = computeOrderQty(vitesseAjustee, weeksCovered, securiteCartons, stockDisponible);
+
+  // Couverture actuelle : au rythme RÉELLEMENT OBSERVÉ, pas ajusté — c'est un
+  // constat sur aujourd'hui, pas une projection sous hypothèse saisonnière.
+  const couvertureWeeks = computeCouvertureWeeks(stockDisponible, vitesseVente);
 
   const arrival = estimatedArrivalDate(delai.jours, today);
-  const rupture = estimatedRuptureDate(p.stock_quantity, vitesseVente, today);
-  // The case that actually costs money: stock runs out before the order lands.
-  const ruptureBeforeArrival = rupture != null && rupture.getTime() < arrival.getTime();
+  const arrivalWithMargin = estimatedArrivalWithMargin(delai.jours, joursSecurite, today);
+  // Rupture estimée au rythme AJUSTÉ : c'est la date qui doit refléter un pic
+  // anticipé, puisque c'est elle qui alimente l'alerte de rupture.
+  const rupture = estimatedRuptureDate(stockDisponible, vitesseAjustee, today);
+  // Un conteneur qui arrive pile le jour où le stock tombe à 0 est déjà une
+  // situation dangereuse — la marge de sécurité avance le seuil de
+  // comparaison, pas seulement la quantité commandée.
+  const ruptureBeforeArrival = rupture != null && rupture.getTime() < arrivalWithMargin.getTime();
 
   const pump = (p as any).prix_achat_moyen_ht != null ? Number((p as any).prix_achat_moyen_ht) : null;
   const upc = (p as any).units_per_carton ?? null;
   const shortHistory = historyWeeks < VITESSE_SHORT_HISTORY_WEEKS;
 
   const transit = transitByProduct.get(p.id) ?? null;
+  const transitQty = transit?.qty ?? 0;
   const transitEtaLabel = transit?.eta ? fmtDate(new Date(transit.eta)) : null;
+
+  const hasHistory = vitesseVente > 0;
+  const suggestedQty = suggested ?? 0;
+
+  // Raisons statiques de montrer la sous-ligne d'alerte : aucune ne dépend
+  // du coefficient, contrairement à ruptureBeforeArrival — le script n'a
+  // donc besoin de recalculer que cette dernière pour décider si la
+  // sous-ligne doit apparaître. En réassort, le cycle utilisé est une info
+  // de planification centrale : toujours affiché, pas seulement en cas
+  // d'anomalie.
+  const staticAlert = delai.source === 'defaut' || shortHistory || transitQty > 0 || mode === 'reassort';
 
   return {
     ...p,
-    vitesseVente, historyWeeks, shortHistory,
+    vitesseVente, vitesseAjustee, historyWeeks, shortHistory,
     couvertureWeeks,
-    suggestedQty: suggested ?? 0,
-    hasHistory: vitesseVente > 0,
-    alreadyCovered: suggested === 0,
-    delai, arrival, rupture, ruptureBeforeArrival,
+    suggestedQty,
+    hasHistory,
+    alreadyCovered: hasHistory && suggestedQty === 0,
+    delai, cycle, arrival, arrivalWithMargin, rupture, ruptureBeforeArrival,
     arrivalLabel: fmtDate(arrival),
     ruptureLabel: rupture ? fmtDate(rupture) : null,
-    transitQty: transit?.qty ?? 0,
-    transitEtaLabel,
+    transitQty, transitEtaLabel,
+    transitIgnored: transitQty > 0 && suggestedQty > 0,
     pump,
     unitsPerCarton: upc != null && upc > 0 ? upc : null,
     supplier: supplierName ?? UNGROUPED_LABEL,
-    // Silence is the normal state: a subline appears only when a line has
-    // something worth reacting to.
-    // Une quantité déjà en route change la décision d'achat : elle mérite
-    // d'être vue au même titre qu'un délai inconnu ou une rupture imminente.
-    hasAlert: delai.source === 'defaut' || ruptureBeforeArrival || shortHistory || (transit?.qty ?? 0) > 0,
+    stockPhysique, stockReserve, stockDisponible,
+    staticAlert,
+    hasAlert: staticAlert || ruptureBeforeArrival,
   };
 });
 
@@ -161,7 +250,19 @@ const suppliers = [...new Set(rows.map(r => r.supplier))].sort((a, b) => {
   return a.localeCompare(b, 'fr');
 });
 
+// Carte fournisseur → cycle de commande résolu en semaines (approximation au
+// niveau fournisseur, pour l'en-tête du récapitulatif d'export uniquement —
+// le calcul par ligne, lui, utilise toujours le cycle résolu par produit).
+const supplierCycleWeeksJSON: Record<string, number> = {};
+for (const s of suppliers) {
+  if (s === UNGROUPED_LABEL) continue;
+  const supplierDelai = delaiBySupplier.get(s) ?? DELAI_LIVRAISON_DEFAUT_JOURS;
+  const c = resolveCycleCommande(cycleBySupplier.get(s) ?? null, delaiBySupplier.get(s) ?? null, supplierDelai);
+  supplierCycleWeeksJSON[s] = Math.round((c.jours / 7) * 10) / 10;
+}
+
 const defaultDelaiCount = rows.filter(r => r.delai.source === 'defaut').length;
+const missingPumpCount = rows.filter(r => r.pump == null).length;
 
 function formatPrice(n: number | null): string {
   if (n == null) return '—';
@@ -169,8 +270,8 @@ function formatPrice(n: number | null): string {
 }
 
 const MODE_HELP: Record<ModeCommande, string> = {
-  amorcage: `Amorçage — couvre le transit puis ${horizonMonths} mois de vente : à utiliser pour une première commande ou pour rattraper un retard, quand rien n'est déjà en route.`,
-  reassort: `Réassort à l'arrivage — commande l'équivalent du seul délai de transit, à répéter à chaque réception pour que les arrivages s'enchaînent sans rupture.`,
+  amorcage: `Amorçage — couvre le délai d'acheminement puis ${horizonMonths} mois de vente : à utiliser pour une première commande ou pour rattraper un retard, quand rien n'est déjà en route.`,
+  reassort: `Réassort à l'arrivage — commande l'équivalent du délai d'acheminement PLUS le cycle de commande (le rythme auquel vous repassez commande chez ce fournisseur), pour que les arrivages s'enchaînent sans rupture entre deux commandes. Le cycle est propre à chaque fournisseur, réglable sur /admin/fournisseurs ; à défaut, il retombe sur le délai d'acheminement du fournisseur concerné.`,
 };
 ---
 <AdminLayout title="Commande fournisseur" activeNav="commande-fournisseur">
@@ -180,6 +281,13 @@ const MODE_HELP: Record<ModeCommande, string> = {
       le délai par défaut de {DELAI_LIVRAISON_DEFAUT_JOURS} j. Lancez
       <code>supabase/migrations/suppliers_table.sql</code> puis renseignez les délais dans
       <a href="/admin/fournisseurs">Fournisseurs</a>.
+    </div>
+  )}
+  {!suppliersTableMissing && securiteColumnMissing && (
+    <div class="alert alert--warn" role="status">
+      La colonne <code>jours_securite</code> n'existe pas encore — le stock de sécurité est traité
+      comme nul partout. Lancez <code>supabase/migrations/suppliers_jours_securite.sql</code> puis
+      renseignez-le dans <a href="/admin/fournisseurs">Fournisseurs</a>.
     </div>
   )}
 
@@ -265,7 +373,14 @@ const MODE_HELP: Record<ModeCommande, string> = {
               data-name={p.name}
               data-pump={p.pump ?? ''}
               data-upc={p.unitsPerCarton ?? ''}
-              data-base={p.suggestedQty}
+              data-vitesse={p.vitesseVente}
+              data-delai-jours={p.delai.jours}
+              data-cycle-jours={p.cycle.jours}
+              data-securite-jours={(supplierByProduct.get(p.id) ? securiteBySupplier.get(p.supplier) : null) ?? 0}
+              data-stock={p.stockDisponible}
+              data-has-history={p.hasHistory ? '1' : '0'}
+              data-static-alert={p.staticAlert ? '1' : '0'}
+              data-transit-qty={p.transitQty}
             >
               <td class="td-product">
                 <span class="p-name">{p.name}</span>
@@ -273,48 +388,63 @@ const MODE_HELP: Record<ModeCommande, string> = {
                   <span class={`cat-badge cat-badge--${p.category}`}>{CAT_LABEL[p.category] ?? p.category}</span>
                   <span class="p-supplier">{p.supplier}</span>
                 </div>
-                {p.hasAlert && (
-                  <p class={`p-alert ${p.ruptureBeforeArrival ? 'p-alert--danger' : ''}`}>
-                    <span class="a-delai">
-                      {p.delai.jours} j
-                      {p.delai.source === 'fournisseur' && ` · ${p.delai.fournisseur}`}
-                      {p.delai.source === 'produit' && ' · produit'}
-                      {p.delai.source === 'defaut' && ' · défaut'}
-                    </span>
-                    <span class="a-sep">·</span>
-                    <span>arrivée ~{p.arrivalLabel}</span>
-                    {p.ruptureLabel && (
-                      <>
-                        <span class="a-sep">·</span>
-                        <span class={p.ruptureBeforeArrival ? 'a-rupture' : ''}>
-                          rupture ~{p.ruptureLabel}{p.ruptureBeforeArrival ? ' ⚠' : ''}
-                        </span>
-                      </>
-                    )}
-                    {p.transitQty > 0 && (
-                      <>
-                        <span class="a-sep">·</span>
-                        <a href="/admin/transit" class="a-transit" title="Déjà expédié par le fournisseur, pas encore reçu — non déduit de la quantité suggérée">
-                          🚢 {p.transitQty} en transit{p.transitEtaLabel ? ` · arrivée ~${p.transitEtaLabel}` : ''}
-                        </a>
-                      </>
-                    )}
-                    {p.shortHistory && (
-                      <>
-                        <span class="a-sep">·</span>
-                        <span class="a-short" title={`Vitesse calculée sur ${p.historyWeeks.toFixed(1)} sem. d'historique`}>historique court</span>
-                      </>
-                    )}
-                  </p>
-                )}
+                <p class={`p-alert ${p.ruptureBeforeArrival ? 'p-alert--danger' : ''}`} hidden={!p.hasAlert}>
+                  <span class="a-delai">
+                    {p.delai.jours} j
+                    {p.delai.source === 'fournisseur' && ` · ${p.delai.fournisseur}`}
+                    {p.delai.source === 'produit' && ' · produit'}
+                    {p.delai.source === 'defaut' && ' · défaut'}
+                  </span>
+                  {mode === 'reassort' && (
+                    <>
+                      <span class="a-sep">·</span>
+                      <span
+                        class="a-cycle"
+                        title={p.cycle.source === 'fournisseur'
+                          ? `Cycle propre réglé sur /admin/fournisseurs pour ${p.supplier}`
+                          : `Aucun cycle propre réglé pour ${p.supplier} — retombe sur son délai d'acheminement`}
+                      >
+                        cycle {p.cycle.jours} j{p.cycle.source === 'delai' && ' (= délai)'}
+                      </span>
+                    </>
+                  )}
+                  <span class="a-sep">·</span>
+                  <span>arrivée ~{p.arrivalLabel}</span>
+                  <span class="a-sep" hidden={!p.hasHistory}>·</span>
+                  <span class="a-rupture-text" hidden={!p.hasHistory}>
+                    rupture ~{p.ruptureLabel}<span class="a-rupture-mark" hidden={!p.ruptureBeforeArrival}> ⚠</span>
+                  </span>
+                  <span class="a-sep" hidden={p.transitQty <= 0}>·</span>
+                  <a
+                    href="/admin/transit"
+                    class="a-transit"
+                    hidden={p.transitQty <= 0}
+                    title="Déjà expédié par le fournisseur, pas encore reçu — non déduit de la quantité suggérée"
+                  >
+                    🚢 {p.transitQty} en transit{p.transitEtaLabel ? ` · arrivée ~${p.transitEtaLabel}` : ''}
+                  </a>
+                  <span class="a-sep" hidden={!p.shortHistory}>·</span>
+                  <span
+                    class="a-short"
+                    hidden={!p.shortHistory}
+                    title={`Vitesse calculée sur ${p.historyWeeks.toFixed(1)} sem. d'historique`}
+                  >
+                    historique court
+                  </span>
+                </p>
               </td>
 
               <td class="th-num td-secondary">
                 <span
-                  title={`Délai retenu : ${p.delai.jours} j (${p.delai.source}) · arrivée estimée ~${p.arrivalLabel}${p.ruptureLabel ? ` · rupture estimée ~${p.ruptureLabel}` : ''}`}
+                  title={`Disponible ${p.stockDisponible} = physique ${p.stockPhysique} − réservé ${p.stockReserve}`}
                 >
-                  {p.stock_quantity ?? 0} en stock
+                  {p.stockDisponible} disponible{p.stockDisponible === 1 ? '' : 's'}
                 </span>
+                {p.stockReserve > 0 && (
+                  <p class="s-reserve" title={`${p.stockPhysique} en stock, ${p.stockReserve} déjà réservés sur des commandes non livrées`}>
+                    {p.stockPhysique} phys. · <span class="s-reserve-num">−{p.stockReserve} rés.</span>
+                  </p>
+                )}
                 <p class="s-sub">
                   {p.hasHistory
                     ? `${p.vitesseVente.toFixed(1)}/sem · ${p.couvertureWeeks!.toFixed(1)} sem`
@@ -326,14 +456,23 @@ const MODE_HELP: Record<ModeCommande, string> = {
                 <div class="qty-cell">
                   <input
                     type="number"
-                    class="qty-input"
+                    class={`qty-input ${p.shortHistory ? 'qty-input--warn' : ''}`}
                     min="0"
                     step="1"
                     value={p.suggestedQty}
-                    aria-label={`Quantité à commander pour ${p.name}`}
+                    aria-label={`Quantité à commander pour ${p.name}${p.shortHistory ? ' — estimation peu fiable, historique court' : ''}`}
                   />
                 </div>
-                {p.hasHistory && p.alreadyCovered && <p class="qty-note qty-note--ok">déjà couvert</p>}
+                {/* Conservée (pas remplacée), mais rendue impossible à manquer : un chiffre
+                    comme 1005 cartons calculé sur 6 jours de ventes ne doit jamais passer
+                    pour une recommandation aussi sûre qu'une ligne à historique complet. */}
+                <p class="qty-note qty-note--warn" hidden={!p.shortHistory} title={`Vitesse calculée sur seulement ${p.historyWeeks.toFixed(1)} sem. d'historique (seuil de fiabilité : ${VITESSE_SHORT_HISTORY_WEEKS} sem.)`}>
+                  ⚠ historique court ({p.historyWeeks.toFixed(1)} sem.) — quantité peu fiable
+                </p>
+                <p class="qty-note qty-note--ok" hidden={!p.alreadyCovered}>déjà couvert</p>
+                <p class="qty-note qty-note--transit" hidden={!p.transitIgnored} title="La quantité suggérée n'a pas déduit ce qui est déjà en transit — ajustez si vous voulez en tenir compte">
+                  ⚠ transit non déduit
+                </p>
               </td>
 
               <td class="th-num td-mono line-cost">
@@ -372,7 +511,7 @@ const MODE_HELP: Record<ModeCommande, string> = {
   </div>
 </AdminLayout>
 
-<script define:vars={{ horizonMonths, mode }}>
+<script define:vars={{ horizonMonths, mode, horizonWeeks, supplierCycleWeeks: supplierCycleWeeksJSON, missingPumpCountInitial: missingPumpCount }}>
   const table = document.getElementById('cfTable');
   if (table) {
     const bodyRows   = Array.from(table.querySelectorAll('tbody tr'));
@@ -385,30 +524,106 @@ const MODE_HELP: Record<ModeCommande, string> = {
 
     const eur = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' });
     const num = new Intl.NumberFormat('fr-FR');
+    const dateFmt = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short' });
 
     const qtyInput = (row) => row.querySelector('.qty-input');
-    const qtyOf = (row) => {
+    const pumpOf = (row) => (row.dataset.pump === '' ? null : Number(row.dataset.pump));
+    const upcOf  = (row) => (row.dataset.upc === '' ? null : Number(row.dataset.upc));
+    const qtyOf  = (row) => {
       const n = Math.max(0, Math.floor(Number(qtyInput(row)?.value ?? 0)));
       return Number.isFinite(n) ? n : 0;
     };
-    const pumpOf = (row) => (row.dataset.pump === '' ? null : Number(row.dataset.pump));
-    const upcOf  = (row) => (row.dataset.upc === '' ? null : Number(row.dataset.upc));
-    const baseOf = (row) => Number(row.dataset.base ?? 0) || 0;
-    const coef   = () => {
+
+    const coefPct = () => {
       const n = Number(coefEl?.value ?? 100);
-      return Number.isFinite(n) && n >= 0 ? n / 100 : 1;
+      return Number.isFinite(n) && n >= 0 ? n : 100;
     };
 
-    /** Applies the seasonal coefficient to suggested quantities only. A line
-     *  the user has typed into is left alone — their number is a decision,
-     *  not an estimate to be rescaled. */
-    function applyCoefficient() {
-      const c = coef();
-      for (const row of bodyRows) {
-        if (row.dataset.edited === '1') continue;
+    // ── Mirroir JS des formules de lib/constants.ts — computeWeeksCovered,
+    //    computeSecuriteCartons, computeOrderQty, computeJoursAvantRupture,
+    //    estimatedArrivalWithMargin. Reste en phase avec la version serveur
+    //    par construction : au chargement (coefficient 100 %), les deux
+    //    doivent produire des valeurs identiques. Le cycle, comme le délai,
+    //    est lu depuis le dataset de la ligne (résolu par produit côté
+    //    serveur) — jamais un champ de réglage partagé entre toutes les
+    //    lignes. ──
+    function weeksCovered(delaiWeeks, cycle) {
+      return mode === 'amorcage' ? delaiWeeks + horizonWeeks : delaiWeeks + cycle;
+    }
+    function securiteCartons(vAdj, joursSecurite) {
+      if (!vAdj || vAdj <= 0) return 0;
+      return vAdj * (joursSecurite / 7);
+    }
+    function orderQty(vAdj, wCovered, securite, stock) {
+      if (!vAdj || vAdj <= 0) return null;
+      const q = Math.ceil(vAdj * wCovered + securite - stock);
+      return q > 0 ? q : 0;
+    }
+    function joursAvantRupture(stock, vAdj) {
+      if (stock == null) return null;
+      if (stock <= 0) return 0;
+      if (!vAdj || vAdj <= 0) return null;
+      return stock / (vAdj / 7);
+    }
+    function addDaysJs(date, days) { return new Date(date.getTime() + days * 86400000); }
+
+    function recomputeRow(row, coef) {
+      const vitesse       = Number(row.dataset.vitesse) || 0;
+      const delaiJours     = Number(row.dataset.delaiJours) || 0;
+      const cycleJours     = Number(row.dataset.cycleJours) || 0;
+      const securiteJours  = Number(row.dataset.securiteJours) || 0;
+      const stock          = Number(row.dataset.stock) || 0;
+      const hasHistory     = row.dataset.hasHistory === '1';
+      const staticAlert    = row.dataset.staticAlert === '1';
+      const transitQty     = Number(row.dataset.transitQty) || 0;
+
+      const vAdj = vitesse * (coef / 100);
+      const wCovered = weeksCovered(delaiJours / 7, cycleJours / 7);
+      const sec = securiteCartons(vAdj, securiteJours);
+      const suggested = hasHistory ? orderQty(vAdj, wCovered, sec, stock) : null;
+      const qty = suggested ?? 0;
+
+      const now = new Date();
+      const arrival = addDaysJs(now, delaiJours);
+      const arrivalMargin = addDaysJs(arrival, securiteJours);
+      const jar = joursAvantRupture(stock, vAdj);
+      const rupture = jar == null ? null : addDaysJs(now, jar);
+      const ruptureBeforeArrival = rupture != null && rupture.getTime() < arrivalMargin.getTime();
+
+      if (row.dataset.edited !== '1') {
         const input = qtyInput(row);
-        if (input) input.value = String(Math.ceil(baseOf(row) * c));
+        if (input) input.value = String(qty);
       }
+
+      // Sous-ligne d'alerte : seuls le texte de la date de rupture, sa marque
+      // ⚠, et la visibilité globale (statique OU rupture-avant-arrivée)
+      // dépendent du coefficient/cycle — tout le reste (délai, arrivée,
+      // transit, historique court) est fixé au chargement, jamais retouché.
+      const alertP = row.querySelector('.p-alert');
+      const ruptureText = row.querySelector('.a-rupture-text');
+      const ruptureMark = row.querySelector('.a-rupture-mark');
+      if (ruptureText && rupture) {
+        ruptureText.childNodes[0].nodeValue = `rupture ~${dateFmt.format(rupture)}`;
+      }
+      if (ruptureMark) ruptureMark.hidden = !ruptureBeforeArrival;
+      if (alertP) {
+        alertP.hidden = !(staticAlert || ruptureBeforeArrival);
+        alertP.classList.toggle('p-alert--danger', ruptureBeforeArrival);
+      }
+
+      // Transit non déduit : ne peut apparaître que si un transit existe
+      // (statique) ET que la suggestion redevient positive (dynamique).
+      const transitNote = row.querySelector('.qty-note--transit');
+      if (transitNote) transitNote.hidden = !(transitQty > 0 && qty > 0);
+      const okNote = row.querySelector('.qty-note--ok');
+      if (okNote) okNote.hidden = !(hasHistory && qty === 0);
+
+      return { qty };
+    }
+
+    function recomputeAll() {
+      const coef = coefPct();
+      for (const row of bodyRows) recomputeRow(row, coef);
       recalc();
     }
 
@@ -432,10 +647,18 @@ const MODE_HELP: Record<ModeCommande, string> = {
       const setText = (id, t) => { const n = document.getElementById(id); if (n) n.textContent = t; };
       setText('cfTotalCartons', `${num.format(cartons)} carton${cartons === 1 ? '' : 's'}`);
       setText('cfTotalUnits', `${num.format(units)} unité${units === 1 ? '' : 's'}`);
-      setText('cfTotalCost', cartons === 0 ? '—' : eur.format(cost));
+      // Le total ne doit jamais paraître définitif quand des produits
+      // manquent de PUMP — « Total connu » dit explicitement que ce n'est
+      // qu'une partie du coût réel, pas le coût réel.
+      const costEl = document.getElementById('cfTotalCost');
+      if (costEl) {
+        if (cartons === 0) costEl.textContent = '—';
+        else if (missingPump > 0) costEl.textContent = `Total connu : ${eur.format(cost)}`;
+        else costEl.textContent = eur.format(cost);
+      }
 
       const notes = [];
-      if (missingPump) notes.push(`${missingPump} produit${missingPump > 1 ? 's' : ''} sans prix d'achat — exclu${missingPump > 1 ? 's' : ''} du coût`);
+      if (missingPump) notes.push(`coût incomplet — ${missingPump} référence${missingPump > 1 ? 's' : ''} sans prix d'achat`);
       if (missingUpc)  notes.push(`${missingUpc} produit${missingUpc > 1 ? 's' : ''} sans conditionnement — exclu${missingUpc > 1 ? 's' : ''} du total en unités`);
       if (footnote) {
         footnote.textContent = notes.length ? `* ${notes.join(' · ')}` : '';
@@ -463,7 +686,7 @@ const MODE_HELP: Record<ModeCommande, string> = {
 
     searchEl?.addEventListener('input', applyFilters);
     supplierEl?.addEventListener('change', applyFilters);
-    coefEl?.addEventListener('input', applyCoefficient);
+    coefEl?.addEventListener('input', recomputeAll);
 
     // Only a real keystroke marks a line as manually decided — assigning
     // .value programmatically does not fire 'input'.
@@ -483,15 +706,23 @@ const MODE_HELP: Record<ModeCommande, string> = {
     function buildExport() {
       const picked = bodyRows.filter(r => !r.hidden && qtyOf(r) > 0);
       const supplier = supplierEl?.value || '';
-      const coefPct = Number(coefEl?.value ?? 100);
+      const coefPctVal = coefPct();
 
       const lines = [supplier ? `Commande fournisseur — ${supplier}` : 'Commande fournisseur'];
-      lines.push(mode === 'amorcage'
-        ? `Mode : amorçage (transit + ${horizonMonths} mois de couverture)`
-        : 'Mode : réassort à l’arrivage (transit seul)');
-      // The coefficient is an assumption baked into every number below, so it
-      // travels with the order rather than living only in the browser.
-      lines.push(`Coefficient saisonnier : ${coefPct} %`);
+      if (mode === 'amorcage') {
+        lines.push(`Mode : amorçage (délai d'acheminement + ${horizonMonths} mois de couverture)`);
+      } else {
+        // Le cycle est propre à chaque fournisseur : un seul chiffre n'a de
+        // sens que si la commande est filtrée sur un fournisseur précis.
+        const cycleW = supplierCycleWeeks[supplier];
+        lines.push(cycleW != null
+          ? `Mode : réassort à l’arrivage (délai d'acheminement + ${cycleW} sem. de cycle — ${supplier})`
+          : `Mode : réassort à l’arrivage (délai d'acheminement + cycle propre à chaque fournisseur)`);
+      }
+      // Le coefficient est une hypothèse qui pèse sur chaque chiffre
+      // ci-dessous, donc il voyage avec la commande plutôt que de ne vivre
+      // que dans le navigateur.
+      lines.push(`Coefficient saisonnier : ${coefPctVal} %`);
       lines.push('');
 
       if (picked.length === 0) {
@@ -510,7 +741,7 @@ const MODE_HELP: Record<ModeCommande, string> = {
 
       lines.push('');
       lines.push(`Total : ${num.format(cartons)} carton${cartons === 1 ? '' : 's'} (${num.format(units)} unité${units === 1 ? '' : 's'})`);
-      lines.push(`Coût estimé HT : ${eur.format(cost)}${anyMissingPump ? ' (hors produits sans prix d’achat connu)' : ''}`);
+      lines.push(`Coût estimé HT : ${eur.format(cost)}${anyMissingPump ? ' (coût incomplet — hors produits sans prix d’achat connu)' : ''}`);
       return lines.join('\n');
     }
 
@@ -544,12 +775,11 @@ const MODE_HELP: Record<ModeCommande, string> = {
   font-size: var(--text-sm);
   border-radius: var(--radius-sm);
   border: 1px solid;
-  color: oklch(0.46 0.18 25);
-  background: oklch(0.97 0.03 25);
-  border-color: oklch(0.88 0.07 25);
 }
 .alert code { font-family: var(--font-mono); font-size: 0.9em; }
 .alert a { color: inherit; font-weight: 600; }
+.alert--error { color: oklch(0.46 0.18 25); background: oklch(0.97 0.03 25); border-color: oklch(0.88 0.07 25); }
+.alert--warn  { color: oklch(0.42 0.14 60); background: oklch(0.96 0.05 60); border-color: oklch(0.87 0.09 60); }
 
 /* ── Barre de réglages : compacte, tout en haut, jamais répétée par ligne ── */
 .settings-bar {
@@ -588,7 +818,7 @@ const MODE_HELP: Record<ModeCommande, string> = {
 .set-input:disabled { opacity: 0.45; cursor: not-allowed; }
 #cfSearch { min-width: 190px; }
 .coef-wrap { position: relative; display: flex; align-items: center; }
-.coef-input { width: 84px; padding-right: 1.4rem; text-align: right; font-family: var(--font-mono); }
+.coef-input { width: 84px; padding-right: 2rem; text-align: right; font-family: var(--font-mono); }
 .coef-pct { position: absolute; right: 0.5rem; font-size: var(--text-xs); color: var(--color-muted); pointer-events: none; }
 
 .mode-help {
@@ -659,7 +889,8 @@ const MODE_HELP: Record<ModeCommande, string> = {
 .p-alert--danger { color: oklch(0.46 0.18 25); }
 .a-sep { opacity: 0.45; margin: 0 3px; }
 .a-delai { font-weight: 600; }
-.a-rupture { font-weight: 700; }
+.a-cycle { font-weight: 600; color: oklch(0.44 0.12 250); cursor: help; }
+.a-rupture-mark { font-weight: 700; }
 .a-short { font-style: italic; cursor: help; }
 .a-transit {
   color: oklch(0.45 0.10 220);
@@ -673,6 +904,8 @@ const MODE_HELP: Record<ModeCommande, string> = {
 .td-secondary { color: var(--color-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .td-secondary span { cursor: help; }
 .s-sub { margin: 2px 0 0; font-size: var(--text-xs); color: var(--color-muted); opacity: 0.85; }
+.s-reserve { margin: 2px 0 0; font-size: var(--text-xs); color: var(--color-muted); cursor: help; }
+.s-reserve-num { color: oklch(0.52 0.11 60); }
 
 /* 1 — la quantité : l'autre chose vraiment lisible */
 .qty-cell { display: flex; align-items: center; justify-content: flex-end; }
@@ -690,8 +923,27 @@ const MODE_HELP: Record<ModeCommande, string> = {
   outline: none;
 }
 .qty-input:focus { border-color: var(--color-primary); }
+/* Historique court : la valeur reste la suggestion (jamais masquée), mais le
+   champ lui-même est teinté — un chiffre comme 1005 cartons calculé sur 6
+   jours de ventes ne doit pas se lire comme un nombre aussi sûr qu'une ligne
+   à historique complet, sans avoir à lire la note en dessous. */
+.qty-input--warn { border-color: oklch(0.68 0.15 55); background: oklch(0.97 0.05 60); }
+.qty-input--warn:focus { border-color: oklch(0.55 0.15 55); }
+
 .qty-note { margin: 3px 0 0; font-size: var(--text-xs); color: var(--color-muted); text-align: right; }
 .qty-note--ok { color: oklch(0.48 0.13 150); }
+.qty-note--transit { color: oklch(0.55 0.15 60); font-weight: 600; cursor: help; }
+.qty-note--warn {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 7px;
+  font-weight: 700;
+  color: oklch(0.34 0.14 45);
+  background: oklch(0.93 0.09 60);
+  border: 1px solid oklch(0.72 0.14 55);
+  border-radius: var(--radius-sm);
+  cursor: help;
+}
 
 .td-mono  { font-family: var(--font-mono); color: var(--color-ink); white-space: nowrap; }
 .td-muted { color: var(--color-muted); }

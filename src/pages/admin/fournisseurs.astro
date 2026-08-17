@@ -4,6 +4,20 @@ import { supabaseAdmin } from '../../lib/supabase';
 import { sanitizeText } from '../../lib/sanitize';
 import { DELAI_LIVRAISON_DEFAUT_JOURS } from '../../lib/constants';
 
+// jours_securite et cycle_commande_jours peuvent chacun ne pas encore
+// exister selon que leur migration respective a été lancée — deux sondes
+// indépendantes (plutôt qu'un seul essai/repli) pour rester correct quelle
+// que soit la combinaison, sans planter toute la page. Hoisté avant le
+// handler POST : les deux chemins (écriture et lecture) en ont besoin.
+let securiteColumnMissing = false;
+let cycleColumnMissing = false;
+{
+  const probeSecurite = await supabaseAdmin.from('suppliers').select('jours_securite').limit(1);
+  securiteColumnMissing = probeSecurite.error?.code === '42703';
+  const probeCycle = await supabaseAdmin.from('suppliers').select('cycle_commande_jours').limit(1);
+  cycleColumnMissing = probeCycle.error?.code === '42703';
+}
+
 if (Astro.request.method === 'POST') {
   const data   = await Astro.request.formData();
   const action = data.get('action') as string;
@@ -18,12 +32,36 @@ if (Astro.request.method === 'POST') {
     return Math.round(n);
   };
 
+  // Même règle que le délai : vide = inconnu (NULL, le défaut/repli prend le
+  // relais), distinct d'un fournisseur qui a réellement 0 j de sécurité.
+  const parseSecurite = (raw: FormDataEntryValue | null): number | null => {
+    const s = (raw as string ?? '').trim();
+    if (s === '') return null;
+    const n = Number(s);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return Math.round(n);
+  };
+
+  // Le cycle, lui, rejette aussi 0 (pas seulement vide/négatif) : un cycle de
+  // commande de 0 jour n'a pas de sens, contrairement à une sécurité de 0 j
+  // qui est une valeur légitime. 0 tapé ici est traité comme "vide" — retombe
+  // sur le délai — plutôt que de rejeter tout le formulaire ; la contrainte
+  // CHECK cycle_commande_jours > 0 en base reste le garde-fou final.
+  const parseCycle = (raw: FormDataEntryValue | null): number | null => {
+    const s = (raw as string ?? '').trim();
+    if (s === '') return null;
+    const n = Number(s);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return Math.round(n);
+  };
+
   if (action === 'add') {
     const name = sanitizeText(data.get('name') as string, 120)?.trim();
     if (name) {
-      const { error } = await supabaseAdmin
-        .from('suppliers')
-        .insert({ name, delai_livraison_jours: parseDelai(data.get('delai')) });
+      const insert: Record<string, unknown> = { name, delai_livraison_jours: parseDelai(data.get('delai')) };
+      if (!securiteColumnMissing) insert.jours_securite = parseSecurite(data.get('securite'));
+      if (!cycleColumnMissing) insert.cycle_commande_jours = parseCycle(data.get('cycle'));
+      const { error } = await supabaseAdmin.from('suppliers').insert(insert);
       if (error) {
         const reason = error.code === '23505' ? 'nom_existe' : 'erreur';
         return Astro.redirect(`/admin/fournisseurs?err=${reason}`);
@@ -32,20 +70,31 @@ if (Astro.request.method === 'POST') {
   } else if (action === 'update') {
     const id = data.get('id') as string;
     if (id) {
-      const { error } = await supabaseAdmin
-        .from('suppliers')
-        .update({ delai_livraison_jours: parseDelai(data.get('delai')) })
-        .eq('id', id);
+      const update: Record<string, unknown> = { delai_livraison_jours: parseDelai(data.get('delai')) };
+      if (!securiteColumnMissing) update.jours_securite = parseSecurite(data.get('securite'));
+      if (!cycleColumnMissing) update.cycle_commande_jours = parseCycle(data.get('cycle'));
+      const { error } = await supabaseAdmin.from('suppliers').update(update).eq('id', id);
       if (error) return Astro.redirect('/admin/fournisseurs?err=erreur');
     }
   }
   return Astro.redirect('/admin/fournisseurs?ok=1');
 }
 
-const { data: suppliers, error: loadErr } = await supabaseAdmin
-  .from('suppliers')
-  .select('id, name, delai_livraison_jours, created_at')
-  .order('name', { ascending: true });
+let suppliers: any[] | null = null;
+let loadErr: { code?: string } | null = null;
+{
+  const cols = ['id', 'name', 'delai_livraison_jours', 'created_at'];
+  if (!securiteColumnMissing) cols.push('jours_securite');
+  if (!cycleColumnMissing) cols.push('cycle_commande_jours');
+  const res = await supabaseAdmin.from('suppliers').select(cols.join(', ')).order('name', { ascending: true });
+  suppliers = (res.data ?? []).map((s: any) => ({
+    ...s,
+    jours_securite: securiteColumnMissing ? null : s.jours_securite,
+    cycle_commande_jours: cycleColumnMissing ? null : s.cycle_commande_jours,
+  }));
+  loadErr = res.error;
+}
+
 
 // Products per supplier, via the same last-reception inference the simulator
 // uses — so this page shows how much each delay actually drives.
@@ -96,6 +145,20 @@ const tableMissing = loadErr?.code === 'PGRST205' || loadErr?.code === '42P01';
     </div>
   ) : (
     <>
+      {securiteColumnMissing && (
+        <div class="alert alert--warn" role="status">
+          La colonne <code>jours_securite</code> n'existe pas encore. Lancez
+          <code>supabase/migrations/suppliers_jours_securite.sql</code> pour pouvoir la renseigner —
+          en attendant, le stock de sécurité est traité comme nul partout.
+        </div>
+      )}
+      {cycleColumnMissing && (
+        <div class="alert alert--warn" role="status">
+          La colonne <code>cycle_commande_jours</code> n'existe pas encore. Lancez
+          <code>supabase/migrations/suppliers_cycle_commande.sql</code> pour pouvoir la renseigner —
+          en attendant, le cycle de commande retombe sur le délai d'acheminement pour tous les fournisseurs.
+        </div>
+      )}
       {ok  && <div class="alert alert--ok" role="status">Enregistré.</div>}
       {err && <div class="alert alert--error" role="alert">{ERR_MSG[err] ?? ERR_MSG.erreur}</div>}
       {missingDelai > 0 && (
@@ -115,6 +178,23 @@ const tableMissing = loadErr?.code === 'PGRST205' || loadErr?.code === '42P01';
           <label class="field-label" for="sf-delai">Délai (jours)</label>
           <input type="number" id="sf-delai" name="delai" min="0" step="1" placeholder="—" />
         </div>
+        <div class="field field--narrow">
+          <label class="field-label" for="sf-securite">Sécurité (jours)</label>
+          <input type="number" id="sf-securite" name="securite" min="0" step="1" placeholder="0" disabled={securiteColumnMissing} />
+        </div>
+        <div class="field field--narrow">
+          <label class="field-label" for="sf-cycle">Cycle (jours)</label>
+          <input
+            type="number"
+            id="sf-cycle"
+            name="cycle"
+            min="1"
+            step="1"
+            placeholder="= délai"
+            disabled={cycleColumnMissing}
+            title="Rythme réel de commande chez ce fournisseur — vide = retombe sur le délai"
+          />
+        </div>
         <button type="submit" class="btn btn-primary">Ajouter</button>
       </form>
 
@@ -131,6 +211,8 @@ const tableMissing = loadErr?.code === 'PGRST205' || loadErr?.code === '42P01';
                 <th>Fournisseur</th>
                 <th class="th-num">Produits</th>
                 <th class="th-num">Délai d'acheminement</th>
+                <th class="th-num">Cycle de commande</th>
+                <th class="th-num">Sécurité</th>
                 <th></th>
               </tr>
             </thead>
@@ -140,7 +222,7 @@ const tableMissing = loadErr?.code === 'PGRST205' || loadErr?.code === '42P01';
                   <td class="td-strong">{s.name}</td>
                   <td class="th-num td-muted">{s.productCount || '—'}</td>
                   <td class="th-num">
-                    <form method="post" class="inline-form">
+                    <form method="post" class="inline-form" id={`sup-form-${s.id}`}>
                       <input type="hidden" name="action" value="update" />
                       <input type="hidden" name="id" value={s.id} />
                       <input
@@ -154,8 +236,40 @@ const tableMissing = loadErr?.code === 'PGRST205' || loadErr?.code === '42P01';
                         aria-label={`Délai en jours pour ${s.name}`}
                       />
                       <span class="unit">j</span>
-                      <button type="submit" class="save-btn" aria-label="Enregistrer">✓</button>
                     </form>
+                  </td>
+                  <td class="th-num">
+                    <input
+                      type="number"
+                      name="cycle"
+                      form={`sup-form-${s.id}`}
+                      class="delai-input"
+                      min="1"
+                      step="1"
+                      value={s.cycle_commande_jours ?? ''}
+                      placeholder={String(s.delai_livraison_jours ?? DELAI_LIVRAISON_DEFAUT_JOURS)}
+                      disabled={cycleColumnMissing}
+                      aria-label={`Cycle de commande en jours pour ${s.name}`}
+                      title="Rythme réel de commande chez ce fournisseur — vide = retombe sur le délai"
+                    />
+                    <span class="unit">j</span>
+                  </td>
+                  <td class="th-num">
+                    <input
+                      type="number"
+                      name="securite"
+                      form={`sup-form-${s.id}`}
+                      class="delai-input"
+                      min="0"
+                      step="1"
+                      value={s.jours_securite ?? ''}
+                      placeholder="0"
+                      disabled={securiteColumnMissing}
+                      aria-label={`Stock de sécurité en jours pour ${s.name}`}
+                      title="Stock de sécurité, en jours de vente au rythme ajusté"
+                    />
+                    <span class="unit">j</span>
+                    <button type="submit" form={`sup-form-${s.id}`} class="save-btn" aria-label="Enregistrer">✓</button>
                   </td>
                   <td class="td-note">
                     {s.delai_livraison_jours == null && (
