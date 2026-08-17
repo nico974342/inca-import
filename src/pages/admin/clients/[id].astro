@@ -37,6 +37,7 @@ if (Astro.request.method === 'POST') {
   const livraison_cp      = sanitizeText(data.get('livraison_code_postal') as string, 20);
   const livraison_ville   = sanitizeText(data.get('livraison_ville') as string, 100);
   const facturation_same  = data.get('facturation_same') === '1';
+  const notifications_email = data.get('notifications_email') === '1';
   const facturation_rue   = sanitizeText(data.get('facturation_rue') as string, 200);
   const facturation_cp    = sanitizeText(data.get('facturation_code_postal') as string, 20);
   const facturation_ville = sanitizeText(data.get('facturation_ville') as string, 100);
@@ -86,6 +87,7 @@ if (Astro.request.method === 'POST') {
         remise,
         conditions_paiement,
         plafond_credit,
+        notifications_email,
       })
       .eq('id', id);
 
@@ -94,12 +96,22 @@ if (Astro.request.method === 'POST') {
         ? 'Cet email est déjà utilisé par un autre client.'
         : `Erreur : ${error.message}`;
     } else {
+      // Détail ajouté uniquement quand la préférence a réellement changé —
+      // les autres champs de cette fiche ne portent pas ce niveau de détail,
+      // mais celui-ci conditionne si le client reçoit ou non ses prochains
+      // emails de commande, ça mérite d'être visible dans le journal.
+      const notifChanged = !!client.notifications_email !== notifications_email;
       await logAdminAction({
         adminEmail: (Astro.locals as any).user?.email ?? 'inconnu',
         action: 'client.modification',
         targetType: 'client',
         targetId: id!,
         targetLabel: societe || nom,
+        ...(notifChanged ? {
+          details: {
+            notifications_email: { avant: !!client.notifications_email, apres: notifications_email },
+          },
+        } : {}),
       });
       return Astro.redirect(`/admin/clients/${id}`);
     }
@@ -474,6 +486,21 @@ const roleError = Astro.url.searchParams.get('role_error');
         <textarea id="notes" name="notes" rows="3" placeholder="Notes visibles uniquement par l'équipe…">{client.notes ?? ''}</textarea>
       </div>
 
+      <h3 class="subsection-title">Notifications</h3>
+      <div class="field">
+        <label class="checkbox-inline">
+          <input
+            type="checkbox"
+            id="notifications_email"
+            name="notifications_email"
+            value="1"
+            checked={client.notifications_email !== false}
+          />
+          Recevoir les emails automatiques (confirmation, changement de statut, livraison)
+        </label>
+        <p class="field-hint">Décochée, ce client ne reçoit plus rien d'automatique sur ses commandes — les alertes internes ne sont pas concernées.</p>
+      </div>
+
       <h3 class="subsection-title">Conditions commerciales</h3>
       <div class="field-group field-group--3">
         <div class="field">
@@ -829,6 +856,7 @@ const roleError = Astro.url.searchParams.get('role_error');
 .field-group { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
 .field-group--3 { grid-template-columns: 1fr 1fr 1fr; }
 .field { display: flex; flex-direction: column; gap: var(--space-2); }
+.field-hint { font-size: var(--text-xs); color: var(--color-muted); margin: 0; }
 
 label { font-size: var(--text-sm); font-weight: 500; color: var(--color-ink); }
 .required { color: var(--color-primary); }

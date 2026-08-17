@@ -103,6 +103,10 @@ function formatDetails(details: Record<string, unknown> | null, action: string):
     const delta = typeof details.delta === 'number' ? ` (${details.delta > 0 ? '+' : ''}${details.delta})` : '';
     return `${details.avant} → ${details.apres}${delta} · ${methode}`;
   }
+  if (action === 'client.modification' && details.notifications_email) {
+    const n = details.notifications_email as { avant: boolean; apres: boolean };
+    return `Emails automatiques : ${n.avant ? 'activés' : 'désactivés'} → ${n.apres ? 'activés' : 'désactivés'}`;
+  }
   if (action === 'commande.modification') {
     return typeof details.resume === 'string' ? details.resume : '';
   }

@@ -215,6 +215,7 @@ type Row = {
   notes: string | null;
   created_at: string;
   isAdmin: boolean;
+  notificationsEmail: boolean;
 };
 
 const allRows: Row[] = [
@@ -233,6 +234,7 @@ const allRows: Row[] = [
     notes: c.notes,
     created_at: c.created_at,
     isAdmin: !!(c.email && adminEmailSet.has(c.email)),
+    notificationsEmail: (c as any).notifications_email !== false,
   })),
   ...contacts
     .filter(ct => !convertedContactIds.has(ct.id))
@@ -251,6 +253,7 @@ const allRows: Row[] = [
       notes: ct.notes,
       created_at: ct.created_at,
       isAdmin: false,
+      notificationsEmail: true, // sans objet : un contact n'a pas de compte
     })),
 ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
@@ -449,6 +452,14 @@ function formatDate(iso: string) {
                     style="position: relative; z-index: 5; display: inline-block; cursor: pointer; pointer-events: auto; color: var(--color-primary); text-decoration: none;"
                   >{r.nom}</a>
                 ) : r.nom}
+                {r.kind === 'client' && !r.notificationsEmail && (
+                  <span
+                    class="notif-off-badge"
+                    title="Emails automatiques désactivés — ce client ne reçoit ni confirmation, ni changement de statut, ni notification de livraison"
+                  >
+                    🔕
+                  </span>
+                )}
               </td>
               <td>{r.societe ?? '—'}</td>
               <td class="td-muted">{r.type ? CLIENT_TYPE_LABEL[r.type as keyof typeof CLIENT_TYPE_LABEL] ?? r.type : '—'}</td>
@@ -719,6 +730,14 @@ tr[data-pending="true"]:hover td {
 .data-table tbody tr.client-row { cursor: pointer; }
 
 .td-strong { font-weight: 500; color: var(--color-ink); white-space: nowrap; }
+.notif-off-badge {
+  display: inline-block;
+  margin-left: var(--space-1);
+  font-size: 0.75em;
+  opacity: 0.55;
+  cursor: help;
+  vertical-align: middle;
+}
 .client-link { color: var(--color-primary); text-decoration: none; }
 .client-link:hover { text-decoration: underline; }
 .td-muted  { color: var(--color-muted); white-space: nowrap; }

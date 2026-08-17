@@ -1,5 +1,6 @@
 import { Resend } from 'resend';
 import { COMPANY, RESEND_DEFAULT_FROM, DEFAULT_TVA_RATE, ORDER_STATUS_LABEL } from './constants';
+import { findClientByEmail } from './clients';
 
 const API_KEY  = import.meta.env.RESEND_API_KEY as string | undefined;
 const FROM     = (import.meta.env.RESEND_FROM as string | undefined) ?? RESEND_DEFAULT_FROM;
@@ -76,6 +77,18 @@ export async function sendOrderStatusEmail(params: {
 
   if (!API_KEY) {
     console.warn('[email] RESEND_API_KEY is not set — email not sent');
+    return;
+  }
+
+  // Préférence de notification, vérifiée ici plutôt que chez chaque
+  // appelant : point de passage unique, aucun futur appel ne peut l'oublier.
+  // Aucun compte client trouvé pour cet email → on envoie (comportement
+  // préservé pour les commandes sans compte associé).
+  const account = await findClientByEmail<{ notifications_email: boolean | null }>(
+    params.to, 'notifications_email',
+  );
+  if (account && account.notifications_email === false) {
+    console.log('[email] sendOrderStatusEmail skipped — notifications désactivées pour', params.to);
     return;
   }
 
@@ -248,6 +261,11 @@ export async function sendOrderStatusEmail(params: {
   }
 }
 
+// Volontairement non soumise à notifications_email : cette préférence couvre
+// le cycle de vie d'une commande (accusé de réception, confirmation, statut,
+// livraison — le libellé de la case à cocher sur la fiche client). L'email
+// d'activation de compte n'en fait pas partie, comme la réinitialisation de
+// mot de passe qu'il précède souvent dans le parcours d'un nouveau client.
 export async function sendClientActivationEmail(params: {
   to: string;
   nom: string;
