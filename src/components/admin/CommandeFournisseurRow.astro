@@ -1,0 +1,190 @@
+---
+// Une ligne produit du simulateur de commande fournisseur (/admin/commande-fournisseur),
+// réutilisée à l'identique dans les blocs "à commander" (groupés par fournisseur) et
+// dans la section "à vérifier manuellement" — seule la mise en avant (bordure ambrée,
+// badge de fiabilité, étiquette fournisseur) diffère selon `reliable`.
+//
+// Rendu pur : tout le calcul (formule réassort, disponible, PUMP…) est fait par la page
+// appelante — voir constants.ts, non modifié par cette page. Les attributs data-* portent
+// ce dont le script de la page a besoin pour recalculer en direct quand le coefficient
+// saisonnier change, sans jamais réimplémenter la formule ailleurs qu'ici et dans constants.ts.
+
+export interface Props {
+  p: {
+    id: string;
+    name: string;
+    supplier: string;
+    suggestedQty: number | null;
+    vitesseVente: number;
+    hasSales: boolean;
+    stockDisponible: number;
+    stockPhysique: number;
+    stockReserve: number;
+    pump: number | null;
+    unitsPerCarton: number | null;
+    transitQty: number;
+    transitEtaLabel: string | null;
+    ruptureBeforeArrival: boolean;
+    ruptureLabel: string | null;
+    missingDelai: boolean;
+    missingPump: boolean;
+    reliable: boolean;
+    unreliableReason: string | null;
+    covered: boolean;
+    delai: { jours: number };
+    cycle: { jours: number };
+    joursSecurite: number;
+  };
+  /** N'affiche l'étiquette fournisseur sur la ligne que dans la section "à
+   *  vérifier manuellement", qui n'est pas groupée par fournisseur — dans
+   *  les blocs "à commander", le fournisseur est déjà l'en-tête du bloc. */
+  showSupplierTag?: boolean;
+}
+
+const { p, showSupplierTag = false } = Astro.props;
+
+function formatPrice(n: number | null): string {
+  if (n == null) return '—';
+  return n.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' });
+}
+
+const qty = p.suggestedQty ?? 0;
+const cost = p.pump != null ? p.pump * qty : null;
+---
+<div
+  class={`pr ${!p.reliable ? 'pr--review' : ''}`}
+  hidden={p.covered}
+  data-role="product-row"
+  data-supplier={p.supplier}
+  data-name={p.name}
+  data-pump={p.pump ?? ''}
+  data-upc={p.unitsPerCarton ?? ''}
+  data-vitesse={p.vitesseVente}
+  data-delai-jours={p.delai.jours}
+  data-cycle-jours={p.cycle.jours}
+  data-securite-jours={p.joursSecurite}
+  data-stock={p.stockDisponible}
+  data-has-sales={p.hasSales ? '1' : '0'}
+  data-transit-qty={p.transitQty}
+  data-covered={p.covered ? '1' : '0'}
+>
+  <div class="pr-top">
+    <div class="pr-name-wrap">
+      <span class="pr-name">{p.name}</span>
+      {showSupplierTag && <span class="pr-supplier-tag">{p.supplier}</span>}
+    </div>
+    <input
+      type="number"
+      class={`pr-qty ${!p.reliable ? 'pr-qty--warn' : ''}`}
+      min="0"
+      step="1"
+      value={qty}
+      aria-label={`Quantité à commander pour ${p.name}`}
+      data-role="qty-input"
+    />
+  </div>
+
+  <div class="pr-sub">
+    <span
+      class="pr-stock"
+      title={`Disponible ${p.stockDisponible} = physique ${p.stockPhysique} − réservé ${p.stockReserve}`}
+    >
+      Stock dispo {p.stockDisponible}
+    </span>
+    <span class="pr-sep">·</span>
+    <span class="pr-vitesse" data-role="vitesse-text">
+      {p.hasSales ? `ventes ${p.vitesseVente.toFixed(1)}/sem.` : 'pas de ventes enregistrées'}
+    </span>
+    <span class="pr-cost" data-role="cost-text">{cost == null ? '—' : formatPrice(cost)}</span>
+  </div>
+
+  {(!p.reliable || p.ruptureBeforeArrival || p.transitQty > 0 || p.missingDelai || p.missingPump) && (
+    <div class="pr-badges">
+      {!p.reliable && (
+        <span class="pr-badge pr-badge--warn" title="Calculée avec la même formule validée, mais sur des données moins sûres">
+          ⚠ {p.unreliableReason} — quantité peu fiable
+        </span>
+      )}
+      <span class="pr-badge pr-badge--danger" data-role="rupture-badge" hidden={!p.ruptureBeforeArrival}>
+        ⚠ rupture prévue avant livraison{p.ruptureLabel ? ` (~${p.ruptureLabel})` : ''}
+      </span>
+      {p.transitQty > 0 && (
+        <a
+          href="/admin/transit"
+          class="pr-badge pr-badge--info"
+          title="Déjà expédié par le fournisseur, pas encore reçu — non déduit de la quantité affichée"
+        >
+          🚢 {p.transitQty} carton{p.transitQty > 1 ? 's' : ''} en transit — non déduits
+        </a>
+      )}
+      {p.missingDelai && (
+        <span class="pr-badge pr-badge--warn" title="Aucun délai réel connu pour ce fournisseur — calculé sur le délai par défaut. Réglez-le sur /admin/fournisseurs">
+          ⚠ délai fournisseur non renseigné
+        </span>
+      )}
+      {p.missingPump && (
+        <span class="pr-badge pr-badge--warn" title="Aucun prix d'achat moyen connu pour ce produit — exclu du coût">
+          ⚠ prix d'achat manquant
+        </span>
+      )}
+    </div>
+  )}
+</div>
+
+<style>
+.pr { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--color-border); }
+.pr:last-child { border-bottom: none; }
+.pr--review { background: oklch(0.985 0.012 60); }
+
+.pr-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+.pr-name-wrap { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.pr-name { font-size: var(--text-base); font-weight: 600; color: var(--color-ink); }
+.pr-supplier-tag { font-size: var(--text-xs); color: var(--color-muted); white-space: nowrap; }
+
+.pr-qty {
+  width: 90px;
+  flex-shrink: 0;
+  padding: 0.4rem 0.55rem;
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  font-weight: 700;
+  text-align: right;
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+.pr-qty:focus { border-color: var(--color-primary); }
+.pr-qty--warn { border-color: oklch(0.68 0.15 55); background: oklch(0.97 0.05 60); }
+.pr-qty--warn:focus { border-color: oklch(0.55 0.15 55); }
+
+.pr-sub {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  margin-top: 3px;
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
+.pr-stock, .pr-vitesse { cursor: default; }
+.pr-stock[title] { cursor: help; }
+.pr-sep { opacity: 0.45; }
+.pr-cost { margin-left: auto; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-ink); white-space: nowrap; }
+
+.pr-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.pr-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.pr-badge--warn { color: oklch(0.34 0.14 45); background: oklch(0.93 0.09 60); border-color: oklch(0.72 0.14 55); }
+.pr-badge--danger { color: oklch(0.40 0.16 25); background: oklch(0.95 0.05 25); border-color: oklch(0.78 0.12 25); }
+.pr-badge--info { color: oklch(0.40 0.10 220); background: oklch(0.94 0.04 220); border-color: oklch(0.78 0.08 220); }
+.pr-badge--info:hover { text-decoration: underline; }
+</style>

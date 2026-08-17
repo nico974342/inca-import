@@ -1,40 +1,27 @@
 ---
 import AdminLayout from '../../components/admin/AdminLayout.astro';
+import CommandeFournisseurRow from '../../components/admin/CommandeFournisseurRow.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { fetchAvailability } from '../../lib/stock';
 import {
   REAPPRO_WEEKS_LOOKBACK, computeVitesseVente,
   effectiveHistoryWeeks, VITESSE_SHORT_HISTORY_WEEKS,
-  COUVERTURE_HORIZON_MONTHS, couvertureHorizonWeeks,
-  computeCouvertureWeeks, computeWeeksCovered, computeSecuriteCartons, computeOrderQty,
+  computeWeeksCovered, computeSecuriteCartons, computeOrderQty,
   SHIPMENT_ACTIVE_STATUSES,
   DELAI_LIVRAISON_DEFAUT_JOURS, resolveDelaiLivraison, resolveCycleCommande,
-  estimatedArrivalDate, estimatedArrivalWithMargin, estimatedRuptureDate,
+  estimatedArrivalWithMargin, estimatedRuptureDate,
   type ModeCommande,
 } from '../../lib/constants';
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'];
 
-const CAT_LABEL: Record<string, string> = {
-  boissons: 'Boissons', snacks: 'Snacks', chips: 'Chips',
-  confiseries: 'Confiseries', divers: 'Divers',
-};
-
-// ── Réglages globaux, via query string. Mode et horizon changent le calcul
-//    serveur (rechargement) ; seul le coefficient saisonnier s'applique côté
-//    client pour rester instantané sans écraser les lignes déjà ajustées à
-//    la main. Le cycle de commande, lui, N'EST PAS un réglage de page : il
-//    est propre à chaque fournisseur (voir resolveCycleCommande plus bas) —
-//    un cycle commun à tous les fournisseurs serait faux dès que deux
-//    d'entre eux ont des rythmes de commande différents. ──
-const modeParam = Astro.url.searchParams.get('mode');
-const mode: ModeCommande = modeParam === 'reassort' ? 'reassort' : 'amorcage';
-
-const horizonParam = Number(Astro.url.searchParams.get('horizon'));
-const horizonMonths = (COUVERTURE_HORIZON_MONTHS as readonly number[]).includes(horizonParam)
-  ? horizonParam
-  : 3;
-const horizonWeeks = couvertureHorizonWeeks(horizonMonths);
+// ── Il n'y a plus de mode à choisir. Tout produit assez fiable (voir la
+//    fonction "reliable" plus bas) utilise automatiquement le réassort déjà
+//    validé — délai + cycle + sécurité, sur le stock disponible. Le moteur
+//    de calcul lui-même (constants.ts) n'a pas changé : cette page appelle
+//    exactement les mêmes fonctions qu'avant, avec mode figé sur 'reassort'
+//    au lieu de lu depuis un sélecteur. ──
+const mode: ModeCommande = 'reassort';
 
 const { data: products } = await supabaseAdmin
   .from('products')
@@ -44,13 +31,10 @@ const { data: products } = await supabaseAdmin
 const allProducts = products ?? [];
 const productIds = allProducts.map(p => p.id);
 
-// ── Stock disponible (physique − réservé), pas le seul physique : des
-//    cartons déjà promis à un client ne peuvent pas absorber une nouvelle
-//    commande. Même définition que product_availability, via le helper déjà
-//    utilisé par le catalogue et /admin/produits. ──
+// ── Stock disponible (physique − réservé) — inchangé. ──
 const availability = await fetchAvailability(allProducts);
 
-// ── Vitesse de vente sur la fenêtre de référence ──
+// ── Vitesse de vente sur la fenêtre de référence — inchangé. ──
 const salesQtyByProduct = new Map<string, number>();
 if (productIds.length > 0) {
   const lookbackIso = new Date(Date.now() - REAPPRO_WEEKS_LOOKBACK * 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -65,10 +49,7 @@ if (productIds.length > 0) {
   }
 }
 
-// ── Fournisseur déduit de la dernière réception du produit, ET date de la
-//    PREMIÈRE réception (pour le début d'historique réel — un produit créé
-//    au catalogue le 1er juillet mais reçu seulement le 1er août n'était
-//    vendable que depuis le 1er août). Une seule requête sert les deux. ──
+// ── Fournisseur + date de première réception — inchangé. ──
 const supplierByProduct = new Map<string, string>();
 const firstReceptionByProduct = new Map<string, string>();
 if (productIds.length > 0) {
@@ -89,12 +70,7 @@ if (productIds.length > 0) {
   }
 }
 
-// ── Délais + stock de sécurité + cycle de commande, par fournisseur. La
-//    table peut ne pas exister si sa migration n'a pas été lancée ; les deux
-//    colonnes jours_securite et cycle_commande_jours sont plus récentes et
-//    peuvent chacune manquer indépendamment de l'autre — sondées séparément
-//    plutôt que déduites d'un seul essai/erreur, pour rester correct quelle
-//    que soit la combinaison de migrations déjà lancées. ──
+// ── Délais + sécurité + cycle par fournisseur — inchangé. ──
 let delaiBySupplier = new Map<string, number | null>();
 let securiteBySupplier = new Map<string, number | null>();
 let cycleBySupplier = new Map<string, number | null>();
@@ -123,10 +99,7 @@ let cycleColumnMissing = false;
   }
 }
 
-// ── Quantités déjà en route, pour ne pas recommander ce qui est parti.
-//    Affiché seulement : la quantité suggérée n'est pas diminuée
-//    automatiquement, l'arbitrage restant une décision d'achat — mais les
-//    lignes où la suggestion ignore un transit non nul sont signalées. ──
+// ── Transit — inchangé. Affiché, jamais déduit du calcul. ──
 const { data: transitRows } = await supabaseAdmin
   .from('shipment_items')
   .select('product_id, quantity, shipments!inner(status, eta)')
@@ -144,24 +117,18 @@ for (const row of (transitRows ?? [])) {
 
 const UNGROUPED_LABEL = 'Fournisseur non renseigné';
 const today = new Date();
-
 const fmtDate = (d: Date) => d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
 
 const rows = allProducts.map(p => {
-  // ── Début d'historique réel : au plus tôt la création catalogue, au plus
-  //    tard (donc jamais avant) sa première réception effective. ──
+  // ── Début d'historique, vitesse, délai, cycle, sécurité, disponible : le
+  //    même calcul qu'avant, formule par formule, aucune n'est modifiée ici. ──
   const receivedSince = firstReceptionByProduct.get(p.id) ?? null;
   const createdAt = (p as any).created_at ?? null;
   const sellableSince = receivedSince && (!createdAt || receivedSince > createdAt) ? receivedSince : createdAt;
 
   const historyWeeks = effectiveHistoryWeeks(sellableSince);
-  // Vitesse brute, observée — sert d'affichage factuel (colonne grise) et de
-  // base au coefficient saisonnier, qui s'applique ICI, avant toute
-  // soustraction de stock, jamais sur une quantité déjà nette.
   const vitesseVente = computeVitesseVente(salesQtyByProduct.get(p.id) ?? 0, sellableSince);
-  // Rendu serveur = coefficient 100 % : ajustée == brute au premier chargement,
-  // le script reprend le calcul à partir de là dès que le coefficient change.
-  const vitesseAjustee = vitesseVente;
+  const vitesseAjustee = vitesseVente; // coefficient 100 % au rendu serveur ; le script recalcule ensuite
 
   const supplierName = supplierByProduct.get(p.id) ?? null;
   const delai = resolveDelaiLivraison(
@@ -170,9 +137,6 @@ const rows = allProducts.map(p => {
     supplierName ? delaiBySupplier.get(supplierName) ?? null : null,
   );
   const joursSecurite = (supplierName ? securiteBySupplier.get(supplierName) : null) ?? 0;
-  // Cycle propre à ce fournisseur — jamais un cycle de page partagé entre
-  // tous les fournisseurs, qui serait faux dès que deux d'entre eux ont des
-  // rythmes de commande différents.
   const cycle = resolveCycleCommande(
     supplierName ? cycleBySupplier.get(supplierName) ?? null : null,
     supplierName ? delaiBySupplier.get(supplierName) ?? null : null,
@@ -184,97 +148,112 @@ const rows = allProducts.map(p => {
   const stockReserve = dispo?.reserved ?? 0;
   const stockDisponible = dispo?.available ?? stockPhysique;
 
-  const weeksCovered = computeWeeksCovered(mode, delai.jours / 7, horizonWeeks, cycle.jours / 7);
+  const hasSales = vitesseVente > 0;
+  // Q = max(0, ceil(vitesse_ajustée × ((délai + cycle + sécurité) / 7) − disponible)).
+  // Toujours la même formule réassort validée pour tout produit ayant déjà
+  // vendu quelque chose — le 3ᵉ argument (horizon) ne sert qu'au mode
+  // amorçage, plus jamais emprunté sur cette page, d'où le 0 littéral.
+  // null (pas 0) quand il n'y a aucune vente à extrapoler : ce n'est pas
+  // "rien à commander", c'est "rien à calculer".
+  const weeksCovered = computeWeeksCovered(mode, delai.jours / 7, 0, cycle.jours / 7);
   const securiteCartons = computeSecuriteCartons(vitesseAjustee, joursSecurite);
-  const suggested = computeOrderQty(vitesseAjustee, weeksCovered, securiteCartons, stockDisponible);
+  const suggestedQty = hasSales ? computeOrderQty(vitesseAjustee, weeksCovered, securiteCartons, stockDisponible) : null;
 
-  // Couverture actuelle : au rythme RÉELLEMENT OBSERVÉ, pas ajusté — c'est un
-  // constat sur aujourd'hui, pas une projection sous hypothèse saisonnière.
-  const couvertureWeeks = computeCouvertureWeeks(stockDisponible, vitesseVente);
-
-  const arrival = estimatedArrivalDate(delai.jours, today);
   const arrivalWithMargin = estimatedArrivalWithMargin(delai.jours, joursSecurite, today);
-  // Rupture estimée au rythme AJUSTÉ : c'est la date qui doit refléter un pic
-  // anticipé, puisque c'est elle qui alimente l'alerte de rupture.
   const rupture = estimatedRuptureDate(stockDisponible, vitesseAjustee, today);
-  // Un conteneur qui arrive pile le jour où le stock tombe à 0 est déjà une
-  // situation dangereuse — la marge de sécurité avance le seuil de
-  // comparaison, pas seulement la quantité commandée.
   const ruptureBeforeArrival = rupture != null && rupture.getTime() < arrivalWithMargin.getTime();
 
   const pump = (p as any).prix_achat_moyen_ht != null ? Number((p as any).prix_achat_moyen_ht) : null;
   const upc = (p as any).units_per_carton ?? null;
   const shortHistory = historyWeeks < VITESSE_SHORT_HISTORY_WEEKS;
+  const hasReception = receivedSince != null;
 
   const transit = transitByProduct.get(p.id) ?? null;
   const transitQty = transit?.qty ?? 0;
   const transitEtaLabel = transit?.eta ? fmtDate(new Date(transit.eta)) : null;
 
-  const hasHistory = vitesseVente > 0;
-  const suggestedQty = suggested ?? 0;
+  // ── Fiabilité : exactement les trois conditions demandées. Ne détermine
+  //    QUE la section d'affichage (et l'avertissement) — la formule
+  //    appliquée est toujours la même, fiable ou non, pour ne jamais
+  //    réintroduire un second moteur de calcul sur cette page. ──
+  const reliable = hasReception && !shortHistory && hasSales;
+  let unreliableReason: string | null = null;
+  if (!reliable) {
+    if (!hasReception) unreliableReason = 'aucune réception enregistrée';
+    else if (shortHistory) unreliableReason = `historique court (${historyWeeks.toFixed(1)} sem.)`;
+    else unreliableReason = 'pas de ventes enregistrées sur la période';
+  }
 
-  // Raisons statiques de montrer la sous-ligne d'alerte : aucune ne dépend
-  // du coefficient, contrairement à ruptureBeforeArrival — le script n'a
-  // donc besoin de recalculer que cette dernière pour décider si la
-  // sous-ligne doit apparaître. En réassort, le cycle utilisé est une info
-  // de planification centrale : toujours affiché, pas seulement en cas
-  // d'anomalie.
-  const staticAlert = delai.source === 'defaut' || shortHistory || transitQty > 0 || mode === 'reassort';
+  // "Couvert" : une suggestion a été calculée et vaut 0 — masqué par défaut,
+  // rien à faire. Un suggestedQty null (aucune vente à extrapoler) N'EST
+  // PAS "couvert" : c'est une vraie inconnue, jamais masquée par défaut.
+  const covered = suggestedQty != null && suggestedQty <= 0;
 
   return {
-    ...p,
-    vitesseVente, vitesseAjustee, historyWeeks, shortHistory,
-    couvertureWeeks,
-    suggestedQty,
-    hasHistory,
-    alreadyCovered: hasHistory && suggestedQty === 0,
-    delai, cycle, arrival, arrivalWithMargin, rupture, ruptureBeforeArrival,
-    arrivalLabel: fmtDate(arrival),
-    ruptureLabel: rupture ? fmtDate(rupture) : null,
+    id: p.id, name: p.name, category: p.category,
+    vitesseVente, historyWeeks, shortHistory, hasReception, hasSales, reliable, unreliableReason,
+    suggestedQty, covered,
+    delai, cycle, joursSecurite,
+    ruptureBeforeArrival, ruptureLabel: rupture ? fmtDate(rupture) : null,
     transitQty, transitEtaLabel,
-    transitIgnored: transitQty > 0 && suggestedQty > 0,
-    pump,
+    pump, missingPump: pump == null, missingDelai: delai.source === 'defaut',
     unitsPerCarton: upc != null && upc > 0 ? upc : null,
     supplier: supplierName ?? UNGROUPED_LABEL,
     stockPhysique, stockReserve, stockDisponible,
-    staticAlert,
-    hasAlert: staticAlert || ruptureBeforeArrival,
   };
 });
 
-rows.sort((a, b) => b.suggestedQty - a.suggestedQty || a.name.localeCompare(b.name, 'fr'));
+// ── Regroupement : "à commander" (fiable) groupé par fournisseur, "à
+//    vérifier manuellement" (pas fiable) en liste plate. ──
+const orderRows = rows.filter(r => r.reliable);
+const reviewRows = rows.filter(r => !r.reliable)
+  .sort((a, b) => {
+    // Aucune suggestion calculable en tête : c'est l'inconnue la plus
+    // complète, celle qui mérite le plus un vrai coup d'œil.
+    if (a.suggestedQty == null && b.suggestedQty == null) return a.name.localeCompare(b.name, 'fr');
+    if (a.suggestedQty == null) return -1;
+    if (b.suggestedQty == null) return 1;
+    return b.suggestedQty - a.suggestedQty || a.name.localeCompare(b.name, 'fr');
+  });
 
-const suppliers = [...new Set(rows.map(r => r.supplier))].sort((a, b) => {
-  if (a === UNGROUPED_LABEL) return 1;
-  if (b === UNGROUPED_LABEL) return -1;
-  return a.localeCompare(b, 'fr');
-});
-
-// Carte fournisseur → cycle de commande résolu en semaines (approximation au
-// niveau fournisseur, pour l'en-tête du récapitulatif d'export uniquement —
-// le calcul par ligne, lui, utilise toujours le cycle résolu par produit).
-const supplierCycleWeeksJSON: Record<string, number> = {};
-for (const s of suppliers) {
-  if (s === UNGROUPED_LABEL) continue;
-  const supplierDelai = delaiBySupplier.get(s) ?? DELAI_LIVRAISON_DEFAUT_JOURS;
-  const c = resolveCycleCommande(cycleBySupplier.get(s) ?? null, delaiBySupplier.get(s) ?? null, supplierDelai);
-  supplierCycleWeeksJSON[s] = Math.round((c.jours / 7) * 10) / 10;
+type Row = (typeof rows)[number];
+function lineCost(r: Row): number {
+  return r.pump != null ? r.pump * (r.suggestedQty ?? 0) : 0;
 }
 
-const defaultDelaiCount = rows.filter(r => r.delai.source === 'defaut').length;
-const missingPumpCount = rows.filter(r => r.pump == null).length;
+const supplierNamesOrder = [...new Set(orderRows.map(r => r.supplier))];
+const supplierGroups = supplierNamesOrder.map(name => {
+  const items = orderRows
+    .filter(r => r.supplier === name)
+    .sort((a, b) => (b.suggestedQty ?? 0) - (a.suggestedQty ?? 0) || a.name.localeCompare(b.name, 'fr'));
+  const visible = items.filter(r => !r.covered);
+  const cartons = visible.reduce((s, r) => s + (r.suggestedQty ?? 0), 0);
+  const cost = visible.reduce((s, r) => s + lineCost(r), 0);
+  const missingPumpCount = visible.filter(r => r.missingPump).length;
+  return { name, items, visibleCount: visible.length, cartons, cost, missingPumpCount };
+}).sort((a, b) => b.cartons - a.cartons || a.name.localeCompare(b.name, 'fr'));
 
-function formatPrice(n: number | null): string {
-  if (n == null) return '—';
+const activeSupplierGroups = supplierGroups.filter(g => g.visibleCount > 0);
+
+const totalCartons = activeSupplierGroups.reduce((s, g) => s + g.cartons, 0);
+const totalCost = activeSupplierGroups.reduce((s, g) => s + g.cost, 0);
+const totalMissingPump = activeSupplierGroups.reduce((s, g) => s + g.missingPumpCount, 0);
+const supplierCount = activeSupplierGroups.length;
+
+const hiddenCoveredCount = rows.filter(r => r.covered).length;
+const reviewVisibleCount = reviewRows.filter(r => !r.covered).length;
+
+function formatPrice(n: number): string {
   return n.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' });
 }
 
-const MODE_HELP: Record<ModeCommande, string> = {
-  amorcage: `Amorçage — couvre le délai d'acheminement puis ${horizonMonths} mois de vente : à utiliser pour une première commande ou pour rattraper un retard, quand rien n'est déjà en route.`,
-  reassort: `Réassort à l'arrivage — commande l'équivalent du délai d'acheminement PLUS le cycle de commande (le rythme auquel vous repassez commande chez ce fournisseur), pour que les arrivages s'enchaînent sans rupture entre deux commandes. Le cycle est propre à chaque fournisseur, réglable sur /admin/fournisseurs ; à défaut, il retombe sur le délai d'acheminement du fournisseur concerné.`,
-};
+const summaryCost = totalCartons === 0
+  ? null
+  : totalMissingPump > 0
+    ? `Total connu : ${formatPrice(totalCost)} · coût incomplet, ${totalMissingPump} référence${totalMissingPump > 1 ? 's' : ''} sans prix`
+    : `Total ${formatPrice(totalCost)} HT`;
 ---
-<AdminLayout title="Commande fournisseur" activeNav="commande-fournisseur">
+<AdminLayout title="Commandes fournisseur" activeNav="commande-fournisseur">
   {suppliersTableMissing && (
     <div class="alert alert--error" role="alert">
       La table <code>suppliers</code> n'existe pas encore — tous les produits utilisent
@@ -290,482 +269,372 @@ const MODE_HELP: Record<ModeCommande, string> = {
       renseignez-le dans <a href="/admin/fournisseurs">Fournisseurs</a>.
     </div>
   )}
-
-  <form method="get" class="settings-bar">
-    <div class="set">
-      <label class="set-label" for="cfSearch">Rechercher</label>
-      <input type="search" id="cfSearch" class="set-input" placeholder="Produit ou fournisseur…" autocomplete="off" />
-    </div>
-    <div class="set">
-      <label class="set-label" for="cfSupplier">Fournisseur</label>
-      <select id="cfSupplier" class="set-input">
-        <option value="">Tous</option>
-        {suppliers.map(s => <option value={s}>{s}</option>)}
-      </select>
-    </div>
-    <div class="set">
-      <label class="set-label" for="cfMode">Mode</label>
-      <select id="cfMode" name="mode" class="set-input" onchange="this.form.submit()">
-        <option value="amorcage" selected={mode === 'amorcage'}>Amorçage</option>
-        <option value="reassort" selected={mode === 'reassort'}>Réassort à l'arrivage</option>
-      </select>
-    </div>
-    <div class="set">
-      <label class="set-label" for="cfHorizon">Horizon</label>
-      <select
-        id="cfHorizon"
-        name="horizon"
-        class="set-input"
-        onchange="this.form.submit()"
-        disabled={mode === 'reassort'}
-        title={mode === 'reassort' ? "L'horizon ne s'applique qu'en mode Amorçage" : undefined}
-      >
-        {COUVERTURE_HORIZON_MONTHS.map(m => (
-          <option value={m} selected={m === horizonMonths}>{m} mois</option>
-        ))}
-      </select>
-    </div>
-    <div class="set set--coef">
-      <label class="set-label" for="cfCoef">Coeff. saisonnier</label>
-      <div class="coef-wrap">
-        <input type="number" id="cfCoef" class="set-input coef-input" value="100" min="0" max="500" step="5" />
-        <span class="coef-pct">%</span>
-      </div>
-    </div>
-    <div class="set set--action">
-      <button type="button" id="cfExport" class="btn btn-primary">Exporter</button>
-    </div>
-  </form>
-
-  <p class="mode-help">{MODE_HELP[mode]}</p>
-
-  <div class="meta-line">
-    <span id="cfResults" hidden></span>
-    {defaultDelaiCount > 0 && (
-      <span class="meta-warn">
-        ⚠ {defaultDelaiCount} produit{defaultDelaiCount > 1 ? 's' : ''} sans délai réel —
-        calculé{defaultDelaiCount > 1 ? 's' : ''} sur {DELAI_LIVRAISON_DEFAUT_JOURS} j par défaut.
-        <a href="/admin/fournisseurs">Renseigner les délais →</a>
-      </span>
-    )}
-  </div>
-
-  {rows.length === 0 ? (
-    <div class="empty-state">
-      <p class="empty-title">Aucun produit au catalogue.</p>
-    </div>
-  ) : (
-    <div class="table-wrap">
-      <table class="data-table" id="cfTable">
-        <thead>
-          <tr>
-            <th>Produit</th>
-            <th class="th-num">Stock &amp; rythme</th>
-            <th class="th-num th-qty">À commander</th>
-            <th class="th-num">Coût HT</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(p => (
-            <tr
-              data-search={`${p.name} ${p.supplier}`.toLowerCase()}
-              data-supplier={p.supplier}
-              data-name={p.name}
-              data-pump={p.pump ?? ''}
-              data-upc={p.unitsPerCarton ?? ''}
-              data-vitesse={p.vitesseVente}
-              data-delai-jours={p.delai.jours}
-              data-cycle-jours={p.cycle.jours}
-              data-securite-jours={(supplierByProduct.get(p.id) ? securiteBySupplier.get(p.supplier) : null) ?? 0}
-              data-stock={p.stockDisponible}
-              data-has-history={p.hasHistory ? '1' : '0'}
-              data-static-alert={p.staticAlert ? '1' : '0'}
-              data-transit-qty={p.transitQty}
-            >
-              <td class="td-product">
-                <span class="p-name">{p.name}</span>
-                <div class="p-meta">
-                  <span class={`cat-badge cat-badge--${p.category}`}>{CAT_LABEL[p.category] ?? p.category}</span>
-                  <span class="p-supplier">{p.supplier}</span>
-                </div>
-                <p class={`p-alert ${p.ruptureBeforeArrival ? 'p-alert--danger' : ''}`} hidden={!p.hasAlert}>
-                  <span class="a-delai">
-                    {p.delai.jours} j
-                    {p.delai.source === 'fournisseur' && ` · ${p.delai.fournisseur}`}
-                    {p.delai.source === 'produit' && ' · produit'}
-                    {p.delai.source === 'defaut' && ' · défaut'}
-                  </span>
-                  {mode === 'reassort' && (
-                    <>
-                      <span class="a-sep">·</span>
-                      <span
-                        class="a-cycle"
-                        title={p.cycle.source === 'fournisseur'
-                          ? `Cycle propre réglé sur /admin/fournisseurs pour ${p.supplier}`
-                          : `Aucun cycle propre réglé pour ${p.supplier} — retombe sur son délai d'acheminement`}
-                      >
-                        cycle {p.cycle.jours} j{p.cycle.source === 'delai' && ' (= délai)'}
-                      </span>
-                    </>
-                  )}
-                  <span class="a-sep">·</span>
-                  <span>arrivée ~{p.arrivalLabel}</span>
-                  <span class="a-sep" hidden={!p.hasHistory}>·</span>
-                  <span class="a-rupture-text" hidden={!p.hasHistory}>
-                    rupture ~{p.ruptureLabel}<span class="a-rupture-mark" hidden={!p.ruptureBeforeArrival}> ⚠</span>
-                  </span>
-                  <span class="a-sep" hidden={p.transitQty <= 0}>·</span>
-                  <a
-                    href="/admin/transit"
-                    class="a-transit"
-                    hidden={p.transitQty <= 0}
-                    title="Déjà expédié par le fournisseur, pas encore reçu — non déduit de la quantité suggérée"
-                  >
-                    🚢 {p.transitQty} en transit{p.transitEtaLabel ? ` · arrivée ~${p.transitEtaLabel}` : ''}
-                  </a>
-                  <span class="a-sep" hidden={!p.shortHistory}>·</span>
-                  <span
-                    class="a-short"
-                    hidden={!p.shortHistory}
-                    title={`Vitesse calculée sur ${p.historyWeeks.toFixed(1)} sem. d'historique`}
-                  >
-                    historique court
-                  </span>
-                </p>
-              </td>
-
-              <td class="th-num td-secondary">
-                <span
-                  title={`Disponible ${p.stockDisponible} = physique ${p.stockPhysique} − réservé ${p.stockReserve}`}
-                >
-                  {p.stockDisponible} disponible{p.stockDisponible === 1 ? '' : 's'}
-                </span>
-                {p.stockReserve > 0 && (
-                  <p class="s-reserve" title={`${p.stockPhysique} en stock, ${p.stockReserve} déjà réservés sur des commandes non livrées`}>
-                    {p.stockPhysique} phys. · <span class="s-reserve-num">−{p.stockReserve} rés.</span>
-                  </p>
-                )}
-                <p class="s-sub">
-                  {p.hasHistory
-                    ? `${p.vitesseVente.toFixed(1)}/sem · ${p.couvertureWeeks!.toFixed(1)} sem`
-                    : 'pas d’historique'}
-                </p>
-              </td>
-
-              <td class="th-num">
-                <div class="qty-cell">
-                  <input
-                    type="number"
-                    class={`qty-input ${p.shortHistory ? 'qty-input--warn' : ''}`}
-                    min="0"
-                    step="1"
-                    value={p.suggestedQty}
-                    aria-label={`Quantité à commander pour ${p.name}${p.shortHistory ? ' — estimation peu fiable, historique court' : ''}`}
-                  />
-                </div>
-                {/* Conservée (pas remplacée), mais rendue impossible à manquer : un chiffre
-                    comme 1005 cartons calculé sur 6 jours de ventes ne doit jamais passer
-                    pour une recommandation aussi sûre qu'une ligne à historique complet. */}
-                <p class="qty-note qty-note--warn" hidden={!p.shortHistory} title={`Vitesse calculée sur seulement ${p.historyWeeks.toFixed(1)} sem. d'historique (seuil de fiabilité : ${VITESSE_SHORT_HISTORY_WEEKS} sem.)`}>
-                  ⚠ historique court ({p.historyWeeks.toFixed(1)} sem.) — quantité peu fiable
-                </p>
-                <p class="qty-note qty-note--ok" hidden={!p.alreadyCovered}>déjà couvert</p>
-                <p class="qty-note qty-note--transit" hidden={!p.transitIgnored} title="La quantité suggérée n'a pas déduit ce qui est déjà en transit — ajustez si vous voulez en tenir compte">
-                  ⚠ transit non déduit
-                </p>
-              </td>
-
-              <td class="th-num td-mono line-cost">
-                {p.pump == null ? <span class="td-muted">—</span> : formatPrice(p.pump * p.suggestedQty)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr class="totals-row">
-            <td class="totals-label">Total</td>
-            <td></td>
-            <td class="th-num">
-              <span class="totals-cartons" id="cfTotalCartons">0</span>
-              <p class="totals-units" id="cfTotalUnits">0 unité</p>
-            </td>
-            <td class="th-num totals-cost" id="cfTotalCost">—</td>
-          </tr>
-        </tfoot>
-      </table>
-      <p class="no-results" id="cfNoResults" hidden>Aucun produit ne correspond.</p>
-      <p class="footnote" id="cfFootnote" hidden></p>
+  {!suppliersTableMissing && cycleColumnMissing && (
+    <div class="alert alert--warn" role="status">
+      La colonne <code>cycle_commande_jours</code> n'existe pas encore — le cycle retombe sur le délai
+      pour tous les fournisseurs. Lancez <code>supabase/migrations/suppliers_cycle_commande.sql</code> puis
+      renseignez-le dans <a href="/admin/fournisseurs">Fournisseurs</a>.
     </div>
   )}
 
-  <div class="export-panel" id="cfExportPanel" hidden>
-    <div class="export-head">
-      <h2 class="export-title">Récapitulatif à envoyer</h2>
-      <div class="export-actions">
-        <button type="button" class="btn btn-primary" id="cfCopy">Copier</button>
-        <button type="button" class="btn btn-ghost" id="cfCloseExport">Fermer</button>
-      </div>
+  <div class="summary-row">
+    <p class="summary-line" id="cfSummary">
+      <span id="cfSupplierCount">{supplierCount}</span> fournisseur{supplierCount === 1 ? '' : 's'} à commander
+      · <span id="cfTotalCartons">{totalCartons}</span> carton{totalCartons === 1 ? '' : 's'}
+      {summaryCost && <> · <span id="cfTotalCost">{summaryCost}</span></>}
+    </p>
+    <div class="summary-actions">
+      <button type="button" id="cfCopyAll" class="btn btn-primary" disabled={activeSupplierGroups.length === 0}>
+        Copier toutes les commandes
+      </button>
+      <span class="copy-hint" id="cfCopyAllHint" hidden>✓ copié</span>
     </div>
-    <textarea class="export-text" id="cfExportText" readonly rows="14" aria-label="Récapitulatif de commande"></textarea>
-    <p class="export-hint" id="cfCopyHint" hidden>Copié dans le presse-papier.</p>
   </div>
+
+  <details class="advanced">
+    <summary>Réglages avancés</summary>
+    <div class="advanced-body">
+      <label class="advanced-label" for="cfCoef">Coefficient saisonnier</label>
+      <div class="coef-wrap">
+        <input type="number" id="cfCoef" class="coef-input" value="100" min="0" max="500" step="5" />
+        <span class="coef-pct">%</span>
+      </div>
+      <p class="advanced-note">
+        Ajuste la vitesse de vente utilisée dans le calcul (ex. 120 % avant une période chargée). Le délai, le
+        cycle de commande et le stock de sécurité se règlent par fournisseur sur <a href="/admin/fournisseurs">/admin/fournisseurs</a>.
+      </p>
+    </div>
+  </details>
+
+  <div id="cfOrderRoot">
+    {activeSupplierGroups.length === 0 && reviewVisibleCount === 0 && hiddenCoveredCount === 0 ? (
+      <div class="empty-state">
+        <p class="empty-title">Aucun produit au catalogue.</p>
+      </div>
+    ) : activeSupplierGroups.length === 0 ? (
+      <div class="empty-state" id="cfEmptyOrders">
+        <p class="empty-title">Rien à commander pour l'instant.</p>
+        <p class="empty-body">Tous les produits fiables sont couverts par le stock disponible ou déjà en transit.</p>
+      </div>
+    ) : null}
+
+    {supplierGroups.map(g => (
+      <section class="supplier-block" data-role="supplier-block" data-supplier={g.name} hidden={g.visibleCount === 0}>
+        <div class="supplier-head">
+          <div class="supplier-head-main">
+            <h2 class="supplier-name">{g.name}</h2>
+            <p class="supplier-stats">
+              <span data-role="supplier-cartons">{g.cartons} carton{g.cartons === 1 ? '' : 's'}</span>
+              · <span data-role="supplier-cost">
+                {g.cost === 0 && g.missingPumpCount === g.visibleCount
+                  ? '—'
+                  : g.missingPumpCount > 0
+                    ? `Total connu ${formatPrice(g.cost)} HT · coût incomplet`
+                    : `${formatPrice(g.cost)} HT`}
+              </span>
+            </p>
+          </div>
+          <button type="button" class="btn btn-ghost btn-copy-supplier" data-supplier={g.name}>Copier la commande</button>
+        </div>
+        <div class="supplier-rows">
+          {g.items.map(p => <CommandeFournisseurRow p={p} />)}
+        </div>
+      </section>
+    ))}
+  </div>
+
+  <button type="button" id="cfShowCovered" class="show-covered-btn" hidden={hiddenCoveredCount === 0}>
+    <span id="cfShowCoveredLabel">Voir les produits couverts</span> (<span id="cfHiddenCount">{hiddenCoveredCount}</span>)
+  </button>
+
+  {reviewRows.length > 0 && (
+    <section class="review-section">
+      <h2 class="review-title">À vérifier manuellement</h2>
+      <p class="review-intro">
+        Historique trop court, pas encore reçu, ou jamais vendu — la quantité affichée (quand elle existe) utilise
+        la même formule, mais sur des données moins sûres. À valider vous-même avant de commander.
+      </p>
+      <div class="review-rows">
+        {reviewRows.map(p => <CommandeFournisseurRow p={p} showSupplierTag />)}
+      </div>
+    </section>
+  )}
 </AdminLayout>
 
-<script define:vars={{ horizonMonths, mode, horizonWeeks, supplierCycleWeeks: supplierCycleWeeksJSON, missingPumpCountInitial: missingPumpCount }}>
-  const table = document.getElementById('cfTable');
-  if (table) {
-    const bodyRows   = Array.from(table.querySelectorAll('tbody tr'));
-    const searchEl   = document.getElementById('cfSearch');
-    const supplierEl = document.getElementById('cfSupplier');
-    const coefEl     = document.getElementById('cfCoef');
-    const resultsEl  = document.getElementById('cfResults');
-    const noResults  = document.getElementById('cfNoResults');
-    const footnote   = document.getElementById('cfFootnote');
+<script>
+  const root = document;
+  const productRows = Array.from(document.querySelectorAll<HTMLElement>('[data-role="product-row"]'));
+  const coefEl = document.getElementById('cfCoef') as HTMLInputElement | null;
+  const showCoveredBtn = document.getElementById('cfShowCovered');
+  const showCoveredLabel = document.getElementById('cfShowCoveredLabel');
+  const hiddenCountEl = document.getElementById('cfHiddenCount');
 
-    const eur = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' });
-    const num = new Intl.NumberFormat('fr-FR');
-    const dateFmt = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short' });
+  const eur = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' });
+  const num = new Intl.NumberFormat('fr-FR');
 
-    const qtyInput = (row) => row.querySelector('.qty-input');
-    const pumpOf = (row) => (row.dataset.pump === '' ? null : Number(row.dataset.pump));
-    const upcOf  = (row) => (row.dataset.upc === '' ? null : Number(row.dataset.upc));
-    const qtyOf  = (row) => {
-      const n = Math.max(0, Math.floor(Number(qtyInput(row)?.value ?? 0)));
-      return Number.isFinite(n) ? n : 0;
-    };
+  const qtyInputOf = (row: HTMLElement) => row.querySelector<HTMLInputElement>('[data-role="qty-input"]');
+  const pumpOf = (row: HTMLElement) => (row.dataset.pump === '' ? null : Number(row.dataset.pump));
+  const upcOf = (row: HTMLElement) => (row.dataset.upc === '' ? null : Number(row.dataset.upc));
+  const qtyOf = (row: HTMLElement) => {
+    const n = Math.max(0, Math.floor(Number(qtyInputOf(row)?.value ?? 0)));
+    return Number.isFinite(n) ? n : 0;
+  };
+  const coefPct = () => {
+    const n = Number(coefEl?.value ?? 100);
+    return Number.isFinite(n) && n >= 0 ? n : 100;
+  };
 
-    const coefPct = () => {
-      const n = Number(coefEl?.value ?? 100);
-      return Number.isFinite(n) && n >= 0 ? n : 100;
-    };
+  let showCovered = false;
 
-    // ── Mirroir JS des formules de lib/constants.ts — computeWeeksCovered,
-    //    computeSecuriteCartons, computeOrderQty, computeJoursAvantRupture,
-    //    estimatedArrivalWithMargin. Reste en phase avec la version serveur
-    //    par construction : au chargement (coefficient 100 %), les deux
-    //    doivent produire des valeurs identiques. Le cycle, comme le délai,
-    //    est lu depuis le dataset de la ligne (résolu par produit côté
-    //    serveur) — jamais un champ de réglage partagé entre toutes les
-    //    lignes. ──
-    function weeksCovered(delaiWeeks, cycle) {
-      return mode === 'amorcage' ? delaiWeeks + horizonWeeks : delaiWeeks + cycle;
-    }
-    function securiteCartons(vAdj, joursSecurite) {
-      if (!vAdj || vAdj <= 0) return 0;
-      return vAdj * (joursSecurite / 7);
-    }
-    function orderQty(vAdj, wCovered, securite, stock) {
-      if (!vAdj || vAdj <= 0) return null;
-      const q = Math.ceil(vAdj * wCovered + securite - stock);
-      return q > 0 ? q : 0;
-    }
-    function joursAvantRupture(stock, vAdj) {
-      if (stock == null) return null;
-      if (stock <= 0) return 0;
-      if (!vAdj || vAdj <= 0) return null;
-      return stock / (vAdj / 7);
-    }
-    function addDaysJs(date, days) { return new Date(date.getTime() + days * 86400000); }
+  // ── Mirroir JS de constants.ts — computeWeeksCovered (toujours la branche
+  //    réassort ici, mode figé), computeSecuriteCartons, computeOrderQty,
+  //    computeJoursAvantRupture, estimatedArrivalWithMargin. Au chargement
+  //    (coefficient 100 %), doit produire des valeurs identiques au serveur. ──
+  function weeksCovered(delaiWeeks: number, cycleWeeks: number) {
+    return delaiWeeks + cycleWeeks;
+  }
+  function securiteCartons(vAdj: number, joursSecurite: number) {
+    if (!vAdj || vAdj <= 0) return 0;
+    return vAdj * (joursSecurite / 7);
+  }
+  function orderQty(vAdj: number, wCovered: number, securite: number, stock: number) {
+    if (!vAdj || vAdj <= 0) return null;
+    const q = Math.ceil(vAdj * wCovered + securite - stock);
+    return q > 0 ? q : 0;
+  }
+  function joursAvantRupture(stock: number, vAdj: number) {
+    if (stock == null) return null;
+    if (stock <= 0) return 0;
+    if (!vAdj || vAdj <= 0) return null;
+    return stock / (vAdj / 7);
+  }
+  function addDays(date: Date, days: number) { return new Date(date.getTime() + days * 86400000); }
 
-    function recomputeRow(row, coef) {
-      const vitesse       = Number(row.dataset.vitesse) || 0;
-      const delaiJours     = Number(row.dataset.delaiJours) || 0;
-      const cycleJours     = Number(row.dataset.cycleJours) || 0;
-      const securiteJours  = Number(row.dataset.securiteJours) || 0;
-      const stock          = Number(row.dataset.stock) || 0;
-      const hasHistory     = row.dataset.hasHistory === '1';
-      const staticAlert    = row.dataset.staticAlert === '1';
-      const transitQty     = Number(row.dataset.transitQty) || 0;
+  function recomputeRow(row: HTMLElement, coef: number) {
+    const vitesse = Number(row.dataset.vitesse) || 0;
+    const delaiJours = Number(row.dataset.delaiJours) || 0;
+    const cycleJours = Number(row.dataset.cycleJours) || 0;
+    const securiteJours = Number(row.dataset.securiteJours) || 0;
+    const stock = Number(row.dataset.stock) || 0;
+    const hasSales = row.dataset.hasSales === '1';
 
-      const vAdj = vitesse * (coef / 100);
-      const wCovered = weeksCovered(delaiJours / 7, cycleJours / 7);
-      const sec = securiteCartons(vAdj, securiteJours);
-      const suggested = hasHistory ? orderQty(vAdj, wCovered, sec, stock) : null;
-      const qty = suggested ?? 0;
+    const vAdj = vitesse * (coef / 100);
+    const wCovered = weeksCovered(delaiJours / 7, cycleJours / 7);
+    const sec = securiteCartons(vAdj, securiteJours);
+    const suggested = hasSales ? orderQty(vAdj, wCovered, sec, stock) : null;
+    const qty = suggested ?? 0;
 
-      const now = new Date();
-      const arrival = addDaysJs(now, delaiJours);
-      const arrivalMargin = addDaysJs(arrival, securiteJours);
-      const jar = joursAvantRupture(stock, vAdj);
-      const rupture = jar == null ? null : addDaysJs(now, jar);
-      const ruptureBeforeArrival = rupture != null && rupture.getTime() < arrivalMargin.getTime();
-
-      if (row.dataset.edited !== '1') {
-        const input = qtyInput(row);
-        if (input) input.value = String(qty);
-      }
-
-      // Sous-ligne d'alerte : seuls le texte de la date de rupture, sa marque
-      // ⚠, et la visibilité globale (statique OU rupture-avant-arrivée)
-      // dépendent du coefficient/cycle — tout le reste (délai, arrivée,
-      // transit, historique court) est fixé au chargement, jamais retouché.
-      const alertP = row.querySelector('.p-alert');
-      const ruptureText = row.querySelector('.a-rupture-text');
-      const ruptureMark = row.querySelector('.a-rupture-mark');
-      if (ruptureText && rupture) {
-        ruptureText.childNodes[0].nodeValue = `rupture ~${dateFmt.format(rupture)}`;
-      }
-      if (ruptureMark) ruptureMark.hidden = !ruptureBeforeArrival;
-      if (alertP) {
-        alertP.hidden = !(staticAlert || ruptureBeforeArrival);
-        alertP.classList.toggle('p-alert--danger', ruptureBeforeArrival);
-      }
-
-      // Transit non déduit : ne peut apparaître que si un transit existe
-      // (statique) ET que la suggestion redevient positive (dynamique).
-      const transitNote = row.querySelector('.qty-note--transit');
-      if (transitNote) transitNote.hidden = !(transitQty > 0 && qty > 0);
-      const okNote = row.querySelector('.qty-note--ok');
-      if (okNote) okNote.hidden = !(hasHistory && qty === 0);
-
-      return { qty };
+    if (row.dataset.edited !== '1') {
+      const input = qtyInputOf(row);
+      if (input) input.value = String(qty);
     }
 
-    function recomputeAll() {
-      const coef = coefPct();
-      for (const row of bodyRows) recomputeRow(row, coef);
-      recalc();
+    const now = new Date();
+    const arrivalMargin = addDays(addDays(now, delaiJours), securiteJours);
+    const jar = joursAvantRupture(stock, vAdj);
+    const rupture = jar == null ? null : addDays(now, jar);
+    const ruptureBeforeArrival = rupture != null && rupture.getTime() < arrivalMargin.getTime();
+    const ruptureBadge = row.querySelector<HTMLElement>('[data-role="rupture-badge"]');
+    if (ruptureBadge) ruptureBadge.hidden = !ruptureBeforeArrival;
+
+    const vitesseText = row.querySelector<HTMLElement>('[data-role="vitesse-text"]');
+    if (vitesseText) vitesseText.textContent = hasSales ? `ventes ${vAdj.toFixed(1)}/sem.` : 'pas de ventes enregistrées';
+
+    const pump = pumpOf(row);
+    const costText = row.querySelector<HTMLElement>('[data-role="cost-text"]');
+    if (costText) costText.textContent = pump == null ? '—' : eur.format(pump * qty);
+
+    // "Couvert" (suggestion calculée et nulle) réagit au coefficient — un
+    // produit peut mécaniquement sortir ou entrer dans ce statut quand la
+    // vitesse ajustée change. suggested === null (aucune vente à
+    // extrapoler) n'est jamais "couvert".
+    const covered = suggested != null && suggested <= 0;
+    row.dataset.covered = covered ? '1' : '0';
+
+    return { qty };
+  }
+
+  function applyVisibility() {
+    let hiddenCovered = 0;
+    for (const row of productRows) {
+      const covered = row.dataset.covered === '1';
+      row.hidden = covered && !showCovered;
+      if (covered) hiddenCovered++;
     }
+    if (hiddenCountEl) hiddenCountEl.textContent = String(hiddenCovered);
+    // Compte les produits couverts qu'il y ait ou non lieu de les révéler —
+    // le bouton lui-même ne disparaît que s'il n'y en a vraiment aucun.
+    if (showCoveredBtn) showCoveredBtn.hidden = hiddenCovered === 0;
 
-    function recalc() {
-      let cartons = 0, units = 0, cost = 0, missingPump = 0, missingUpc = 0;
+    // Un bloc fournisseur sans aucune ligne visible n'a rien à proposer :
+    // masqué plutôt que de laisser un en-tête vide en tête de page.
+    for (const block of Array.from(document.querySelectorAll<HTMLElement>('[data-role="supplier-block"]'))) {
+      const anyVisible = Array.from(block.querySelectorAll<HTMLElement>('[data-role="product-row"]')).some(r => !r.hidden);
+      block.hidden = !anyVisible;
+    }
+    const emptyOrders = document.getElementById('cfEmptyOrders');
+    if (emptyOrders) {
+      const anyBlockVisible = Array.from(document.querySelectorAll<HTMLElement>('[data-role="supplier-block"]')).some(b => !b.hidden);
+      emptyOrders.hidden = anyBlockVisible;
+    }
+  }
 
-      for (const row of bodyRows) {
-        const qty = qtyOf(row), pump = pumpOf(row), upc = upcOf(row);
+  function recalcTotals() {
+    let supplierCount = 0;
 
-        const costCell = row.querySelector('.line-cost');
-        if (costCell) {
-          costCell.textContent = pump == null ? '—' : eur.format(pump * qty);
-        }
-
-        if (row.hidden || qty <= 0) continue;
+    for (const block of Array.from(document.querySelectorAll<HTMLElement>('[data-role="supplier-block"]'))) {
+      const visibleRows = Array.from(block.querySelectorAll<HTMLElement>('[data-role="product-row"]')).filter(r => !r.hidden);
+      let cartons = 0, cost = 0, missingPump = 0;
+      for (const row of visibleRows) {
+        const qty = qtyOf(row), pump = pumpOf(row);
         cartons += qty;
-        if (upc != null) units += qty * upc; else missingUpc++;
         if (pump != null) cost += pump * qty; else missingPump++;
       }
+      if (!block.hidden) supplierCount++;
 
-      const setText = (id, t) => { const n = document.getElementById(id); if (n) n.textContent = t; };
-      setText('cfTotalCartons', `${num.format(cartons)} carton${cartons === 1 ? '' : 's'}`);
-      setText('cfTotalUnits', `${num.format(units)} unité${units === 1 ? '' : 's'}`);
-      // Le total ne doit jamais paraître définitif quand des produits
-      // manquent de PUMP — « Total connu » dit explicitement que ce n'est
-      // qu'une partie du coût réel, pas le coût réel.
-      const costEl = document.getElementById('cfTotalCost');
+      const cartonsEl = block.querySelector<HTMLElement>('[data-role="supplier-cartons"]');
+      if (cartonsEl) cartonsEl.textContent = `${num.format(cartons)} carton${cartons === 1 ? '' : 's'}`;
+      const costEl = block.querySelector<HTMLElement>('[data-role="supplier-cost"]');
       if (costEl) {
-        if (cartons === 0) costEl.textContent = '—';
-        else if (missingPump > 0) costEl.textContent = `Total connu : ${eur.format(cost)}`;
-        else costEl.textContent = eur.format(cost);
-      }
-
-      const notes = [];
-      if (missingPump) notes.push(`coût incomplet — ${missingPump} référence${missingPump > 1 ? 's' : ''} sans prix d'achat`);
-      if (missingUpc)  notes.push(`${missingUpc} produit${missingUpc > 1 ? 's' : ''} sans conditionnement — exclu${missingUpc > 1 ? 's' : ''} du total en unités`);
-      if (footnote) {
-        footnote.textContent = notes.length ? `* ${notes.join(' · ')}` : '';
-        footnote.hidden = notes.length === 0;
+        costEl.textContent = cartons === 0
+          ? '—'
+          : missingPump > 0
+            ? `Total connu ${eur.format(cost)} · coût incomplet`
+            : `${eur.format(cost)} HT`;
       }
     }
 
-    function applyFilters() {
-      const q = (searchEl?.value ?? '').trim().toLowerCase();
-      const s = supplierEl?.value ?? '';
-      let visible = 0;
-      for (const row of bodyRows) {
-        const show = (!q || (row.dataset.search ?? '').includes(q)) && (!s || row.dataset.supplier === s);
-        row.hidden = !show;
-        if (show) visible++;
+    let totalCartons = 0, totalCost = 0, totalMissingPump = 0;
+    for (const block of Array.from(document.querySelectorAll<HTMLElement>('[data-role="supplier-block"]'))) {
+      if (block.hidden) continue;
+      const visibleRows = Array.from(block.querySelectorAll<HTMLElement>('[data-role="product-row"]')).filter(r => !r.hidden);
+      for (const row of visibleRows) {
+        const qty = qtyOf(row), pump = pumpOf(row);
+        totalCartons += qty;
+        if (pump != null) totalCost += pump * qty; else totalMissingPump++;
       }
-      if (noResults) noResults.hidden = visible > 0;
-      if (resultsEl) {
-        const filtering = Boolean(q || s);
-        resultsEl.textContent = filtering ? `${visible} produit${visible !== 1 ? 's' : ''}` : '';
-        resultsEl.hidden = !filtering;
-      }
-      recalc();
     }
 
-    searchEl?.addEventListener('input', applyFilters);
-    supplierEl?.addEventListener('change', applyFilters);
-    coefEl?.addEventListener('input', recomputeAll);
-
-    // Only a real keystroke marks a line as manually decided — assigning
-    // .value programmatically does not fire 'input'.
-    table.addEventListener('input', (e) => {
-      const t = e.target;
-      if (t && t.classList && t.classList.contains('qty-input')) {
-        t.closest('tr').dataset.edited = '1';
-        recalc();
-      }
-    });
-
-    // ── Export ──
-    const panel = document.getElementById('cfExportPanel');
-    const textArea = document.getElementById('cfExportText');
-    const hint = document.getElementById('cfCopyHint');
-
-    function buildExport() {
-      const picked = bodyRows.filter(r => !r.hidden && qtyOf(r) > 0);
-      const supplier = supplierEl?.value || '';
-      const coefPctVal = coefPct();
-
-      const lines = [supplier ? `Commande fournisseur — ${supplier}` : 'Commande fournisseur'];
-      if (mode === 'amorcage') {
-        lines.push(`Mode : amorçage (délai d'acheminement + ${horizonMonths} mois de couverture)`);
-      } else {
-        // Le cycle est propre à chaque fournisseur : un seul chiffre n'a de
-        // sens que si la commande est filtrée sur un fournisseur précis.
-        const cycleW = supplierCycleWeeks[supplier];
-        lines.push(cycleW != null
-          ? `Mode : réassort à l’arrivage (délai d'acheminement + ${cycleW} sem. de cycle — ${supplier})`
-          : `Mode : réassort à l’arrivage (délai d'acheminement + cycle propre à chaque fournisseur)`);
-      }
-      // Le coefficient est une hypothèse qui pèse sur chaque chiffre
-      // ci-dessous, donc il voyage avec la commande plutôt que de ne vivre
-      // que dans le navigateur.
-      lines.push(`Coefficient saisonnier : ${coefPctVal} %`);
-      lines.push('');
-
-      if (picked.length === 0) {
-        lines.push('(aucune quantité à commander)');
-        return lines.join('\n');
-      }
-
-      let cartons = 0, units = 0, cost = 0, anyMissingPump = false;
-      for (const row of picked) {
-        const qty = qtyOf(row), upc = upcOf(row), pump = pumpOf(row);
-        cartons += qty;
-        if (upc != null) units += qty * upc;
-        if (pump != null) cost += pump * qty; else anyMissingPump = true;
-        lines.push(`${row.dataset.name} — ${qty} carton${qty === 1 ? '' : 's'}`);
-      }
-
-      lines.push('');
-      lines.push(`Total : ${num.format(cartons)} carton${cartons === 1 ? '' : 's'} (${num.format(units)} unité${units === 1 ? '' : 's'})`);
-      lines.push(`Coût estimé HT : ${eur.format(cost)}${anyMissingPump ? ' (coût incomplet — hors produits sans prix d’achat connu)' : ''}`);
-      return lines.join('\n');
+    const setText = (id: string, t: string) => { const n = document.getElementById(id); if (n) n.textContent = t; };
+    setText('cfSupplierCount', String(supplierCount));
+    setText('cfTotalCartons', String(totalCartons));
+    const costEl = document.getElementById('cfTotalCost');
+    if (costEl) {
+      costEl.textContent = totalCartons === 0
+        ? ''
+        : totalMissingPump > 0
+          ? `Total connu : ${eur.format(totalCost)} · coût incomplet, ${totalMissingPump} référence${totalMissingPump > 1 ? 's' : ''} sans prix`
+          : `Total ${eur.format(totalCost)} HT`;
     }
 
-    document.getElementById('cfExport')?.addEventListener('click', () => {
-      if (!panel || !textArea) return;
-      textArea.value = buildExport();
-      panel.hidden = false;
-      if (hint) hint.hidden = true;
-      panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    });
-
-    document.getElementById('cfCopy')?.addEventListener('click', async () => {
-      if (!textArea) return;
-      try { await navigator.clipboard.writeText(textArea.value); }
-      catch { textArea.select(); }
-      if (hint) hint.hidden = false;
-    });
-
-    document.getElementById('cfCloseExport')?.addEventListener('click', () => {
-      if (panel) panel.hidden = true;
-    });
-
-    recalc();
+    const copyAllBtn = document.getElementById('cfCopyAll') as HTMLButtonElement | null;
+    if (copyAllBtn) copyAllBtn.disabled = supplierCount === 0;
   }
+
+  function recomputeAll() {
+    const coef = coefPct();
+    for (const row of productRows) recomputeRow(row, coef);
+    applyVisibility();
+    recalcTotals();
+  }
+
+  coefEl?.addEventListener('input', recomputeAll);
+
+  showCoveredBtn?.addEventListener('click', () => {
+    showCovered = !showCovered;
+    if (showCoveredLabel) showCoveredLabel.textContent = showCovered ? 'Masquer les produits couverts' : 'Voir les produits couverts';
+    applyVisibility();
+    recalcTotals();
+  });
+
+  // Une vraie frappe fige la ligne (le coefficient ne l'écrase plus) ; une
+  // affectation programmatique de .value ne déclenche pas 'input'.
+  root.addEventListener('input', (e) => {
+    const t = e.target as HTMLElement;
+    if (t?.dataset?.role === 'qty-input') {
+      t.closest<HTMLElement>('[data-role="product-row"]')!.dataset.edited = '1';
+      recalcTotals();
+    }
+  });
+
+  // ── Copier ──
+  async function copyText(text: string): Promise<boolean> {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+
+  function buildBlockExport(supplierName: string, visibleRows: HTMLElement[]): string {
+    const lines = [supplierName, ''];
+    let cartons = 0, units = 0, cost = 0, missingPump = 0;
+    for (const row of visibleRows) {
+      const qty = qtyOf(row);
+      if (qty <= 0) continue;
+      const upc = upcOf(row), pump = pumpOf(row);
+      cartons += qty;
+      const unitsPart = upc != null ? ` (${num.format(qty * upc)} unités)` : '';
+      if (upc != null) units += qty * upc;
+      if (pump != null) cost += pump * qty; else missingPump++;
+      lines.push(`${row.dataset.name} — ${qty} carton${qty === 1 ? '' : 's'}${unitsPart}`);
+    }
+    lines.push('');
+    lines.push(`Total : ${num.format(cartons)} carton${cartons === 1 ? '' : 's'}${units > 0 ? ` (${num.format(units)} unités)` : ''}`);
+    lines.push(missingPump > 0
+      ? `Coût HT connu : ${eur.format(cost)} · coût incomplet, ${missingPump} référence${missingPump > 1 ? 's' : ''} sans prix`
+      : `Coût HT connu : ${eur.format(cost)}`);
+    return lines.join('\n');
+  }
+
+  function flashCopied(btn: HTMLElement, hintEl?: HTMLElement | null) {
+    const original = btn.textContent;
+    btn.textContent = '✓ Copié';
+    if (hintEl) hintEl.hidden = false;
+    setTimeout(() => {
+      btn.textContent = original;
+      if (hintEl) hintEl.hidden = true;
+    }, 1800);
+  }
+
+  document.querySelectorAll<HTMLButtonElement>('.btn-copy-supplier').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const supplierName = btn.dataset.supplier ?? '';
+      const block = btn.closest<HTMLElement>('[data-role="supplier-block"]');
+      if (!block) return;
+      const visibleRows = Array.from(block.querySelectorAll<HTMLElement>('[data-role="product-row"]')).filter(r => !r.hidden);
+      const ok = await copyText(buildBlockExport(supplierName, visibleRows));
+      if (ok) flashCopied(btn);
+    });
+  });
+
+  document.getElementById('cfCopyAll')?.addEventListener('click', async () => {
+    const blocks = Array.from(document.querySelectorAll<HTMLElement>('[data-role="supplier-block"]')).filter(b => !b.hidden);
+    const parts = blocks.map(block => {
+      const supplierName = block.dataset.supplier ?? '';
+      const visibleRows = Array.from(block.querySelectorAll<HTMLElement>('[data-role="product-row"]')).filter(r => !r.hidden);
+      return buildBlockExport(supplierName, visibleRows);
+    });
+    const btn = document.getElementById('cfCopyAll') as HTMLElement;
+    const hint = document.getElementById('cfCopyAllHint');
+    const ok = await copyText(parts.join('\n\n───\n\n'));
+    if (ok) flashCopied(btn, hint);
+  });
+
+  recalcTotals();
 </script>
 
 <style>
@@ -781,140 +650,49 @@ const MODE_HELP: Record<ModeCommande, string> = {
 .alert--error { color: oklch(0.46 0.18 25); background: oklch(0.97 0.03 25); border-color: oklch(0.88 0.07 25); }
 .alert--warn  { color: oklch(0.42 0.14 60); background: oklch(0.96 0.05 60); border-color: oklch(0.87 0.09 60); }
 
-/* ── Barre de réglages : compacte, tout en haut, jamais répétée par ligne ── */
-.settings-bar {
+.summary-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.summary-line { font-size: 1.15rem; font-weight: 700; color: var(--color-ink); }
+.summary-actions { display: flex; align-items: center; gap: var(--space-3); }
+.copy-hint { font-size: var(--text-xs); font-weight: 600; color: oklch(0.48 0.13 150); }
+
+.advanced { margin-bottom: var(--space-5); }
+.advanced summary {
+  display: inline-block;
+  padding: 5px 10px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+}
+.advanced[open] summary { margin-bottom: var(--space-2); }
+.advanced-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
-  margin-bottom: var(--space-3);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
 }
-.set { display: flex; flex-direction: column; gap: 3px; }
-.set--action { margin-left: auto; }
-.set-label {
-  font-size: 0.625rem;
-  font-weight: 600;
-  color: var(--color-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-}
-.set-input {
-  padding: 0.4rem 0.6rem;
-  font-family: var(--font-body);
-  font-size: var(--text-sm);
-  color: var(--color-ink);
-  background: var(--color-bg);
-  border: 1.5px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
-  min-height: 36px;
-  outline: none;
-}
-.set-input:focus { border-color: var(--color-primary); }
-.set-input:disabled { opacity: 0.45; cursor: not-allowed; }
-#cfSearch { min-width: 190px; }
+.advanced-label { font-size: var(--text-xs); font-weight: 600; color: var(--color-muted); }
 .coef-wrap { position: relative; display: flex; align-items: center; }
-.coef-input { width: 84px; padding-right: 2rem; text-align: right; font-family: var(--font-mono); }
-.coef-pct { position: absolute; right: 0.5rem; font-size: var(--text-xs); color: var(--color-muted); pointer-events: none; }
-
-.mode-help {
-  margin: 0 0 var(--space-3);
-  font-size: var(--text-xs);
-  color: var(--color-muted);
-  max-width: 90ch;
-}
-
-.meta-line {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  align-items: baseline;
-  margin-bottom: var(--space-3);
-  font-size: var(--text-xs);
-  color: var(--color-muted);
-}
-.meta-warn { color: oklch(0.42 0.14 60); }
-.meta-warn a { color: inherit; font-weight: 600; }
-
-.table-wrap {
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  overflow-x: auto;
-}
-.data-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
-.data-table thead th {
-  padding: var(--space-3) var(--space-4);
-  text-align: left;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  color: var(--color-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  border-bottom: 1px solid var(--color-border);
-  white-space: nowrap;
-}
-.th-num { text-align: right; }
-.th-qty { width: 130px; }
-.data-table tbody td {
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--color-border);
-  vertical-align: middle;
-}
-.data-table tbody tr:hover td { background: var(--color-surface); }
-
-/* 1 — le nom du produit : gros et lisible */
-.td-product { max-width: 42ch; }
-.p-name {
-  display: block;
-  font-size: var(--text-base);
-  font-weight: 600;
-  color: var(--color-ink);
-  line-height: 1.3;
-}
-.p-meta { display: flex; align-items: center; gap: var(--space-2); margin-top: 3px; }
-.p-supplier { font-size: var(--text-xs); color: var(--color-muted); }
-
-/* 3 — tertiaire : délai, dates, alertes. N'apparaît qu'en cas d'anomalie. */
-.p-alert {
-  margin: 5px 0 0;
-  font-size: var(--text-xs);
-  line-height: 1.5;
-  color: var(--color-muted);
-}
-.p-alert--danger { color: oklch(0.46 0.18 25); }
-.a-sep { opacity: 0.45; margin: 0 3px; }
-.a-delai { font-weight: 600; }
-.a-cycle { font-weight: 600; color: oklch(0.44 0.12 250); cursor: help; }
-.a-rupture-mark { font-weight: 700; }
-.a-short { font-style: italic; cursor: help; }
-.a-transit {
-  color: oklch(0.45 0.10 220);
-  font-weight: 600;
-  text-decoration: none;
-  white-space: nowrap;
-}
-.a-transit:hover { text-decoration: underline; }
-
-/* 2 — secondaire : stock et rythme, en gris */
-.td-secondary { color: var(--color-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.td-secondary span { cursor: help; }
-.s-sub { margin: 2px 0 0; font-size: var(--text-xs); color: var(--color-muted); opacity: 0.85; }
-.s-reserve { margin: 2px 0 0; font-size: var(--text-xs); color: var(--color-muted); cursor: help; }
-.s-reserve-num { color: oklch(0.52 0.11 60); }
-
-/* 1 — la quantité : l'autre chose vraiment lisible */
-.qty-cell { display: flex; align-items: center; justify-content: flex-end; }
-.qty-input {
-  width: 96px;
-  padding: 0.45rem 0.6rem;
+.coef-input {
+  width: 84px;
+  padding: 0.4rem 2rem 0.4rem 0.6rem;
   font-family: var(--font-mono);
-  font-size: 1.05rem;
-  font-weight: 700;
+  font-size: var(--text-sm);
   text-align: right;
   color: var(--color-ink);
   background: var(--color-bg);
@@ -922,89 +700,57 @@ const MODE_HELP: Record<ModeCommande, string> = {
   border-radius: var(--radius-sm);
   outline: none;
 }
-.qty-input:focus { border-color: var(--color-primary); }
-/* Historique court : la valeur reste la suggestion (jamais masquée), mais le
-   champ lui-même est teinté — un chiffre comme 1005 cartons calculé sur 6
-   jours de ventes ne doit pas se lire comme un nombre aussi sûr qu'une ligne
-   à historique complet, sans avoir à lire la note en dessous. */
-.qty-input--warn { border-color: oklch(0.68 0.15 55); background: oklch(0.97 0.05 60); }
-.qty-input--warn:focus { border-color: oklch(0.55 0.15 55); }
+.coef-input:focus { border-color: var(--color-primary); }
+.coef-pct { position: absolute; right: 0.5rem; font-size: var(--text-xs); color: var(--color-muted); pointer-events: none; }
+.advanced-note { flex-basis: 100%; margin: 0; font-size: var(--text-xs); color: var(--color-muted); max-width: 70ch; }
+.advanced-note a { color: var(--color-primary-deep); }
 
-.qty-note { margin: 3px 0 0; font-size: var(--text-xs); color: var(--color-muted); text-align: right; }
-.qty-note--ok { color: oklch(0.48 0.13 150); }
-.qty-note--transit { color: oklch(0.55 0.15 60); font-weight: 600; cursor: help; }
-.qty-note--warn {
-  display: inline-block;
-  margin-top: 4px;
-  padding: 2px 7px;
-  font-weight: 700;
-  color: oklch(0.34 0.14 45);
-  background: oklch(0.93 0.09 60);
-  border: 1px solid oklch(0.72 0.14 55);
-  border-radius: var(--radius-sm);
-  cursor: help;
-}
-
-.td-mono  { font-family: var(--font-mono); color: var(--color-ink); white-space: nowrap; }
-.td-muted { color: var(--color-muted); }
-
-.cat-badge {
-  display: inline-block;
-  padding: 1px 7px;
-  border-radius: var(--radius-full);
-  font-size: 0.6875rem;
-  font-weight: 500;
-  white-space: nowrap;
-}
-.cat-badge--boissons    { background: oklch(0.93 0.05 220); color: oklch(0.35 0.10 220); }
-.cat-badge--snacks      { background: oklch(0.94 0.05 60);  color: oklch(0.40 0.12 60);  }
-.cat-badge--chips       { background: oklch(0.93 0.05 180); color: oklch(0.35 0.10 180); }
-.cat-badge--confiseries { background: oklch(0.93 0.06 330); color: oklch(0.40 0.12 330); }
-.cat-badge--divers      { background: oklch(0.93 0.05 275); color: oklch(0.40 0.12 275); }
-
-.totals-row td {
-  padding: var(--space-4);
-  border-top: 2px solid var(--color-border-strong);
-  background: var(--color-surface);
-  font-weight: 700;
-}
-.totals-label { color: var(--color-muted); text-transform: uppercase; font-size: var(--text-xs); letter-spacing: 0.05em; }
-.totals-cartons { font-size: 1.05rem; color: var(--color-ink); font-variant-numeric: tabular-nums; }
-.totals-units { margin: 2px 0 0; font-size: var(--text-xs); font-weight: 500; color: var(--color-muted); }
-.totals-cost { font-family: var(--font-mono); font-size: 1.05rem; color: var(--color-primary-deep); white-space: nowrap; }
-
-.no-results { padding: var(--space-8); text-align: center; font-size: var(--text-sm); color: var(--color-muted); }
-.footnote {
-  padding: var(--space-3) var(--space-4);
-  font-size: var(--text-xs);
-  font-style: italic;
-  color: var(--color-muted);
-  border-top: 1px solid var(--color-border);
-}
-
-.export-panel {
-  margin-top: var(--space-5);
-  padding: var(--space-4);
+.supplier-block {
   background: var(--color-bg);
-  border: 1px solid var(--color-border-strong);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
+  margin-bottom: var(--space-4);
+  overflow: hidden;
 }
-.export-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-3); flex-wrap: wrap; }
-.export-title { font-size: var(--text-base); font-weight: 600; color: var(--color-ink); margin: 0; }
-.export-actions { display: flex; gap: var(--space-2); }
-.export-text {
-  width: 100%;
-  padding: var(--space-3);
-  font-family: var(--font-mono);
+.supplier-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+.supplier-name { font-size: var(--text-lg); font-weight: 700; color: var(--color-ink); }
+.supplier-stats { margin: 2px 0 0; font-size: var(--text-sm); color: var(--color-muted); font-variant-numeric: tabular-nums; }
+
+.show-covered-btn {
+  display: block;
+  margin: 0 auto var(--space-6);
+  padding: 6px 14px;
   font-size: var(--text-xs);
-  line-height: 1.6;
-  color: var(--color-ink);
+  font-weight: 600;
+  color: var(--color-muted);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  resize: vertical;
+  border-radius: var(--radius-full);
+  cursor: pointer;
 }
-.export-hint { margin: var(--space-2) 0 0; font-size: var(--text-xs); color: oklch(0.48 0.13 150); }
+.show-covered-btn:hover { background: var(--color-surface-2); }
+
+.review-section {
+  margin-top: var(--space-6);
+  padding-top: var(--space-5);
+  border-top: 1px dashed var(--color-border-strong);
+}
+.review-title { font-size: var(--text-lg); font-weight: 700; color: var(--color-ink); }
+.review-intro { margin: 4px 0 var(--space-4); font-size: var(--text-sm); color: var(--color-muted); max-width: 80ch; }
+.review-rows {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
 
 .empty-state {
   background: var(--color-bg);
@@ -1013,12 +759,11 @@ const MODE_HELP: Record<ModeCommande, string> = {
   padding: var(--space-16) var(--space-8);
   text-align: center;
 }
-.empty-title { font-weight: 600; color: var(--color-ink); }
+.empty-title { font-weight: 600; color: var(--color-ink); margin-bottom: var(--space-2); }
+.empty-body { color: var(--color-muted); }
 
-@media (max-width: 780px) {
-  .settings-bar { flex-direction: column; align-items: stretch; }
-  .set--action { margin-left: 0; }
-  .set-input { width: 100%; }
-  .coef-input { width: 100%; }
+@media (max-width: 640px) {
+  .summary-row { flex-direction: column; align-items: flex-start; }
+  .supplier-head { flex-direction: column; align-items: flex-start; }
 }
 </style>
