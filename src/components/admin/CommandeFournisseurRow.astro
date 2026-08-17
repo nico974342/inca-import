@@ -117,7 +117,10 @@ const cost = p.pump != null ? p.pump * qty : null;
           🚢 {p.transitQty} carton{p.transitQty > 1 ? 's' : ''} en transit — non déduits
         </a>
       )}
-      {p.missingDelai && (
+      {/* Sur une ligne "à vérifier", le délai non confirmé est déjà repris
+          dans unreliableReason ci-dessus — un badge séparé ne ferait que
+          répéter la même information deux fois sur une ligne déjà chargée. */}
+      {p.reliable && p.missingDelai && (
         <span class="pr-badge pr-badge--warn" title="Aucun délai réel connu pour ce fournisseur — calculé sur le délai par défaut. Réglez-le sur /admin/fournisseurs">
           ⚠ délai fournisseur non renseigné
         </span>
@@ -183,6 +186,11 @@ const cost = p.pump != null ? p.pump * qty : null;
   text-decoration: none;
   white-space: nowrap;
 }
+/* .pr-badge et [hidden] ont la même spécificité (0,0,1,0) — sans cette
+   règle, la feuille auteur gagne le conflit et le badge de rupture (le seul
+   des badges toujours présent dans le DOM, pour rester recalculable en
+   direct) restait visible même avec l'attribut hidden correctement posé. */
+.pr-badge[hidden] { display: none; }
 .pr-badge--warn { color: oklch(0.34 0.14 45); background: oklch(0.93 0.09 60); border-color: oklch(0.72 0.14 55); }
 .pr-badge--danger { color: oklch(0.40 0.16 25); background: oklch(0.95 0.05 25); border-color: oklch(0.78 0.12 25); }
 .pr-badge--info { color: oklch(0.40 0.10 220); background: oklch(0.94 0.04 220); border-color: oklch(0.78 0.08 220); }

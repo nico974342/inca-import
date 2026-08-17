@@ -161,7 +161,13 @@ const rows = allProducts.map(p => {
 
   const arrivalWithMargin = estimatedArrivalWithMargin(delai.jours, joursSecurite, today);
   const rupture = estimatedRuptureDate(stockDisponible, vitesseAjustee, today);
-  const ruptureBeforeArrival = rupture != null && rupture.getTime() < arrivalWithMargin.getTime();
+  // hasSales gate : computeJoursAvantRupture (constants.ts, non modifié) renvoie
+  // 0 jour dès que le stock est ≤ 0, MÊME sans vitesse — un "0" qui veut dire
+  // "déjà à sec" pour un produit qui vend, mais qui n'a aucun sens pour un
+  // produit qui n'a jamais vendu. Sans ce filtre d'affichage, chaque produit à
+  // stock 0 et sans historique (la moitié de "à vérifier") affichait à tort
+  // une alerte de rupture.
+  const ruptureBeforeArrival = hasSales && rupture != null && rupture.getTime() < arrivalWithMargin.getTime();
 
   const pump = (p as any).prix_achat_moyen_ht != null ? Number((p as any).prix_achat_moyen_ht) : null;
   const upc = (p as any).units_per_carton ?? null;
@@ -172,6 +178,8 @@ const rows = allProducts.map(p => {
   const transitQty = transit?.qty ?? 0;
   const transitEtaLabel = transit?.eta ? fmtDate(new Date(transit.eta)) : null;
 
+  const missingDelai = delai.source === 'defaut';
+
   // ── Fiabilité : exactement les trois conditions demandées. Ne détermine
   //    QUE la section d'affichage (et l'avertissement) — la formule
   //    appliquée est toujours la même, fiable ou non, pour ne jamais
@@ -179,9 +187,16 @@ const rows = allProducts.map(p => {
   const reliable = hasReception && !shortHistory && hasSales;
   let unreliableReason: string | null = null;
   if (!reliable) {
-    if (!hasReception) unreliableReason = 'aucune réception enregistrée';
-    else if (shortHistory) unreliableReason = `historique court (${historyWeeks.toFixed(1)} sem.)`;
-    else unreliableReason = 'pas de ventes enregistrées sur la période';
+    // Sans réception, le fournisseur (et donc son délai) n'est jamais connu
+    // avec certitude — la mention est explicite pour que la quantité
+    // indicative ne soit jamais prise pour une recommandation fiable.
+    // Un produit avec réception mais dont le délai est quand même retombé
+    // sur le défaut (fournisseur non répertorié dans /admin/fournisseurs,
+    // par ex.) reçoit la même mention, ajoutée à sa raison propre.
+    const delaiClause = ' · fournisseur/délai non confirmé';
+    if (!hasReception) unreliableReason = `aucune réception enregistrée${delaiClause}`;
+    else if (shortHistory) unreliableReason = `historique court (${historyWeeks.toFixed(1)} sem.)${missingDelai ? delaiClause : ''}`;
+    else unreliableReason = `pas de ventes enregistrées sur la période${missingDelai ? delaiClause : ''}`;
   }
 
   // "Couvert" : une suggestion a été calculée et vaut 0 — masqué par défaut,
@@ -196,7 +211,7 @@ const rows = allProducts.map(p => {
     delai, cycle, joursSecurite,
     ruptureBeforeArrival, ruptureLabel: rupture ? fmtDate(rupture) : null,
     transitQty, transitEtaLabel,
-    pump, missingPump: pump == null, missingDelai: delai.source === 'defaut',
+    pump, missingPump: pump == null, missingDelai,
     unitsPerCarton: upc != null && upc > 0 ? upc : null,
     supplier: supplierName ?? UNGROUPED_LABEL,
     stockPhysique, stockReserve, stockDisponible,
@@ -348,8 +363,12 @@ const summaryCost = totalCartons === 0
   </button>
 
   {reviewRows.length > 0 && (
-    <section class="review-section">
-      <h2 class="review-title">À vérifier manuellement</h2>
+    // Replié par défaut : à 31 références, cette section pèse plus lourd que
+    // tout le reste de la page réuni. Rien à commander n'y attend — la garder
+    // ouverte par défaut alourdirait le premier coup d'œil sans rien apporter
+    // tant qu'on ne va pas explicitement la consulter.
+    <details class="review-section">
+      <summary class="review-title">À vérifier manuellement ({reviewRows.length})</summary>
       <p class="review-intro">
         Historique trop court, pas encore reçu, ou jamais vendu — la quantité affichée (quand elle existe) utilise
         la même formule, mais sur des données moins sûres. À valider vous-même avant de commander.
@@ -357,7 +376,7 @@ const summaryCost = totalCartons === 0
       <div class="review-rows">
         {reviewRows.map(p => <CommandeFournisseurRow p={p} showSupplierTag />)}
       </div>
-    </section>
+    </details>
   )}
 </AdminLayout>
 
@@ -433,7 +452,9 @@ const summaryCost = totalCartons === 0
     const arrivalMargin = addDays(addDays(now, delaiJours), securiteJours);
     const jar = joursAvantRupture(stock, vAdj);
     const rupture = jar == null ? null : addDays(now, jar);
-    const ruptureBeforeArrival = rupture != null && rupture.getTime() < arrivalMargin.getTime();
+    // Même filtre que côté serveur : un stock à 0 sans aucune vitesse ne
+    // déclenche pas l'alerte — voir le commentaire équivalent au chargement.
+    const ruptureBeforeArrival = hasSales && rupture != null && rupture.getTime() < arrivalMargin.getTime();
     const ruptureBadge = row.querySelector<HTMLElement>('[data-role="rupture-badge"]');
     if (ruptureBadge) ruptureBadge.hidden = !ruptureBeforeArrival;
 
@@ -737,13 +758,24 @@ const summaryCost = totalCartons === 0
   cursor: pointer;
 }
 .show-covered-btn:hover { background: var(--color-surface-2); }
+/* Même conflit de spécificité que .pr-badge[hidden] dans CommandeFournisseurRow —
+   sans ce garde-fou, un coefficient qui ramène le nombre de produits couverts à 0
+   laisserait le bouton visible malgré son attribut hidden. */
+.show-covered-btn[hidden] { display: none; }
 
 .review-section {
   margin-top: var(--space-6);
   padding-top: var(--space-5);
   border-top: 1px dashed var(--color-border-strong);
 }
-.review-title { font-size: var(--text-lg); font-weight: 700; color: var(--color-ink); }
+.review-title {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--color-ink);
+  cursor: pointer;
+  user-select: none;
+}
+.review-section[open] .review-title { margin-bottom: 4px; }
 .review-intro { margin: 4px 0 var(--space-4); font-size: var(--text-sm); color: var(--color-muted); max-width: 80ch; }
 .review-rows {
   background: var(--color-bg);
