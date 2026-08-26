@@ -61,6 +61,13 @@ const totalCartTTC = Object.entries(cartMap).reduce(
 const total   = products?.length ?? 0;
 const inStock = products?.filter(p => dispo(p.id) > 0).length ?? 0;
 
+// Côté client, les indisponibles descendent en fin de liste sans perturber
+// l'ordre (position, nom) au sein de chaque groupe : Array.sort est stable
+// depuis ES2019, donc un simple partitionnement suffit.
+const displayProducts = [...(products ?? [])].sort(
+  (a, b) => (dispo(a.id) > 0 ? 0 : 1) - (dispo(b.id) > 0 ? 0 : 1)
+);
+
 const CAT_LABEL: Record<string, string> = {
   boissons:    'Boissons',
   snacks:      'Snacks',
@@ -196,7 +203,7 @@ const productsMetaJSON = JSON.stringify(
       <div class="container">
         {products && products.length > 0 ? (
           <div class="products-grid" id="productsGrid">
-            {products.map(p => {
+            {displayProducts.map(p => {
               const priceFormatted = p.price_ht
                 ? Number(p.price_ht).toFixed(2).replace('.', ',')
                 : null;
