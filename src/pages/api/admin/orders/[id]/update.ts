@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
 import { logAdminAction } from '../../../../../lib/audit';
-import { findClientByEmail, applyRemise } from '../../../../../lib/clients';
+import { findClientByEmail, fetchClientPriceOverrides, resolveClientPrice } from '../../../../../lib/clients';
 import { isOrderEditable } from '../../../../../lib/constants';
 
 export const POST: APIRoute = async ({ params, request, cookies }) => {
@@ -71,10 +71,12 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
   }
   if (violations.length > 0) return redirectTo(`/admin/commandes/${id}/edit?error=stock`);
 
-  // New lines are priced from current product data, discounted the same way
-  // the order was originally priced (client's negotiated remise, if any).
-  const client = await findClientByEmail(order.email, 'remise');
-  const remisePct = (client as { remise: number | null } | null)?.remise ?? null;
+  // New lines are priced from current product data, resolved the same way
+  // the order was originally priced (client's price group, then their
+  // negotiated remise, if any).
+  const client = await findClientByEmail<{ remise: number | null; price_group_id: string | null }>(order.email, 'remise, price_group_id');
+  const remisePct = client?.remise ?? null;
+  const priceOverrides = await fetchClientPriceOverrides(client?.price_group_id ?? null);
 
   const added: Array<{ name: string; qty: number }> = [];
   const removed: Array<{ name: string; qty: number }> = [];
@@ -97,7 +99,7 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
         product_name:      prod.name,
         quantity:          qty,
         unit:              prod.unit,
-        price_ht_snapshot: applyRemise(prod.price_ht, remisePct),
+        price_ht_snapshot: resolveClientPrice(pid, prod.price_ht, priceOverrides, remisePct),
         tva_rate_snapshot: prod.tva_rate,
         pump_snapshot:     prod.prix_achat_moyen_ht,
       });

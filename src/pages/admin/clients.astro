@@ -148,14 +148,19 @@ const [
   { data: clientsRaw },
   { data: contactsRaw },
   { data: authUsersData },
+  { data: priceGroupsRaw },
 ] = await Promise.all([
   supabaseAdmin.from('client_accounts').select('*').order('created_at', { ascending: false }),
   supabaseAdmin.from('contact_requests').select('*').order('created_at', { ascending: false }),
   supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 }),
+  supabaseAdmin.from('price_groups').select('id, name, is_default'),
 ]);
 
 const clients  = clientsRaw  ?? [];
 const contacts = contactsRaw ?? [];
+
+const priceGroupNameById = new Map((priceGroupsRaw ?? []).map(g => [g.id, g.name]));
+const defaultGroupName   = (priceGroupsRaw ?? []).find(g => g.is_default)?.name ?? null;
 
 // Build a set of emails that have admin role in Supabase auth
 const adminEmailSet = new Set(
@@ -216,6 +221,7 @@ type Row = {
   created_at: string;
   isAdmin: boolean;
   notificationsEmail: boolean;
+  priceGroupLabel: string | null;
 };
 
 const allRows: Row[] = [
@@ -235,6 +241,9 @@ const allRows: Row[] = [
     created_at: c.created_at,
     isAdmin: !!(c.email && adminEmailSet.has(c.email)),
     notificationsEmail: (c as any).notifications_email !== false,
+    priceGroupLabel: (c as any).price_group_id
+      ? (priceGroupNameById.get((c as any).price_group_id) ?? null)
+      : (defaultGroupName ? `${defaultGroupName} (défaut)` : null),
   })),
   ...contacts
     .filter(ct => !convertedContactIds.has(ct.id))
@@ -254,6 +263,7 @@ const allRows: Row[] = [
       created_at: ct.created_at,
       isAdmin: false,
       notificationsEmail: true, // sans objet : un contact n'a pas de compte
+      priceGroupLabel: null, // sans objet : pas encore de fiche client
     })),
 ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
@@ -430,6 +440,7 @@ function formatDate(iso: string) {
             <th>Téléphone</th>
             <th>Email</th>
             <th>Point de vente</th>
+            <th>Groupe tarifaire</th>
             <th>Statut</th>
             <th>Accès</th>
             <th>Inscription</th>
@@ -467,6 +478,11 @@ function formatDate(iso: string) {
               <td class="td-mono">{r.telephone ?? '—'}</td>
               <td class="td-mono">{r.email ?? '—'}</td>
               <td>{r.pointsDeVente ?? '—'}</td>
+              <td>
+                {r.priceGroupLabel
+                  ? <span class="group-badge">{r.priceGroupLabel}</span>
+                  : (r.kind === 'client' ? <span class="td-muted">—</span> : null)}
+              </td>
               <td>
                 {r.kind === 'client' ? (
                   <form method="post" class="inline-form">
@@ -976,6 +992,17 @@ tr[data-pending="true"]:hover td {
   font-size: var(--text-xs);
   color: var(--color-muted);
   line-height: 1.4;
+}
+
+.group-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  background: oklch(0.93 0.05 220);
+  color: oklch(0.33 0.10 220);
+  white-space: nowrap;
 }
 
 .badge-admin {

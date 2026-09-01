@@ -1,0 +1,304 @@
+---
+import AdminLayout from '../../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../../lib/supabase';
+import { logAdminAction } from '../../../lib/audit';
+
+const { id } = Astro.params;
+const adminEmail = (Astro.locals as any).user?.email ?? 'inconnu';
+
+const { data: group } = await supabaseAdmin
+  .from('price_groups')
+  .select('id, name, is_default')
+  .eq('id', id)
+  .maybeSingle();
+
+if (!group) return Astro.redirect('/admin/tarifs');
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+
+  const toUpsert: { price_group_id: string; product_id: string; price_ht: number }[] = [];
+  const toDeleteProductIds: string[] = [];
+
+  for (const [key, val] of form.entries()) {
+    if (!key.startsWith('price_')) continue;
+    const productId = key.slice(6);
+    const raw = (val as string).trim();
+    if (raw === '') { toDeleteProductIds.push(productId); continue; }
+    const n = Number(raw.replace(',', '.'));
+    if (!Number.isFinite(n) || n < 0) continue;
+    toUpsert.push({ price_group_id: group.id, product_id: productId, price_ht: Math.round(n * 100) / 100 });
+  }
+
+  if (toUpsert.length > 0) {
+    await supabaseAdmin.from('price_group_items').upsert(toUpsert, { onConflict: 'price_group_id,product_id' });
+  }
+  if (toDeleteProductIds.length > 0) {
+    await supabaseAdmin.from('price_group_items').delete().eq('price_group_id', group.id).in('product_id', toDeleteProductIds);
+  }
+
+  await logAdminAction({
+    adminEmail, action: 'tarifs.prix_modifies',
+    targetType: 'price_group', targetId: group.id, targetLabel: group.name,
+    details: { produits_modifies: toUpsert.length, produits_retires: toDeleteProductIds.length },
+  });
+
+  return Astro.redirect(`/admin/tarifs/${group.id}?saved=1`);
+}
+
+const { data: productsRaw } = await supabaseAdmin
+  .from('products')
+  .select('id, name, category, unit, price_ht, in_stock')
+  .order('category', { ascending: true })
+  .order('name', { ascending: true });
+
+const { data: itemsRaw } = await supabaseAdmin
+  .from('price_group_items')
+  .select('product_id, price_ht')
+  .eq('price_group_id', group.id);
+
+const overrideByProduct = new Map((itemsRaw ?? []).map(it => [it.product_id, Number(it.price_ht)]));
+
+const CAT_LABEL: Record<string, string> = {
+  boissons: 'Boissons', snacks: 'Snacks', chips: 'Chips', confiseries: 'Confiseries', divers: 'Divers',
+};
+
+const products = (productsRaw ?? []).map(p => ({
+  id: p.id,
+  name: p.name,
+  category: p.category,
+  categoryLabel: CAT_LABEL[p.category] ?? p.category,
+  unit: p.unit ?? 'carton',
+  basePrice: p.price_ht != null ? Number(p.price_ht) : null,
+  override: overrideByProduct.get(p.id) ?? null,
+  inStock: p.in_stock !== false,
+}));
+
+const overrideCount = products.filter(p => p.override != null).length;
+const saved = !!Astro.url.searchParams.get('saved');
+---
+<AdminLayout title={`Tarifs — ${group.name}`} activeNav="tarifs">
+  <a href="/admin/tarifs" class="back-link">← Retour aux groupes tarifaires</a>
+
+  <div class="header-row">
+    <div>
+      <h2 class="group-title">
+        {group.name}
+        {group.is_default && <span class="badge-default">par défaut</span>}
+      </h2>
+      <p class="group-sub">{overrideCount} produit{overrideCount !== 1 ? 's' : ''} en écart sur {products.length}</p>
+    </div>
+  </div>
+
+  {saved && <div class="alert alert--ok" role="status">Prix enregistrés.</div>}
+
+  <p class="intro">
+    Laissez un champ vide pour qu'un produit retombe sur son prix catalogue (colonne « Prix de base »).
+    Seuls les produits avec un prix saisi ici diffèrent du catalogue pour ce groupe.
+  </p>
+
+  <div class="search-row">
+    <input type="search" id="productSearch" placeholder="Rechercher un produit…" class="search-input" aria-label="Rechercher un produit" />
+  </div>
+
+  <form method="post" id="pricesForm">
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Produit</th>
+            <th>Catégorie</th>
+            <th class="th-num">Prix de base</th>
+            <th class="th-num">Prix pour ce groupe</th>
+          </tr>
+        </thead>
+        <tbody id="productsBody">
+          {products.map(p => (
+            <tr class={`product-row${!p.inStock ? ' row--oos' : ''}`} data-search={p.name.toLowerCase()}>
+              <td class="td-strong">{p.name}{!p.inStock && <span class="oos-tag">indisponible</span>}</td>
+              <td class="td-muted">{p.categoryLabel}</td>
+              <td class="th-num td-muted">{p.basePrice != null ? `${p.basePrice.toFixed(2).replace('.', ',')} €` : '—'}</td>
+              <td class="th-num">
+                <input
+                  type="number"
+                  name={`price_${p.id}`}
+                  class="price-input"
+                  min="0"
+                  step="0.01"
+                  placeholder={p.basePrice != null ? p.basePrice.toFixed(2) : '0.00'}
+                  value={p.override != null ? p.override.toFixed(2) : ''}
+                  aria-label={`Prix pour ${p.name} dans ce groupe`}
+                />
+                <span class="unit">€</span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p class="no-results" id="noResults" hidden>Aucun produit ne correspond à votre recherche.</p>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Enregistrer les prix</button>
+    </div>
+  </form>
+</AdminLayout>
+
+<script>
+  const searchInput = document.getElementById('productSearch') as HTMLInputElement;
+  const rows         = document.querySelectorAll<HTMLTableRowElement>('.product-row');
+  const noResults    = document.getElementById('noResults') as HTMLElement;
+
+  searchInput?.addEventListener('input', () => {
+    const q = searchInput.value.trim().toLowerCase();
+    let visible = 0;
+    rows.forEach(row => {
+      const show = !q || (row.dataset.search ?? '').includes(q);
+      row.hidden = !show;
+      if (show) visible++;
+    });
+    noResults.hidden = visible > 0;
+  });
+</script>
+
+<style>
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-muted);
+  text-decoration: none;
+  margin-bottom: var(--space-4);
+  transition: color var(--dur-fast);
+}
+.back-link:hover { color: var(--color-ink); }
+
+.header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.group-title {
+  font-family: var(--font-display);
+  font-size: 1.375rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--color-ink);
+  margin: 0 0 var(--space-1);
+}
+.group-sub {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  margin: 0;
+}
+
+.badge-default {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: oklch(0.42 0.14 60);
+  background: oklch(0.95 0.06 60);
+  vertical-align: middle;
+}
+
+.alert {
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  font-size: var(--text-sm);
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+}
+.alert--ok { color: oklch(0.40 0.12 150); background: oklch(0.96 0.04 150); border-color: oklch(0.86 0.08 150); }
+
+.intro {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  margin-bottom: var(--space-4);
+  max-width: 74ch;
+  line-height: 1.6;
+}
+
+.search-row { margin-bottom: var(--space-4); }
+.search-input {
+  width: 100%;
+  max-width: 360px;
+  padding: 0.5rem 0.875rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  min-height: 40px;
+  outline: none;
+}
+.search-input:focus { border-color: var(--color-primary); }
+
+.table-wrap {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+.data-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.data-table thead th {
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+.th-num { text-align: right; }
+.data-table tbody td {
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+.data-table tbody tr:last-child td { border-bottom: none; }
+.td-strong { font-weight: 500; color: var(--color-ink); }
+.td-muted  { color: var(--color-muted); }
+.row--oos td { color: var(--color-muted); }
+.oos-tag {
+  margin-left: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-muted);
+}
+
+.price-input {
+  width: 90px;
+  padding: 0.375rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  text-align: right;
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+.price-input:focus { border-color: var(--color-primary); }
+.unit { margin-left: var(--space-2); font-size: var(--text-xs); color: var(--color-muted); }
+
+.no-results {
+  padding: var(--space-6);
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+
+.form-actions {
+  display: flex;
+  margin-top: var(--space-5);
+}
+</style>

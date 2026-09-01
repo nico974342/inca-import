@@ -4,7 +4,7 @@ import { supabaseAdmin } from '../../lib/supabase';
 import { Resend } from 'resend';
 import { generateOrderPDF } from '../../lib/pdf';
 import { sanitizeText } from '../../lib/sanitize';
-import { normalizeEmail, applyRemise } from '../../lib/clients';
+import { normalizeEmail, fetchClientPriceOverrides, resolveClientPrice, fetchPriceGroupOverrides, resolveEffectiveGroupId } from '../../lib/clients';
 import { createOrderChecked, describeConflicts, fetchAvailability, sellableQty } from '../../lib/stock';
 import { COMPANY, RESEND_DEFAULT_FROM } from '../../lib/constants';
 import { logAdminAction } from '../../lib/audit';
@@ -19,7 +19,7 @@ if (Astro.request.method === 'POST') {
 
   const [clientKind, clientId] = (clientIdRaw ?? '').split(':');
 
-  let client: { nom: string; societe: string | null; email: string | null; telephone: string | null; points_de_vente?: string | null; remise?: number | null } | null = null;
+  let client: { nom: string; societe: string | null; email: string | null; telephone: string | null; points_de_vente?: string | null; remise?: number | null; price_group_id?: string | null } | null = null;
 
   if (clientKind === 'contact') {
     const { data } = await supabaseAdmin
@@ -31,7 +31,7 @@ if (Astro.request.method === 'POST') {
   } else if (clientKind === 'client') {
     const { data } = await supabaseAdmin
       .from('client_accounts')
-      .select('nom, societe, email, telephone, points_de_vente, remise')
+      .select('nom, societe, email, telephone, points_de_vente, remise, price_group_id')
       .eq('id', clientId)
       .single();
     client = data;
@@ -39,6 +39,7 @@ if (Astro.request.method === 'POST') {
 
   if (!client) return Astro.redirect('/admin/commande-rapide?error=client');
   const remisePct = client.remise ?? null;
+  const priceOverrides = await fetchClientPriceOverrides(client.price_group_id ?? null);
 
   // Build product map for price lookup
   const { data: allProducts } = await supabaseAdmin
@@ -62,9 +63,9 @@ if (Astro.request.method === 'POST') {
       const p = productMap[productId];
       orderItems.push({
         product_id: productId, product_name: p.name, quantity: qty, unit: p.unit,
-        // price includes the client's negotiated remise; PUMP stays the
-        // real cost so margin math on this order is unaffected by it
-        price_ht: applyRemise(p.price_ht, remisePct), tva_rate: p.tva_rate, pump: p.prix_achat_moyen_ht,
+        // price includes the client's price group then negotiated remise;
+        // PUMP stays the real cost so margin math on this order is unaffected
+        price_ht: resolveClientPrice(productId, p.price_ht, priceOverrides, remisePct), tva_rate: p.tva_rate, pump: p.prix_achat_moyen_ht,
       });
     }
   }
@@ -184,7 +185,7 @@ const errorType = Astro.url.searchParams.get('error');
 
 const { data: clientAccounts } = await supabaseAdmin
   .from('client_accounts')
-  .select('id, nom, societe, email, points_de_vente, contact_request_id, remise')
+  .select('id, nom, societe, email, points_de_vente, contact_request_id, remise, price_group_id')
   .eq('status', 'actif')
   .order('nom', { ascending: true });
 
@@ -196,14 +197,28 @@ const { data: convertedContacts } = await supabaseAdmin
 
 const linkedContactIds = new Set((clientAccounts ?? []).map(c => c.contact_request_id).filter(Boolean));
 
+// One override map fetched per distinct effective group, not per client —
+// most clients share either their own group or the default one.
+const overridesCache = new Map<string, Map<string, number>>();
+async function overridesForGroup(groupId: string | null): Promise<Map<string, number>> {
+  if (!groupId) return new Map();
+  if (!overridesCache.has(groupId)) overridesCache.set(groupId, await fetchPriceGroupOverrides(groupId));
+  return overridesCache.get(groupId)!;
+}
+const defaultGroupId = await resolveEffectiveGroupId(null);
+
 const clients = [
-  ...(clientAccounts ?? []).map(c => ({
-    value: `client:${c.id}`, nom: c.nom, societe: c.societe ?? '', pdv: c.points_de_vente ?? '',
-    remise: c.remise ?? null,
+  ...await Promise.all((clientAccounts ?? []).map(async c => {
+    const overrides = await overridesForGroup(c.price_group_id ?? defaultGroupId);
+    return {
+      value: `client:${c.id}`, nom: c.nom, societe: c.societe ?? '', pdv: c.points_de_vente ?? '',
+      remise: c.remise ?? null,
+      overrides: Object.fromEntries(overrides),
+    };
   })),
   ...(convertedContacts ?? [])
     .filter(ct => !linkedContactIds.has(ct.id))
-    .map(ct => ({ value: `contact:${ct.id}`, nom: ct.nom, societe: ct.societe ?? '', pdv: '', remise: null })),
+    .map(ct => ({ value: `contact:${ct.id}`, nom: ct.nom, societe: ct.societe ?? '', pdv: '', remise: null, overrides: {} as Record<string, number> })),
 ].sort((a, b) => a.nom.localeCompare(b.nom));
 
 const { data: productsRaw } = await supabaseAdmin
@@ -381,9 +396,14 @@ const PRODUCTS_JSON = JSON.stringify(products);
   const qty = {}; // productId -> quantity
   let selectedClient = null;
 
-  // Mirrors lib/clients.ts applyRemise() — keeps the live preview in sync
-  // with the discounted price that will actually be saved on the order.
-  function discountedPrice(price) {
+  // Mirrors lib/clients.ts resolveClientPrice() — keeps the live preview in
+  // sync with the price that will actually be saved on the order: the
+  // client's price group override, if any, then their negotiated remise.
+  function discountedPrice(productId, basePrice) {
+    const overrides = selectedClient && selectedClient.overrides;
+    const price = (overrides && Object.prototype.hasOwnProperty.call(overrides, productId))
+      ? overrides[productId]
+      : basePrice;
     const pct = selectedClient && selectedClient.remise;
     if (!pct) return price;
     return Math.round(price * (1 - pct / 100) * 10000) / 10000;
@@ -590,7 +610,7 @@ const PRODUCTS_JSON = JSON.stringify(products);
     products.forEach(p => {
       const q = qty[p.id] || 0;
       count += q;
-      total += q * discountedPrice(p.price);
+      total += q * discountedPrice(p.id, p.price);
     });
     submitCount.textContent = count + (count === 1 ? ' article' : ' articles');
     submitTotal.textContent = total.toFixed(2).replace('.', ',') + ' € HT';
@@ -622,14 +642,14 @@ const PRODUCTS_JSON = JSON.stringify(products);
     confirmClientName.textContent = selectedClient.nom + (selectedClient.societe ? ' — ' + selectedClient.societe : '');
     confirmItems.innerHTML = items.map(p => {
       const q = qty[p.id];
-      const lineTotal = (q * discountedPrice(p.price)).toFixed(2).replace('.', ',');
+      const lineTotal = (q * discountedPrice(p.id, p.price)).toFixed(2).replace('.', ',');
       return '<div style="display:flex;justify-content:space-between;gap:10px;font-size:15px;">' +
         '<span style="color:var(--color-ink);">' + escapeHtml(p.name) + ' × ' + q + '</span>' +
         '<span style="font-weight:600;color:var(--color-ink);white-space:nowrap;">' + lineTotal + ' €</span>' +
       '</div>';
     }).join('');
 
-    const total = items.reduce((s, p) => s + qty[p.id] * discountedPrice(p.price), 0);
+    const total = items.reduce((s, p) => s + qty[p.id] * discountedPrice(p.id, p.price), 0);
     confirmTotal.textContent = total.toFixed(2).replace('.', ',') + ' €';
 
     confirmOverlay.style.display = 'flex';

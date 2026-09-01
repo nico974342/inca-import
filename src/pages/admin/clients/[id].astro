@@ -45,6 +45,9 @@ if (Astro.request.method === 'POST') {
   const remiseRaw = (data.get('remise') as string)?.trim();
   const remise    = remiseRaw ? parseFloat(remiseRaw) : null;
 
+  const priceGroupIdRaw = (data.get('price_group_id') as string)?.trim();
+  const price_group_id  = priceGroupIdRaw || null;
+
   const conditionsRaw       = (data.get('conditions_paiement') as string)?.trim();
   const conditions_paiement = ['comptant', '30j', '60j'].includes(conditionsRaw) ? conditionsRaw : null;
 
@@ -85,6 +88,7 @@ if (Astro.request.method === 'POST') {
         facturation_code_postal: facturation_same ? null : (facturation_cp || null),
         facturation_ville: facturation_same ? null : (facturation_ville || null),
         remise,
+        price_group_id,
         conditions_paiement,
         plafond_credit,
         notifications_email,
@@ -245,6 +249,11 @@ const hasAuthAccount = !!authUserId;
 const isAdminRole = hasAuthAccount && authRole !== 'client';
 
 const roleError = Astro.url.searchParams.get('role_error');
+
+const { data: priceGroups } = await supabaseAdmin
+  .from('price_groups')
+  .select('id, name, is_default')
+  .order('name', { ascending: true });
 ---
 <AdminLayout title={`Client — ${client.nom}`} activeNav="clients">
   <a href="/admin/clients" class="back-link">← Retour aux clients</a>
@@ -502,11 +511,24 @@ const roleError = Astro.url.searchParams.get('role_error');
       </div>
 
       <h3 class="subsection-title">Conditions commerciales</h3>
-      <div class="field-group field-group--3">
+      <div class="field-group">
+        <div class="field">
+          <label for="price_group_id">Groupe tarifaire</label>
+          <select id="price_group_id" name="price_group_id">
+            <option value="" selected={!(client as any).price_group_id}>Grille par défaut</option>
+            {(priceGroups ?? []).map(g => (
+              <option value={g.id} selected={(client as any).price_group_id === g.id}>
+                {g.name}{g.is_default ? ' (par défaut)' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
         <div class="field">
           <label for="remise">Remise (%)</label>
           <input type="number" id="remise" name="remise" step="0.5" min="0" max="100" value={client.remise ?? ''} placeholder="0" />
         </div>
+      </div>
+      <div class="field-group field-group--3">
         <div class="field">
           <label for="conditions_paiement">Conditions de paiement</label>
           <select id="conditions_paiement" name="conditions_paiement">

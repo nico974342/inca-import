@@ -56,3 +56,57 @@ export function applyRemise(priceHt: number | null | undefined, remisePct: numbe
   if (!remisePct) return priceHt;
   return Math.round(priceHt * (1 - remisePct / 100) * 10000) / 10000;
 }
+
+/**
+ * The price group a client actually resolves against: their own if set,
+ * otherwise whichever group is marked is_default. Returns null when the
+ * client has no group AND no group is default — the caller then falls
+ * straight back to products.price_ht, unchanged from before price groups.
+ */
+export async function resolveEffectiveGroupId(clientPriceGroupId: string | null | undefined): Promise<string | null> {
+  if (clientPriceGroupId) return clientPriceGroupId;
+  const { data } = await supabaseAdmin
+    .from('price_groups')
+    .select('id')
+    .eq('is_default', true)
+    .maybeSingle();
+  return data?.id ?? null;
+}
+
+/** product_id -> price_ht overrides for one price group. Empty map for a null group. */
+export async function fetchPriceGroupOverrides(groupId: string | null): Promise<Map<string, number>> {
+  const overrides = new Map<string, number>();
+  if (!groupId) return overrides;
+  const { data } = await supabaseAdmin
+    .from('price_group_items')
+    .select('product_id, price_ht')
+    .eq('price_group_id', groupId);
+  for (const row of data ?? []) overrides.set(row.product_id, Number(row.price_ht));
+  return overrides;
+}
+
+/** One round trip: resolves the client's effective group, then its price overrides. */
+export async function fetchClientPriceOverrides(clientPriceGroupId: string | null | undefined): Promise<Map<string, number>> {
+  const groupId = await resolveEffectiveGroupId(clientPriceGroupId);
+  return fetchPriceGroupOverrides(groupId);
+}
+
+/** Base price adjusted by the price group, before remise — falls back to price_ht when the product has no override line. */
+export function resolveGroupPrice(
+  productId: string,
+  basePriceHt: number | null | undefined,
+  overrides: Map<string, number>,
+): number | null {
+  if (basePriceHt == null) return null;
+  return overrides.get(productId) ?? basePriceHt;
+}
+
+/** The price a client actually pays for a product: price group, then remise. */
+export function resolveClientPrice(
+  productId: string,
+  basePriceHt: number | null | undefined,
+  overrides: Map<string, number>,
+  remisePct: number | null | undefined,
+): number | null {
+  return applyRemise(resolveGroupPrice(productId, basePriceHt, overrides), remisePct);
+}

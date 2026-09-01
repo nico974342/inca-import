@@ -3,6 +3,7 @@ import Base from '../../layouts/Base.astro';
 import Nav from '../../components/Nav.astro';
 import Footer from '../../components/Footer.astro';
 import { supabaseAdmin, createAuthClient } from '../../lib/supabase';
+import { fetchClientPriceOverrides, resolveClientPrice } from '../../lib/clients';
 
 const { slug } = Astro.params;
 
@@ -29,6 +30,17 @@ if (isClient && user) {
   cartQty = cartRow?.quantity ?? 0;
 }
 
+let resolvedPrice: number | null = null;
+if (isClient && user?.email) {
+  const { data: acct } = await supabaseAdmin
+    .from('client_accounts')
+    .select('remise, price_group_id')
+    .eq('email', user.email)
+    .maybeSingle();
+  const overrides = await fetchClientPriceOverrides((acct as any)?.price_group_id ?? null);
+  resolvedPrice = resolveClientPrice(product.id, product.price_ht, overrides, acct?.remise ?? null);
+}
+
 const CAT_LABEL: Record<string, string> = {
   boissons:    'Boissons',
   snacks:      'Snacks',
@@ -47,8 +59,8 @@ const CAT_BG: Record<string, string> = {
 
 const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
 
-const unitPriceHT = (product.price_ht != null && product.units_per_carton)
-  ? Number(product.price_ht) / product.units_per_carton
+const unitPriceHT = (resolvedPrice != null && product.units_per_carton)
+  ? resolvedPrice / product.units_per_carton
   : null;
 ---
 <Base
@@ -146,12 +158,12 @@ const unitPriceHT = (product.price_ht != null && product.units_per_carton)
                 <dd>{product.sku}</dd>
               </div>
             )}
-            {isClient && product.price_ht != null && (
+            {isClient && resolvedPrice != null && (
               <div class="attr-row attr-row--price">
                 <dt>Prix HT</dt>
                 <dd>
                   <div class="price-value-wrap">
-                    <span class="price-value">{fmtHT(Number(product.price_ht))}<span class="price-value-suffix"> /{product.unit ?? 'carton'}</span></span>
+                    <span class="price-value">{fmtHT(resolvedPrice)}<span class="price-value-suffix"> /{product.unit ?? 'carton'}</span></span>
                     {unitPriceHT != null && (
                       <span class="price-secondary">soit {fmtHT(unitPriceHT)} /unité</span>
                     )}
@@ -174,7 +186,7 @@ const unitPriceHT = (product.price_ht != null && product.units_per_carton)
               id="cartArea"
               data-product-id={product.id}
               data-initial-qty={cartQty}
-              data-price={Number(product.price_ht ?? 0)}
+              data-price={Number(resolvedPrice ?? 0)}
               data-stock={product.stock_quantity !== null ? String(product.stock_quantity) : ''}
               data-unit={product.unit ?? 'carton'}
             >
