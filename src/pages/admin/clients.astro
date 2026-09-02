@@ -52,9 +52,21 @@ if (Astro.request.method === 'POST') {
     const id     = data.get('id')     as string;
     const status = data.get('status') as string;
     const notes  = sanitizeText(data.get('notes') as string, 500);
+
+    // Only the inline "Groupe tarifaire" selector on the list sends this
+    // field — absent (null) means "this form doesn't touch the group",
+    // distinct from an empty string which means "grille par défaut".
+    const priceGroupIdField = data.get('price_group_id');
+    const hasPriceGroupField = priceGroupIdField !== null;
+    const price_group_id = hasPriceGroupField ? ((priceGroupIdField as string) || null) : undefined;
+
     if (id && status) {
-      const { data: prev } = await supabaseAdmin.from('client_accounts').select('nom, societe, status').eq('id', id).single();
-      await supabaseAdmin.from('client_accounts').update({ status, notes: notes || null }).eq('id', id);
+      const { data: prev } = await supabaseAdmin.from('client_accounts').select('nom, societe, status, price_group_id').eq('id', id).single();
+
+      const update: Record<string, unknown> = { status, notes: notes || null };
+      if (hasPriceGroupField) update.price_group_id = price_group_id;
+      await supabaseAdmin.from('client_accounts').update(update).eq('id', id);
+
       if (prev && prev.status !== status) {
         await logAdminAction({
           adminEmail,
@@ -63,6 +75,23 @@ if (Astro.request.method === 'POST') {
           targetId: id,
           targetLabel: prev.societe ?? prev.nom,
           details: { ancien: prev.status, nouveau: status },
+        });
+      }
+
+      if (hasPriceGroupField && prev && (prev as any).price_group_id !== price_group_id) {
+        const groupIds = [(prev as any).price_group_id, price_group_id].filter(Boolean) as string[];
+        const { data: groupsInfo } = groupIds.length
+          ? await supabaseAdmin.from('price_groups').select('id, name').in('id', groupIds)
+          : { data: [] as { id: string; name: string }[] };
+        const nameById = new Map((groupsInfo ?? []).map(g => [g.id, g.name]));
+        const labelFor = (gid: string | null | undefined) => gid ? (nameById.get(gid) ?? gid) : 'Grille par défaut';
+        await logAdminAction({
+          adminEmail,
+          action: 'client.groupe_tarifaire',
+          targetType: 'client',
+          targetId: id,
+          targetLabel: prev.societe ?? prev.nom,
+          details: { ancien: labelFor((prev as any).price_group_id), nouveau: labelFor(price_group_id) },
         });
       }
     }
@@ -158,9 +187,7 @@ const [
 
 const clients  = clientsRaw  ?? [];
 const contacts = contactsRaw ?? [];
-
-const priceGroupNameById = new Map((priceGroupsRaw ?? []).map(g => [g.id, g.name]));
-const defaultGroupName   = (priceGroupsRaw ?? []).find(g => g.is_default)?.name ?? null;
+const priceGroups = priceGroupsRaw ?? [];
 
 // Build a set of emails that have admin role in Supabase auth
 const adminEmailSet = new Set(
@@ -221,7 +248,7 @@ type Row = {
   created_at: string;
   isAdmin: boolean;
   notificationsEmail: boolean;
-  priceGroupLabel: string | null;
+  priceGroupId: string | null;
 };
 
 const allRows: Row[] = [
@@ -241,9 +268,7 @@ const allRows: Row[] = [
     created_at: c.created_at,
     isAdmin: !!(c.email && adminEmailSet.has(c.email)),
     notificationsEmail: (c as any).notifications_email !== false,
-    priceGroupLabel: (c as any).price_group_id
-      ? (priceGroupNameById.get((c as any).price_group_id) ?? null)
-      : (defaultGroupName ? `${defaultGroupName} (défaut)` : null),
+    priceGroupId: (c as any).price_group_id ?? null,
   })),
   ...contacts
     .filter(ct => !convertedContactIds.has(ct.id))
@@ -263,7 +288,7 @@ const allRows: Row[] = [
       created_at: ct.created_at,
       isAdmin: false,
       notificationsEmail: true, // sans objet : un contact n'a pas de compte
-      priceGroupLabel: null, // sans objet : pas encore de fiche client
+      priceGroupId: null, // sans objet : pas encore de fiche client
     })),
 ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
@@ -444,7 +469,6 @@ function formatDate(iso: string) {
             <th>Statut</th>
             <th>Accès</th>
             <th>Inscription</th>
-            <th>Notes</th>
             <th></th>
           </tr>
         </thead>
@@ -479,9 +503,44 @@ function formatDate(iso: string) {
               <td class="td-mono">{r.email ?? '—'}</td>
               <td>{r.pointsDeVente ?? '—'}</td>
               <td>
-                {r.priceGroupLabel
-                  ? <span class="group-badge">{r.priceGroupLabel}</span>
-                  : (r.kind === 'client' ? <span class="td-muted">—</span> : null)}
+                {r.kind === 'client' ? (
+                  <form method="post" class="inline-form">
+                    <input type="hidden" name="action" value="update_client" />
+                    <input type="hidden" name="id"     value={r.id} />
+                    <input type="hidden" name="status" value={r.status} />
+                    <input type="hidden" name="notes"  value={r.notes ?? ''} />
+                    <select
+                      name="price_group_id"
+                      class="group-select"
+                      onchange="this.form.submit()"
+                      aria-label="Changer le groupe tarifaire"
+                    >
+                      <option value="" selected={!r.priceGroupId}>Grille par défaut</option>
+                      {priceGroups.map(g => (
+                        <option value={g.id} selected={r.priceGroupId === g.id}>
+                          {g.name}{g.is_default ? ' (par défaut)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </form>
+                ) : (
+                  // Les demandes de contact n'ont pas de fiche dédiée — ce
+                  // même emplacement de colonne leur sert à noter le suivi,
+                  // faute d'un autre endroit où le faire.
+                  <form method="post" class="notes-form">
+                    <input type="hidden" name="action" value="update_contact_notes" />
+                    <input type="hidden" name="id"     value={r.id} />
+                    <input
+                      type="text"
+                      name="notes"
+                      class="notes-input"
+                      value={r.notes ?? ''}
+                      placeholder="Notes de suivi…"
+                      aria-label="Notes de suivi pour ce contact"
+                    />
+                    <button type="submit" class="notes-save" aria-label="Enregistrer">✓</button>
+                  </form>
+                )}
               </td>
               <td>
                 {r.kind === 'client' ? (
@@ -510,25 +569,6 @@ function formatDate(iso: string) {
                 )}
               </td>
               <td class="td-muted">{formatDate(r.created_at)}</td>
-              <td>
-                <form
-                  method="post"
-                  class="notes-form"
-                >
-                  <input type="hidden" name="action" value={r.kind === 'client' ? 'update_client' : 'update_contact_notes'} />
-                  <input type="hidden" name="id"      value={r.id} />
-                  {r.kind === 'client' && <input type="hidden" name="status" value={r.status} />}
-                  <input
-                    type="text"
-                    name="notes"
-                    class="notes-input"
-                    value={r.notes ?? ''}
-                    placeholder="Notes…"
-                    aria-label="Notes"
-                  />
-                  <button type="submit" class="notes-save" aria-label="Enregistrer">✓</button>
-                </form>
-              </td>
               <td class="td-actions">
                 {r.kind === 'contact' && r.status !== 'converti' && (
                   <form method="post">
@@ -825,11 +865,29 @@ tr[data-pending="true"]:hover td {
   text-align: center;
 }
 
+.group-select {
+  min-width: 150px;
+  max-width: 200px;
+  padding: 4px 8px;
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: var(--color-ink);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  min-height: 30px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color var(--dur-fast);
+}
+.group-select:focus { border-color: var(--color-primary); }
+.group-select:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+
 .notes-form {
   display: flex;
   gap: var(--space-2);
   align-items: center;
-  min-width: 180px;
+  min-width: 150px;
 }
 
 .notes-input {
@@ -992,17 +1050,6 @@ tr[data-pending="true"]:hover td {
   font-size: var(--text-xs);
   color: var(--color-muted);
   line-height: 1.4;
-}
-
-.group-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: var(--radius-full);
-  font-size: var(--text-xs);
-  font-weight: 500;
-  background: oklch(0.93 0.05 220);
-  color: oklch(0.33 0.10 220);
-  white-space: nowrap;
 }
 
 .badge-admin {
