@@ -6,6 +6,7 @@ import {
   marginColorClass, REAPPRO_WEEKS_LOOKBACK, computeVitesseVente,
   computeJoursAvantRupture, computeSuggestedReorderQty, isApproachingOrBelowSeuil,
 } from '../../../../lib/constants';
+import { formatDateReunion } from '../../../../lib/datetime';
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'];
 
@@ -317,7 +318,7 @@ if (Astro.request.method === 'POST') {
             const rec = h.stock_receptions ?? {};
             return (
               <tr>
-                <td class="td-date">{new Date(rec.received_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })}</td>
+                <td class="td-date">{formatDateReunion(rec.received_at)}</td>
                 <td class="td-supplier">{rec.supplier_name ?? '—'}</td>
                 <td class="td-num">{h.quantity}</td>
                 <td class="td-num">{Number(h.unit_cost_ht).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2 })}</td>

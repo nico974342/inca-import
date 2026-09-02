@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
 import { logAdminAction } from '../../../../../lib/audit';
+import { todayReunionISO } from '../../../../../lib/datetime';
 
 export const POST: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -42,7 +43,8 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
     return Response.redirect(new URL(editUrl, request.url), 303);
   }
 
-  const todayStr        = new Date().toISOString().slice(0, 10);
+  // "Aujourd'hui" heure de La Réunion, pas UTC (serveur) — voir create.ts.
+  const todayStr        = todayReunionISO();
   const newStockApplied = receivedAt >= todayStr;
 
   // Atomic RPC: reverses previously-applied stock, replaces items, updates

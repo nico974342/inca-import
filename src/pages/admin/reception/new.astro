@@ -1,13 +1,14 @@
 ---
 import AdminLayout from '../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../lib/supabase';
+import { todayReunionISO } from '../../../lib/datetime';
 
 const { data: products } = await supabaseAdmin
   .from('products')
   .select('id, name, sku, stock_quantity, prix_achat_moyen_ht')
   .order('name');
 
-const today = new Date().toISOString().split('T')[0];
+const today = todayReunionISO();
 const preselectProductId = Astro.url.searchParams.get('product') ?? null;
 
 // ── Pré-remplissage depuis une expédition en transit. C'est ici, et

@@ -1,6 +1,7 @@
 import { Resend } from 'resend';
 import { COMPANY, RESEND_DEFAULT_FROM, DEFAULT_TVA_RATE, ORDER_STATUS_LABEL } from './constants';
 import { findClientByEmail } from './clients';
+import { REUNION_TIMEZONE } from './datetime';
 
 const API_KEY  = import.meta.env.RESEND_API_KEY as string | undefined;
 const FROM     = (import.meta.env.RESEND_FROM as string | undefined) ?? RESEND_DEFAULT_FROM;
@@ -36,18 +37,18 @@ const STATUS_STYLE: Record<string, StatusStyle> = {
   annulee:        { badgeBg: '#FEE2E2', badgeColor: '#B91C1C', bannerBg: '#FFF5F5', icon: '❌' },
 };
 
-const MONTHS_FR = [
-  'janvier','février','mars','avril','mai','juin',
-  'juillet','août','septembre','octobre','novembre','décembre',
-];
-
+// Heure de La Réunion, pas celle du serveur (Vercel tourne en UTC) — sinon
+// l'heure affichée dans les emails clients traîne 4h derrière la réalité.
 function frenchDate(raw: Date | string | null | undefined): string | null {
   if (!raw) return null;
   const d = typeof raw === 'string' ? new Date(raw) : raw;
   if (isNaN(d.getTime())) return null;
-  const h = d.getHours().toString().padStart(2, '0');
-  const m = d.getMinutes().toString().padStart(2, '0');
-  return `${d.getDate()} ${MONTHS_FR[d.getMonth()]} ${d.getFullYear()} à ${h}h${m}`;
+  const parts = new Intl.DateTimeFormat('fr-FR', {
+    timeZone: REUNION_TIMEZONE,
+    day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(d);
+  const get = (type: string) => parts.find(p => p.type === type)?.value ?? '';
+  return `${get('day')} ${get('month')} ${get('year')} à ${get('hour')}h${get('minute')}`;
 }
 
 function fmt(n: number): string {

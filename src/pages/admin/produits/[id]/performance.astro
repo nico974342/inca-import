@@ -6,6 +6,7 @@ import {
   REAPPRO_WEEKS_LOOKBACK, computeVitesseVente, computeJoursAvantRupture,
   computeSuggestedReorderQty, isApproachingOrBelowSeuil,
 } from '../../../../lib/constants';
+import { formatDateReunion } from '../../../../lib/datetime';
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'];
 
@@ -295,7 +296,7 @@ const bars = monthDefs.map((m, i) => {
               const rec = h.stock_receptions ?? {};
               return (
                 <tr>
-                  <td class="td-muted">{new Date(rec.received_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })}</td>
+                  <td class="td-muted">{formatDateReunion(rec.received_at)}</td>
                   <td class="td-strong">{rec.supplier_name ?? '—'}</td>
                   <td class="th-num td-mono">{h.quantity}</td>
                   <td class="th-num td-mono">{formatPrice(Number(h.unit_cost_ht))}</td>

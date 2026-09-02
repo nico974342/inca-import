@@ -2,6 +2,7 @@ import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
 import { generatePDVDeliveryPDF } from '../../../../../lib/pdf';
 import { findClientByEmail } from '../../../../../lib/clients';
+import { formatDateReunion } from '../../../../../lib/datetime';
 
 export const GET: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -49,9 +50,7 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
     client = data;
   }
 
-  const date = new Date(order.created_at).toLocaleDateString('fr-FR', {
-    day: '2-digit', month: '2-digit', year: 'numeric',
-  });
+  const date = formatDateReunion(order.created_at);
 
   const villePostal = [client?.livraison_code_postal, client?.livraison_ville].filter(Boolean).join(' ') || null;
   const addrParts   = [client?.livraison_rue, villePostal, 'La Réunion'].filter(Boolean);

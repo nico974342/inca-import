@@ -5,6 +5,7 @@ import { sendLowStockAlert, sendOrderStatusEmail } from '../../lib/email';
 import { sendOrderConfirmedWebhook } from '../../lib/webhooks';
 import { logAdminAction } from '../../lib/audit';
 import { ORDER_STATUSES, ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, marginColorClass, isOrderEditable } from '../../lib/constants';
+import { formatDateReunion } from '../../lib/datetime';
 
 // Handle POST: update order status
 if (Astro.request.method === 'POST') {
@@ -246,7 +247,7 @@ const STATUS_COLOR = ORDER_STATUS_COLOR;
 const counts: Record<string, number> = Object.fromEntries(statusCountEntries);
 
 function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+  return formatDateReunion(iso, { year: '2-digit' });
 }
 
 function shortId(id: string) {

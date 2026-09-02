@@ -8,6 +8,7 @@ import {
   CLIENT_TYPES, CLIENT_TYPE_LABEL,
   ORDER_STATUS_LABEL as SHARED_ORDER_STATUS_LABEL, ORDER_STATUS_COLOR as SHARED_ORDER_STATUS_COLOR,
 } from '../../../lib/constants';
+import { formatDateReunion } from '../../../lib/datetime';
 
 const { id } = Astro.params;
 let formError = '';
@@ -213,7 +214,7 @@ const CONDITIONS_LABEL: Record<string, string> = {
 };
 
 function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+  return formatDateReunion(iso, { year: '2-digit' });
 }
 function shortId(orderId: string) {
   return orderId.slice(0, 8).toUpperCase();

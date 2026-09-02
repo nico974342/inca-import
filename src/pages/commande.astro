@@ -9,6 +9,7 @@ import { sanitizeText } from '../lib/sanitize';
 import { normalizeEmail, findClientByEmail, fetchClientPriceOverrides, resolveClientPrice } from '../lib/clients';
 import { createOrderChecked, describeConflicts, fetchAvailability, sellableQty } from '../lib/stock';
 import { COMPANY, RESEND_DEFAULT_FROM } from '../lib/constants';
+import { todayReunion } from '../lib/datetime';
 
 const user = Astro.locals.user;
 if (!user) return Astro.redirect('/connexion');
@@ -108,7 +109,7 @@ if (Astro.request.method === 'POST') {
         return { product_name: p?.name ?? '?', quantity: item.quantity, unit: p?.unit, price_ht: resolvedPrice(p?.price_ht ?? null, p?.id), tva_rate: p?.tva_rate };
       }),
       totalHT: orderTotalHT,
-      date: new Date().toLocaleDateString('fr-FR'),
+      date: todayReunion(),
     });
   } catch (pdfErr) {
     console.error('[PDF] Error:', pdfErr);

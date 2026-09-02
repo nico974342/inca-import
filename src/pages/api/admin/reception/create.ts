@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../lib/supabase';
 import { logAdminAction } from '../../../../lib/audit';
+import { todayReunionISO } from '../../../../lib/datetime';
 
 export const POST: APIRoute = async ({ request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -38,7 +39,10 @@ export const POST: APIRoute = async ({ request, cookies }) => {
   }
 
   // Lexicographic YYYY-MM-DD comparison is safe for date-only strings.
-  const todayStr    = new Date().toISOString().slice(0, 10);
+  // "Aujourd'hui" doit s'entendre heure de La Réunion, pas UTC (serveur) —
+  // sinon une réception historique saisie entre 0h et 4h du matin se voit
+  // appliquer le stock comme si elle était du jour.
+  const todayStr    = todayReunionISO();
   const stockApplied = receivedAt >= todayStr; // today/future → also update stock
 
   // Atomic RPC: header + items + PUMP recalc + stock increment in one

@@ -2,6 +2,7 @@ import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../lib/supabase';
 import { generateInvoicePDF } from '../../../../lib/pdf';
 import { findClientByEmail, normalizeEmail } from '../../../../lib/clients';
+import { formatDateReunion } from '../../../../lib/datetime';
 
 export const GET: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -68,9 +69,7 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
     };
   });
 
-  const date = new Date(order.created_at).toLocaleDateString('fr-FR', {
-    day: '2-digit', month: '2-digit', year: 'numeric',
-  });
+  const date = formatDateReunion(order.created_at);
 
   const buffer = await generateInvoicePDF({
     id: order.id,

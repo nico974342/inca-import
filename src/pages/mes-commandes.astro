@@ -5,6 +5,7 @@ import Footer from '../components/Footer.astro';
 import { supabaseAdmin, createAuthClient } from '../lib/supabase';
 import { normalizeEmail } from '../lib/clients';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR } from '../lib/constants';
+import { formatDateReunion } from '../lib/datetime';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -69,9 +70,7 @@ const STATUS_LABEL = ORDER_STATUS_LABEL;
 const STATUS_COLOR = ORDER_STATUS_COLOR;
 
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('fr-FR', {
-    day: '2-digit', month: 'long', year: 'numeric',
-  });
+  return formatDateReunion(iso, { month: 'long' });
 }
 
 function shortId(id: string): string {

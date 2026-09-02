@@ -2,6 +2,7 @@
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, CONTACT_STATUS_LABEL, CONTACT_STATUS_COLOR, computeGmroi, gmroiColorClass, computeStockRotation, rotationColorClass, MONTHLY_MARGIN_BREAKEVEN } from '../../lib/constants';
+import { formatDateReunion } from '../../lib/datetime';
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'] as const;
 
@@ -277,7 +278,7 @@ const lastPoint = chartPoints[CURRENT_IDX];
 const CHART_JSON = JSON.stringify({ points: chartPoints, width: CHART_W });
 
 function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+  return formatDateReunion(iso, { year: '2-digit' });
 }
 
 function formatCA(amount: number): string {

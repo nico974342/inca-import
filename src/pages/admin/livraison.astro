@@ -4,6 +4,7 @@ import { supabaseAdmin } from '../../lib/supabase';
 import { generateDeliverySummaryPDF, generatePDVDeliveryPDF } from '../../lib/pdf';
 import { normalizeEmail } from '../../lib/clients';
 import { COMPANY, RESEND_DEFAULT_FROM } from '../../lib/constants';
+import { todayReunion } from '../../lib/datetime';
 import { Resend } from 'resend';
 
 const FROM = (import.meta.env.RESEND_FROM as string | undefined) ?? RESEND_DEFAULT_FROM;
@@ -73,7 +74,7 @@ if (Astro.request.method === 'POST') {
     .split(',').map(s => s.trim()).filter(Boolean);
 
   const now = new Date();
-  const dateStr = now.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const dateStr = todayReunion();
   const batchId = `REC-${now.toISOString().slice(0, 10).replace(/-/g, '')}-${now.toTimeString().slice(0, 5).replace(':', '')}`;
 
   const clientById = new Map((clients ?? []).map(c => [c.id, c]));

@@ -8,6 +8,7 @@ import { normalizeEmail, fetchClientPriceOverrides, resolveClientPrice, fetchPri
 import { createOrderChecked, describeConflicts, fetchAvailability, sellableQty } from '../../lib/stock';
 import { COMPANY, RESEND_DEFAULT_FROM } from '../../lib/constants';
 import { logAdminAction } from '../../lib/audit';
+import { todayReunion } from '../../lib/datetime';
 
 const adminUser = Astro.locals.user;
 
@@ -104,7 +105,7 @@ if (Astro.request.method === 'POST') {
   const order = { id: result.orderId };
 
   const totalHT = orderItems.reduce((s, i) => s + i.quantity * Number(i.price_ht ?? 0), 0);
-  const today   = new Date().toLocaleDateString('fr-FR');
+  const today   = todayReunion();
 
   // Generate PDF
   let pdfBuffer: Buffer | null = null;

@@ -4,6 +4,7 @@ import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import { supabaseAdmin, createAuthClient } from '../lib/supabase';
 import { findClientByEmail } from '../lib/clients';
+import { formatDateReunion } from '../lib/datetime';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -23,9 +24,7 @@ const { data: notes } = clientAccount
   : { data: [] as { id: string; delivery_id: string; pdv_name: string; created_at: string }[] };
 
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('fr-FR', {
-    day: '2-digit', month: 'long', year: 'numeric',
-  });
+  return formatDateReunion(iso, { month: 'long' });
 }
 ---
 <Base

@@ -1,6 +1,7 @@
 ---
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
+import { formatDateTimeReunion } from '../../lib/datetime';
 
 const currentEmail = (Astro.locals as any).user?.email ?? '';
 
@@ -15,7 +16,7 @@ function initial(email: string): string {
   return displayName(email).charAt(0).toUpperCase();
 }
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return formatDateTimeReunion(iso, { year: undefined });
 }
 
 const { data: messagesRaw } = await supabaseAdmin

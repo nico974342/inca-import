@@ -6,6 +6,7 @@ import { normalizeEmail } from '../../lib/clients';
 import { sendClientActivationEmail } from '../../lib/email';
 import { logAdminAction } from '../../lib/audit';
 import { CLIENT_STATUSES, CLIENT_STATUS_LABEL, CLIENT_STATUS_COLOR, CLIENT_TYPES, CLIENT_TYPE_LABEL } from '../../lib/constants';
+import { formatDateReunion } from '../../lib/datetime';
 
 if (Astro.request.method === 'POST') {
   const data   = await Astro.request.formData();
@@ -313,7 +314,7 @@ const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
 const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
 function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+  return formatDateReunion(iso, { year: '2-digit' });
 }
 ---
 <AdminLayout title="Clients" activeNav="clients">

@@ -8,6 +8,7 @@ import {
   SHIPMENT_STATUSES, SHIPMENT_STATUS_LABEL, SHIPMENT_ACTIVE_STATUSES,
   computeShipmentProgress, allocateCargoSlots, type ShipmentStatus,
 } from '../../lib/constants';
+import { formatDateReunion, todayReunionISO } from '../../lib/datetime';
 
 // ── Écritures : uniquement sur shipments / shipment_items. Ni products,
 //    ni stock, ni PUMP — le transit est du suivi, pas du mouvement. ──
@@ -155,10 +156,9 @@ const ERR_MSG: Record<string, string> = {
   introuvable: 'Expédition introuvable.',
 };
 
-const today = new Date().toISOString().split('T')[0];
+const today = todayReunionISO();
 function fmtDate(d: string | null): string {
-  if (!d) return '—';
-  return new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+  return formatDateReunion(d, { day: 'numeric', month: 'short' });
 }
 function fmtPrice(n: number): string {
   return n.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
