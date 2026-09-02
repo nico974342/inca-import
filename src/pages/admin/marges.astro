@@ -2,8 +2,9 @@
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { marginColorClass } from '../../lib/constants';
-import { formatDateReunion, reunionMonthStart } from '../../lib/datetime';
+import { formatDateReunion, reunionMonthStart, todayReunionISO } from '../../lib/datetime';
 import { isAdmin } from '../../lib/roles';
+import { EXPORT_SIZE_WARNING_CHARS } from '../../lib/margesExport';
 
 if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
@@ -191,7 +192,190 @@ function margeClass(pct: number | null): string {
     Configurez les coûts via <a href="/admin/reception/new">Réception stock</a>.
   </p>
 
+  <!-- Export brut pour analyse IA -->
+  <details class="export-panel">
+    <summary class="export-summary">Export (analyse IA)</summary>
+
+    <div class="export-body">
+      <p class="export-desc">
+        Choisissez une période, puis téléchargez ou copiez toutes les données brutes de vente, marge, stock et
+        réceptions sur cette période — au format texte, prêt à coller dans une conversation avec une IA.
+      </p>
+
+      <div class="export-controls">
+        <div class="export-dates">
+          <label>
+            Début
+            <input type="date" id="exportDebut" />
+          </label>
+          <label>
+            Fin
+            <input type="date" id="exportFin" />
+          </label>
+        </div>
+
+        <div class="export-presets">
+          <button type="button" class="btn-preset" data-preset="mois_courant">Ce mois</button>
+          <button type="button" class="btn-preset" data-preset="mois_dernier">Mois dernier</button>
+          <button type="button" class="btn-preset" data-preset="3_mois">3 derniers mois</button>
+          <button type="button" class="btn-preset" data-preset="12_mois">12 derniers mois</button>
+        </div>
+
+        <div class="export-actions">
+          <button type="button" id="exportDownload" class="btn btn-secondary">Télécharger</button>
+          <button type="button" id="exportCopy" class="btn btn-primary">Copier</button>
+        </div>
+      </div>
+
+      <p id="exportError" class="export-error" hidden></p>
+      <p id="exportStatus" class="export-status" hidden></p>
+    </div>
+  </details>
+
 </AdminLayout>
+
+<script define:vars={{ todayISO: todayReunionISO(), sizeWarningChars: EXPORT_SIZE_WARNING_CHARS }}>
+  const debutInput  = document.getElementById('exportDebut');
+  const finInput    = document.getElementById('exportFin');
+  const errorEl     = document.getElementById('exportError');
+  const statusEl    = document.getElementById('exportStatus');
+  const btnDownload = document.getElementById('exportDownload');
+  const btnCopy     = document.getElementById('exportCopy');
+
+  // Bornes par défaut : mois en cours — un point de départ raisonnable
+  // avant d'ajuster ou d'utiliser un raccourci.
+  finInput.value   = todayISO;
+  debutInput.value = firstOfMonth(todayISO);
+
+  function firstOfMonth(dateStr) {
+    const [y, m] = dateStr.split('-');
+    return `${y}-${m}-01`;
+  }
+
+  function lastOfMonth(dateStr) {
+    const [y, m] = dateStr.split('-').map(Number);
+    const last = new Date(y, m, 0).getDate();
+    return `${y}-${String(m).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
+  }
+
+  // Arithmétique calendaire pure (pas de conversion de fuseau horaire) :
+  // sûr pour décaler une date de N mois sans risquer le bug de fuseau déjà
+  // rencontré ailleurs sur ce projet avec new Date().toISOString().
+  function shiftMonths(dateStr, delta) {
+    let [y, m, d] = dateStr.split('-').map(Number);
+    const total = y * 12 + (m - 1) + delta;
+    y = Math.floor(total / 12);
+    m = (total % 12) + 1;
+    const daysInMonth = new Date(y, m, 0).getDate();
+    if (d > daysInMonth) d = daysInMonth;
+    return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  }
+
+  document.querySelectorAll('.btn-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const preset = btn.dataset.preset;
+      if (preset === 'mois_courant') {
+        debutInput.value = firstOfMonth(todayISO);
+        finInput.value = todayISO;
+      } else if (preset === 'mois_dernier') {
+        const prev = shiftMonths(todayISO, -1);
+        debutInput.value = firstOfMonth(prev);
+        finInput.value = lastOfMonth(prev);
+      } else if (preset === '3_mois') {
+        debutInput.value = shiftMonths(todayISO, -3);
+        finInput.value = todayISO;
+      } else if (preset === '12_mois') {
+        debutInput.value = shiftMonths(todayISO, -12);
+        finInput.value = todayISO;
+      }
+    });
+  });
+
+  function showError(msg) {
+    errorEl.textContent = msg;
+    errorEl.hidden = false;
+    statusEl.hidden = true;
+  }
+
+  function clearError() {
+    errorEl.hidden = true;
+  }
+
+  function setBusy(busy) {
+    btnDownload.disabled = busy;
+    btnCopy.disabled = busy;
+    btnDownload.textContent = busy ? 'Génération…' : 'Télécharger';
+    btnCopy.textContent = busy ? 'Génération…' : 'Copier';
+  }
+
+  function reportSize(chars) {
+    const tokensApprox = Math.round(chars / 4);
+    const big = chars > sizeWarningChars;
+    statusEl.hidden = false;
+    statusEl.classList.toggle('export-status--warning', big);
+    statusEl.textContent = big
+      ? `⚠ Export volumineux : ${chars.toLocaleString('fr-FR')} caractères (~${tokensApprox.toLocaleString('fr-FR')} tokens estimés) — envisagez une période plus courte si votre conversation IA a une limite de taille.`
+      : `Export généré : ${chars.toLocaleString('fr-FR')} caractères (~${tokensApprox.toLocaleString('fr-FR')} tokens estimés).`;
+  }
+
+  async function fetchExport() {
+    const debut = debutInput.value;
+    const fin = finInput.value;
+    if (!debut || !fin) {
+      showError('Choisissez une date de début et une date de fin.');
+      return null;
+    }
+    if (debut > fin) {
+      showError('La date de début doit précéder la date de fin.');
+      return null;
+    }
+    clearError();
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/marges/export?debut=${debut}&fin=${fin}`);
+      const text = await res.text();
+      if (!res.ok) {
+        showError(text || 'Erreur pendant la génération de l\'export.');
+        return null;
+      }
+      reportSize(text.length);
+      return text;
+    } catch (e) {
+      showError('Erreur réseau pendant la génération de l\'export.');
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  btnDownload.addEventListener('click', async () => {
+    const text = await fetchExport();
+    if (text == null) return;
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `export-marges-inca-import_${debutInput.value}_${finInput.value}.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+
+  btnCopy.addEventListener('click', async () => {
+    const text = await fetchExport();
+    if (text == null) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      btnCopy.dataset.copied = '1';
+      const original = 'Copier';
+      btnCopy.textContent = 'Copié ✓';
+      setTimeout(() => { btnCopy.textContent = original; btnCopy.dataset.copied = '0'; }, 2000);
+    } catch (e) {
+      showError('Copie automatique impossible sur ce navigateur — utilisez Télécharger.');
+    }
+  });
+</script>
 
 <style>
 .page-head { margin-bottom: var(--space-6); }
@@ -353,5 +537,136 @@ function margeClass(pct: number | null): string {
 }
 @media (max-width: 480px) {
   .totals-grid { grid-template-columns: 1fr; }
+}
+
+/* Export panel */
+.export-panel {
+  margin-top: var(--space-6);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5);
+}
+
+.export-summary {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-ink);
+  cursor: pointer;
+  user-select: none;
+}
+.export-summary:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; }
+
+.export-body { margin-top: var(--space-4); }
+
+.export-desc {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  line-height: 1.6;
+  margin: 0 0 var(--space-4);
+  max-width: 68ch;
+}
+
+.export-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+.export-dates {
+  display: flex;
+  gap: var(--space-3);
+}
+.export-dates label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-muted);
+}
+.export-dates input[type="date"] {
+  padding: 0.5rem 0.75rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  min-height: 40px;
+}
+.export-dates input[type="date"]:focus { outline: none; border-color: var(--color-primary); }
+
+.export-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.btn-preset {
+  padding: 0.5rem 0.875rem;
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-ink);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+.btn-preset:hover { background: var(--color-surface-2); border-color: var(--color-border-strong); }
+
+.export-actions {
+  display: flex;
+  gap: var(--space-3);
+  margin-left: auto;
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 0.8125rem 1.625rem;
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  font-weight: 500;
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  min-height: 44px;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+.btn-secondary:hover { background: var(--color-surface); }
+.btn-secondary:disabled, .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.export-error {
+  font-size: var(--text-sm);
+  color: oklch(0.46 0.18 25);
+  background: oklch(0.97 0.03 25);
+  border: 1px solid oklch(0.84 0.08 25);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  margin: var(--space-3) 0 0;
+}
+
+.export-status {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  margin: var(--space-3) 0 0;
+}
+.export-status--warning {
+  color: oklch(0.38 0.14 60);
+  font-weight: 500;
+}
+
+@media (max-width: 640px) {
+  .export-controls { flex-direction: column; align-items: stretch; }
+  .export-actions { margin-left: 0; }
 }
 </style>
