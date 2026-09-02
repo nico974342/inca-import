@@ -2,15 +2,16 @@
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { marginColorClass } from '../../lib/constants';
+import { formatDateReunion, reunionMonthStart } from '../../lib/datetime';
 
-// Last 12 months (full calendar months, oldest first)
-const now = new Date();
+// Last 12 months (full calendar months, oldest first) — bornes ancrées sur
+// le calendrier de La Réunion, voir reunionMonthStart().
 const months: { label: string; start: string; end: string }[] = [];
 for (let i = 11; i >= 0; i--) {
-  const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+  const d = reunionMonthStart(i);
   const start = d.toISOString();
-  const end   = new Date(d.getFullYear(), d.getMonth() + 1, 1).toISOString();
-  const label = d.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+  const end   = reunionMonthStart(i - 1).toISOString();
+  const label = formatDateReunion(d, { day: undefined, month: 'long' });
   months.push({ label: label.charAt(0).toUpperCase() + label.slice(1), start, end });
 }
 

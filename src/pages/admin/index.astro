@@ -2,26 +2,26 @@
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, CONTACT_STATUS_LABEL, CONTACT_STATUS_COLOR, computeGmroi, gmroiColorClass, computeStockRotation, rotationColorClass, MONTHLY_MARGIN_BREAKEVEN } from '../../lib/constants';
-import { formatDateReunion } from '../../lib/datetime';
+import { formatDateReunion, reunionMonthStart } from '../../lib/datetime';
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'] as const;
 
-const now = new Date();
-const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-
 // ── 6 calendar months (oldest first, current month last), for the chart ──
+// Bornes ancrées sur le calendrier de La Réunion, pas celui du serveur
+// (UTC) — sinon une commande passée juste après minuit heure réunionnaise
+// tombe dans le mauvais mois tant que le serveur n'a pas encore basculé.
 const MONTHS_BACK = 6;
 const monthDefs: { label: string; start: Date; end: Date }[] = [];
 for (let i = MONTHS_BACK - 1; i >= 0; i--) {
-  const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
-  const end   = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
-  const label = start.toLocaleDateString('fr-FR', { month: 'short' }).replace('.', '');
+  const start = reunionMonthStart(i);
+  const end   = reunionMonthStart(i - 1);
+  const label = formatDateReunion(start, { day: undefined, year: undefined, month: 'short' }).replace('.', '');
   monthDefs.push({ label: label.charAt(0).toUpperCase() + label.slice(1), start, end });
 }
 
 // Order data is fetched 12 months back (for GMROI) in one query; the chart
 // simply ignores rows older than its own 6-month window (idx === -1 below).
-const marginWindowStart = new Date(now.getFullYear(), now.getMonth() - 12, now.getDate()).toISOString();
+const marginWindowStart = reunionMonthStart(12).toISOString();
 
 const [
   { count: commandesEnAttente },

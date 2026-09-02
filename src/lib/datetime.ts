@@ -65,3 +65,26 @@ export function todayReunion(options: Intl.DateTimeFormatOptions = {}): string {
 export function todayReunionISO(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: REUNION_TIMEZONE });
 }
+
+/**
+ * Instant UTC correspondant à 00h00 le 1er d'un mois du calendrier de La
+ * Réunion (0 = mois en cours, 1 = mois précédent, …).
+ *
+ * À utiliser pour toute borne de mois qui doit correspondre à ce qu'une
+ * horloge réunionnaise affiche — `new Date(now.getFullYear(), now.getMonth(), 1)`
+ * utilise le calendrier du serveur (UTC), qui peut être décalé d'un jour
+ * pile au changement de mois : un client qui commande le 1er à 2h du matin
+ * (heure de La Réunion) se ferait autrement compter dans le mois précédent,
+ * puisqu'il n'est encore que 22h la veille en UTC.
+ */
+export function reunionMonthStart(monthsAgo = 0): Date {
+  const [y, m] = new Intl.DateTimeFormat('en-CA', {
+    timeZone: REUNION_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+  }).format(new Date()).split('-').map(Number);
+  const totalMonths = y * 12 + (m - 1) - monthsAgo;
+  const yy = Math.floor(totalMonths / 12);
+  const mm = ((totalMonths % 12) + 12) % 12;
+  return new Date(`${yy}-${String(mm + 1).padStart(2, '0')}-01T00:00:00+04:00`);
+}

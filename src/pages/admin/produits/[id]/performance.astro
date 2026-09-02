@@ -6,7 +6,7 @@ import {
   REAPPRO_WEEKS_LOOKBACK, computeVitesseVente, computeJoursAvantRupture,
   computeSuggestedReorderQty, isApproachingOrBelowSeuil,
 } from '../../../../lib/constants';
-import { formatDateReunion } from '../../../../lib/datetime';
+import { formatDateReunion, reunionMonthStart } from '../../../../lib/datetime';
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'];
 
@@ -31,8 +31,7 @@ const CAT_LABEL: Record<string, string> = {
 // ── One 12-month order_items pull covers everything: GMROI/rotation
 //    (full window), vitesse de vente (last N weeks, a subset of the same
 //    rows), the monthly chart, and the per-PDV/client breakdown. ──
-const now = new Date();
-const twelveMonthsAgoIso = new Date(now.getFullYear(), now.getMonth() - 12, now.getDate()).toISOString();
+const twelveMonthsAgoIso = reunionMonthStart(12).toISOString();
 
 const { data: salesRows } = await supabaseAdmin
   .from('order_items')
@@ -45,9 +44,9 @@ const { data: salesRows } = await supabaseAdmin
 const MONTHS_BACK = 12;
 const monthDefs: { label: string; start: Date; end: Date }[] = [];
 for (let i = MONTHS_BACK - 1; i >= 0; i--) {
-  const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
-  const end   = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
-  const label = start.toLocaleDateString('fr-FR', { month: 'short' }).replace('.', '');
+  const start = reunionMonthStart(i);
+  const end   = reunionMonthStart(i - 1);
+  const label = formatDateReunion(start, { day: undefined, year: undefined, month: 'short' }).replace('.', '');
   monthDefs.push({ label: label.charAt(0).toUpperCase() + label.slice(1), start, end });
 }
 const monthlyQty = monthDefs.map(() => 0);

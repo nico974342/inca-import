@@ -6,6 +6,7 @@ import {
   REAPPRO_WEEKS_LOOKBACK, computeVitesseVente, computeJoursAvantRupture, isAtOrBelowSeuil,
 } from '../../../lib/constants';
 import { fetchAvailability, toAvailability } from '../../../lib/stock';
+import { reunionMonthStart } from '../../../lib/datetime';
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'];
 
@@ -19,13 +20,12 @@ const { data: products, error } = await supabaseAdmin
 const availability = await fetchAvailability(products ?? []);
 
 // ── One 12-month order_items pull feeds the search banner totals and the
-//    per-month sales columns. Month boundaries use the same
-//    new Date(y, m, 1) convention as the dashboard, so "mois en cours"
-//    means the same thing on both pages. ──
-const now = new Date();
-const twelveMonthsAgoIso = new Date(new Date().setMonth(new Date().getMonth() - 12)).toISOString();
-const currentMonthStartMs = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-const prevMonthStartMs    = new Date(now.getFullYear(), now.getMonth() - 1, 1).getTime();
+//    per-month sales columns. Month boundaries use reunionMonthStart(), the
+//    same convention as the dashboard, so "mois en cours" means the same
+//    thing on both pages. ──
+const twelveMonthsAgoIso = reunionMonthStart(12).toISOString();
+const currentMonthStartMs = reunionMonthStart(0).getTime();
+const prevMonthStartMs    = reunionMonthStart(1).getTime();
 const { data: marginRows } = await supabaseAdmin
   .from('order_items')
   .select('product_id, quantity, price_ht_snapshot, pump_snapshot, orders!inner(status, created_at)')

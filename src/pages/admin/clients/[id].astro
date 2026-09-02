@@ -8,7 +8,7 @@ import {
   CLIENT_TYPES, CLIENT_TYPE_LABEL,
   ORDER_STATUS_LABEL as SHARED_ORDER_STATUS_LABEL, ORDER_STATUS_COLOR as SHARED_ORDER_STATUS_COLOR,
 } from '../../../lib/constants';
-import { formatDateReunion } from '../../../lib/datetime';
+import { formatDateReunion, reunionMonthStart } from '../../../lib/datetime';
 
 const { id } = Astro.params;
 let formError = '';
@@ -162,8 +162,7 @@ const revenueOrders = ordersWithTotal.filter(o => o.status !== 'annulee');
 const totalCA = revenueOrders.reduce((sum, o) => sum + (o.total ?? 0), 0);
 
 // ── Statistiques ─────────────────────────────────────────────────────
-const twelveMonthsAgo = new Date();
-twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+const twelveMonthsAgo = reunionMonthStart(12);
 const ca12mo = revenueOrders
   .filter(o => new Date(o.created_at) >= twelveMonthsAgo)
   .reduce((sum, o) => sum + (o.total ?? 0), 0);
