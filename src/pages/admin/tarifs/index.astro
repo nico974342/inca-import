@@ -30,9 +30,17 @@ if (Astro.request.method === 'POST') {
   } else if (action === 'set_default') {
     const id = data.get('id') as string;
     if (id) {
+      const [{ data: prevDefault }, { data: newGroup }] = await Promise.all([
+        supabaseAdmin.from('price_groups').select('name').eq('is_default', true).maybeSingle(),
+        supabaseAdmin.from('price_groups').select('name').eq('id', id).single(),
+      ]);
       const { error } = await supabaseAdmin.rpc('price_group_set_default', { p_id: id });
       if (!error) {
-        await logAdminAction({ adminEmail, action: 'tarifs.groupe_defaut', targetType: 'price_group', targetId: id });
+        await logAdminAction({
+          adminEmail, action: 'tarifs.groupe_defaut',
+          targetType: 'price_group', targetId: id, targetLabel: newGroup?.name ?? id,
+          details: { ancien: prevDefault?.name ?? 'Aucune grille par défaut', nouveau: newGroup?.name ?? id },
+        });
       }
     }
   }
@@ -66,6 +74,8 @@ if (!tableMissing && groups.length > 0) {
   }
 }
 
+const hasDefaultGroup = groups.some(g => g.is_default);
+
 const ok  = !!Astro.url.searchParams.get('ok');
 const err = Astro.url.searchParams.get('err');
 const ERR_MSG: Record<string, string> = {
@@ -90,6 +100,12 @@ const ERR_MSG: Record<string, string> = {
     <>
       {ok  && <div class="alert alert--ok" role="status">Enregistré.</div>}
       {err && <div class="alert alert--error" role="alert">{ERR_MSG[err] ?? ERR_MSG.erreur}</div>}
+      {!hasDefaultGroup && groups.length > 0 && (
+        <div class="alert alert--warn" role="status">
+          Aucune grille n'est définie par défaut — tout client sans groupe assigné voit le prix catalogue de base.
+          Cliquez sur « Définir par défaut » sur la grille de votre choix ci-dessous pour changer cela.
+        </div>
+      )}
 
       <form method="post" class="add-form">
         <input type="hidden" name="action" value="create_group" />
@@ -119,10 +135,24 @@ const ERR_MSG: Record<string, string> = {
             </thead>
             <tbody>
               {groups.map(g => (
-                <tr>
+                <tr class={g.is_default ? 'row--default' : ''}>
                   <td class="td-strong">
-                    {g.name}
-                    {g.is_default && <span class="badge-default">par défaut</span>}
+                    <div class="group-name-row">
+                      <span>{g.name}</span>
+                      {g.is_default && (
+                        <span class="badge-default">
+                          <svg width="11" height="11" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                            <path d="M2.5 7.5 5.5 10.5 11.5 3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                          </svg>
+                          Par défaut
+                        </span>
+                      )}
+                    </div>
+                    {g.is_default && (
+                      <p class="default-explain">
+                        Cette grille s'applique à tout client sans groupe assigné, y compris les nouveaux inscrits.
+                      </p>
+                    )}
                   </td>
                   <td class="th-num td-muted">{itemCountByGroup.get(g.id) ?? 0}</td>
                   <td class="th-num td-muted">{clientCountByGroup.get(g.id) ?? 0}</td>
@@ -168,6 +198,7 @@ const ERR_MSG: Record<string, string> = {
 .alert code { font-family: var(--font-mono); font-size: 0.9em; }
 .alert--ok    { color: oklch(0.40 0.12 150); background: oklch(0.96 0.04 150); border-color: oklch(0.86 0.08 150); }
 .alert--error { color: oklch(0.46 0.18 25);  background: oklch(0.97 0.03 25);  border-color: oklch(0.88 0.07 25); }
+.alert--warn  { color: oklch(0.42 0.14 60);  background: oklch(0.96 0.05 60);  border-color: oklch(0.87 0.09 60); }
 
 .add-form {
   display: flex;
@@ -230,30 +261,51 @@ const ERR_MSG: Record<string, string> = {
 .td-muted  { color: var(--color-muted); }
 .td-note   { text-align: right; white-space: nowrap; }
 
+.row--default { background: oklch(0.98 0.015 150); }
+.row--default:hover { background: oklch(0.98 0.015 150); }
+
+.group-name-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .badge-default {
-  display: inline-block;
-  margin-left: var(--space-2);
-  padding: 2px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
   border-radius: var(--radius-full);
   font-size: var(--text-xs);
-  font-weight: 500;
-  color: oklch(0.42 0.14 60);
-  background: oklch(0.95 0.06 60);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: oklch(0.98 0 0);
+  background: oklch(0.48 0.14 150);
   white-space: nowrap;
 }
 
-.set-default-btn {
-  padding: 0.3rem 0.7rem;
+.default-explain {
+  margin: var(--space-1) 0 0;
   font-size: var(--text-xs);
-  font-weight: 500;
+  color: var(--color-muted);
+  font-weight: 400;
+  max-width: 46ch;
+  line-height: 1.4;
+}
+
+.set-default-btn {
+  padding: 0.4rem 0.85rem;
+  font-size: var(--text-xs);
+  font-weight: 600;
   color: var(--color-ink);
-  background: none;
-  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
   cursor: pointer;
   white-space: nowrap;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
 }
-.set-default-btn:hover { background: var(--color-surface-2); }
+.set-default-btn:hover { background: var(--color-surface-2); border-color: var(--color-primary); }
 
 .edit-link {
   font-size: var(--text-sm);
