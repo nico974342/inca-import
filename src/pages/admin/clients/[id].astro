@@ -9,6 +9,9 @@ import {
   ORDER_STATUS_LABEL as SHARED_ORDER_STATUS_LABEL, ORDER_STATUS_COLOR as SHARED_ORDER_STATUS_COLOR,
 } from '../../../lib/constants';
 import { formatDateReunion, reunionMonthStart } from '../../../lib/datetime';
+import { isAdmin, ROLE_LABEL, type UserRole } from '../../../lib/roles';
+
+const viewerIsAdmin = isAdmin((Astro.locals as any).user);
 
 const { id } = Astro.params;
 let formError = '';
@@ -246,7 +249,7 @@ if (client.email) {
   }
 }
 const hasAuthAccount = !!authUserId;
-const isAdminRole = hasAuthAccount && authRole !== 'client';
+const currentRole: UserRole = (authRole === 'admin' || authRole === 'commercial') ? authRole : 'client';
 
 const roleError = Astro.url.searchParams.get('role_error');
 
@@ -319,10 +322,12 @@ const { data: priceGroups } = await supabaseAdmin
         <span class="stat-label">CA 12 derniers mois</span>
         <span class="stat-value">{ca12mo.toFixed(2).replace('.', ',')} €</span>
       </div>
-      <div class="stat-tile">
-        <span class="stat-label">Marge totale HT générée</span>
-        <span class="stat-value stat-value--marge">{margeTotale.toFixed(2).replace('.', ',')} €</span>
-      </div>
+      {viewerIsAdmin && (
+        <div class="stat-tile">
+          <span class="stat-label">Marge totale HT générée</span>
+          <span class="stat-value stat-value--marge">{margeTotale.toFixed(2).replace('.', ',')} €</span>
+        </div>
+      )}
       <div class="stat-tile">
         <span class="stat-label">Nombre de commandes</span>
         <span class="stat-value">{clientOrders.length}</span>
@@ -364,30 +369,32 @@ const { data: priceGroups } = await supabaseAdmin
     )}
   </div>
 
-  <div class="card role-card">
-    <div class="role-card-inner">
-      <div>
-        <p class="role-label">Accès plateforme</p>
-        {!hasAuthAccount ? (
-          <p class="role-value role-value--none">Pas de compte connecté</p>
-        ) : isAdminRole ? (
-          <p class="role-value role-value--admin">Admin</p>
-        ) : (
-          <p class="role-value role-value--client">Client</p>
+  {viewerIsAdmin && (
+    <div class="card role-card">
+      <div class="role-card-inner">
+        <div>
+          <p class="role-label">Accès plateforme</p>
+          {!hasAuthAccount ? (
+            <p class="role-value role-value--none">Pas de compte connecté</p>
+          ) : (
+            <p class={`role-value role-value--${currentRole}`}>{ROLE_LABEL[currentRole]}</p>
+          )}
+          {roleError === 'no_auth_user' && <p class="role-error">Aucun compte Supabase trouvé pour cet email.</p>}
+          {roleError === 'update_failed' && <p class="role-error">Erreur lors de la mise à jour du rôle.</p>}
+        </div>
+        {hasAuthAccount && (
+          <form method="post" action={`/api/admin/clients/${id}/set-role`} class="role-select-form">
+            <select name="role" class="role-select" aria-label="Changer le rôle">
+              <option value="client" selected={currentRole === 'client'}>Client</option>
+              <option value="commercial" selected={currentRole === 'commercial'}>Commercial</option>
+              <option value="admin" selected={currentRole === 'admin'}>Admin</option>
+            </select>
+            <button type="submit" class="btn-role btn-role--save">Enregistrer</button>
+          </form>
         )}
-        {roleError === 'no_auth_user' && <p class="role-error">Aucun compte Supabase trouvé pour cet email.</p>}
-        {roleError === 'update_failed' && <p class="role-error">Erreur lors de la mise à jour du rôle.</p>}
       </div>
-      {hasAuthAccount && (
-        <form method="post" action={`/api/admin/clients/${id}/set-admin`}>
-          <input type="hidden" name="action" value={isAdminRole ? 'demote' : 'promote'} />
-          <button type="submit" class={`btn-role ${isAdminRole ? 'btn-role--demote' : 'btn-role--promote'}`}>
-            {isAdminRole ? 'Rétrograder en client' : 'Promouvoir en admin'}
-          </button>
-        </form>
-      )}
     </div>
-  </div>
+  )}
 
   <div class="card">
     <h2 class="card-title">Modifier le client</h2>
@@ -829,14 +836,33 @@ const { data: priceGroups } = await supabaseAdmin
   padding: 3px 10px;
   border-radius: var(--radius-full);
 }
-.role-value--admin  { background: oklch(0.93 0.07 45.9); color: oklch(0.40 0.15 45.9); }
-.role-value--client { background: oklch(0.93 0.05 220);  color: oklch(0.33 0.12 220); }
+.role-value--admin      { background: oklch(0.93 0.07 45.9); color: oklch(0.40 0.15 45.9); }
+.role-value--commercial { background: oklch(0.93 0.06 295); color: oklch(0.38 0.12 295); }
+.role-value--client     { background: oklch(0.93 0.05 220); color: oklch(0.33 0.12 220); }
 .role-value--none   { background: var(--color-surface);   color: var(--color-muted); font-weight: 500; }
 .role-error {
   font-size: var(--text-xs);
   color: oklch(0.50 0.19 25);
   margin: var(--space-1) 0 0;
 }
+.role-select-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.role-select {
+  padding: 0.5rem 0.75rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  min-height: 40px;
+  outline: none;
+  cursor: pointer;
+}
+.role-select:focus { border-color: var(--color-primary); }
 .btn-role {
   padding: 0.5rem 1rem;
   font-size: var(--text-sm);
@@ -847,10 +873,8 @@ const { data: priceGroups } = await supabaseAdmin
   transition: background var(--dur-fast);
   white-space: nowrap;
 }
-.btn-role--promote { background: oklch(0.93 0.07 45.9); color: oklch(0.40 0.15 45.9); }
-.btn-role--promote:hover { background: oklch(0.88 0.10 45.9); }
-.btn-role--demote  { background: var(--color-surface); color: var(--color-muted); border: 1px solid var(--color-border); }
-.btn-role--demote:hover  { background: var(--color-border); }
+.btn-role--save { background: var(--color-primary); color: white; }
+.btn-role--save:hover { background: var(--color-primary-deep); }
 
 .form-error {
   font-size: var(--text-sm);

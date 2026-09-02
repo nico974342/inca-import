@@ -1,11 +1,12 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
+import { isStaff } from '../../../../../lib/roles';
 
 export const POST: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
   const { data: { user } } = await supabase.auth.getUser();
 
-  if (!user || user.user_metadata?.role === 'client') {
+  if (!user || !isStaff(user)) {
     return new Response('Non autorisé', { status: 401 });
   }
 

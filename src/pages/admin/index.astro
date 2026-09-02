@@ -3,6 +3,11 @@ import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, CONTACT_STATUS_LABEL, CONTACT_STATUS_COLOR, computeGmroi, gmroiColorClass, computeStockRotation, rotationColorClass, MONTHLY_MARGIN_BREAKEVEN } from '../../lib/constants';
 import { formatDateReunion, reunionMonthStart } from '../../lib/datetime';
+import { isAdmin } from '../../lib/roles';
+
+// Marge, valeur de stock, produits à surveiller : ce tableau de bord est
+// admin uniquement. Un commercial voit une version allégée à la place.
+if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin/tableau-de-bord');
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'] as const;
 

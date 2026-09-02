@@ -3,6 +3,9 @@ import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { ORDER_STATUS_LABEL, CLIENT_STATUS_LABEL } from '../../lib/constants';
 import { formatDateTimeReunion } from '../../lib/datetime';
+import { isAdmin } from '../../lib/roles';
+
+if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
 const PAGE_SIZE = 50;
 const page = Math.max(1, parseInt(Astro.url.searchParams.get('page') ?? '1', 10));

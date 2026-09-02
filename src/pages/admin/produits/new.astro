@@ -2,6 +2,9 @@
 import AdminLayout from '../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../lib/supabase';
 import { logAdminAction } from '../../../lib/audit';
+import { isAdmin } from '../../../lib/roles';
+
+if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
 let formError = '';
 

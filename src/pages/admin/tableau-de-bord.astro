@@ -1,0 +1,264 @@
+---
+import AdminLayout from '../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../lib/supabase';
+import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR } from '../../lib/constants';
+import { formatDateReunion, reunionMonthStart } from '../../lib/datetime';
+import { isAdmin } from '../../lib/roles';
+
+// Version allégée du tableau de bord, pour un rôle commercial : ni marge, ni
+// valeur de stock, ni produits à surveiller — ces figures vivent uniquement
+// sur /admin (admin uniquement). Un admin qui arrive ici directement voit le
+// vrai tableau de bord à la place.
+if (isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
+
+const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'] as const;
+const monthStart = reunionMonthStart(0).toISOString();
+
+const [
+  { data: monthOrders },
+  { data: recentOrders },
+  { data: recentClients },
+  { data: prospects },
+] = await Promise.all([
+  supabaseAdmin
+    .from('orders')
+    .select('id, order_items(quantity, price_ht_snapshot)')
+    .in('status', REVENUE_STATUSES)
+    .gte('created_at', monthStart),
+  supabaseAdmin.from('orders').select('id, nom, societe, status, created_at').order('created_at', { ascending: false }).limit(6),
+  supabaseAdmin.from('client_accounts').select('id, nom, societe, status, created_at').order('created_at', { ascending: false }).limit(6),
+  supabaseAdmin.from('contact_requests').select('id, nom, societe, telephone, email, created_at').eq('status', 'nouveau').order('created_at', { ascending: false }).limit(8),
+]);
+
+let caMonth = 0;
+for (const order of monthOrders ?? []) {
+  for (const item of (order as any).order_items ?? []) {
+    const prix = item.price_ht_snapshot != null ? Number(item.price_ht_snapshot) : null;
+    if (prix != null) caMonth += prix * item.quantity;
+  }
+}
+const orderCountMonth = (monthOrders ?? []).length;
+const panierMoyen = orderCountMonth > 0 ? caMonth / orderCountMonth : 0;
+
+function fmtEuros(n: number) {
+  return n.toFixed(2).replace('.', ',') + ' €';
+}
+---
+<AdminLayout title="Tableau de bord" activeNav="dashboard">
+  <div class="kpi-grid">
+    <div class="kpi-tile">
+      <span class="kpi-label">CA du mois (HT)</span>
+      <span class="kpi-value">{fmtEuros(caMonth)}</span>
+    </div>
+    <div class="kpi-tile">
+      <span class="kpi-label">Commandes ce mois</span>
+      <span class="kpi-value">{orderCountMonth}</span>
+    </div>
+    <div class="kpi-tile">
+      <span class="kpi-label">Panier moyen (HT)</span>
+      <span class="kpi-value">{fmtEuros(panierMoyen)}</span>
+    </div>
+  </div>
+
+  <div class="grid-2col">
+    <div class="card">
+      <h2 class="card-title">Commandes récentes</h2>
+      {(recentOrders ?? []).length === 0 ? (
+        <p class="empty">Aucune commande pour le moment.</p>
+      ) : (
+        <ul class="list">
+          {(recentOrders ?? []).map(o => (
+            <li class="list-row">
+              <a href={`/admin/commandes`} class="list-main">
+                <span class="list-name">{o.societe || o.nom}</span>
+                <span class="list-date">{formatDateReunion(o.created_at)}</span>
+              </a>
+              <span class={`badge badge--${ORDER_STATUS_COLOR[o.status as keyof typeof ORDER_STATUS_COLOR] ?? 'muted'}`}>
+                {ORDER_STATUS_LABEL[o.status as keyof typeof ORDER_STATUS_LABEL] ?? o.status}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <a href="/admin/commandes" class="card-link">Voir toutes les commandes →</a>
+    </div>
+
+    <div class="card">
+      <h2 class="card-title">Nouveaux clients</h2>
+      {(recentClients ?? []).length === 0 ? (
+        <p class="empty">Aucun client pour le moment.</p>
+      ) : (
+        <ul class="list">
+          {(recentClients ?? []).map(c => (
+            <li class="list-row">
+              <a href={`/admin/clients/${c.id}`} class="list-main">
+                <span class="list-name">{c.societe || c.nom}</span>
+                <span class="list-date">{formatDateReunion(c.created_at)}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+      <a href="/admin/clients" class="card-link">Voir tous les clients →</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="card-title">Prospects à recontacter</h2>
+    {(prospects ?? []).length === 0 ? (
+      <p class="empty">Aucun nouveau contact en attente.</p>
+    ) : (
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Nom</th>
+              <th>Société</th>
+              <th>Téléphone</th>
+              <th>Email</th>
+              <th>Reçu le</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(prospects ?? []).map(p => (
+              <tr>
+                <td class="td-strong">{p.nom}</td>
+                <td>{p.societe ?? '—'}</td>
+                <td class="td-mono">{p.telephone ?? '—'}</td>
+                <td class="td-mono">{p.email ?? '—'}</td>
+                <td class="td-muted">{formatDateReunion(p.created_at)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+    <a href="/admin/clients?view=contact" class="card-link">Voir toutes les demandes de contact →</a>
+  </div>
+</AdminLayout>
+
+<style>
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+.kpi-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-5);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.kpi-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.kpi-value {
+  font-family: var(--font-display);
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--color-ink);
+  letter-spacing: -0.02em;
+}
+
+.grid-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-6);
+  margin-bottom: var(--space-4);
+}
+.card-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-ink);
+  margin: 0 0 var(--space-4);
+}
+.card-link {
+  display: inline-block;
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-primary-deep);
+  text-decoration: none;
+}
+.card-link:hover { text-decoration: underline; }
+
+.empty { font-size: var(--text-sm); color: var(--color-muted); }
+
+.list { display: flex; flex-direction: column; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.list-row:last-child { border-bottom: none; }
+.list-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-decoration: none;
+  min-width: 0;
+}
+.list-name { font-size: var(--text-sm); font-weight: 500; color: var(--color-ink); }
+.list-date { font-size: var(--text-xs); color: var(--color-muted); }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+.badge--muted  { background: var(--color-surface);  color: var(--color-muted); }
+.badge--blue   { background: oklch(0.93 0.05 220);  color: oklch(0.33 0.12 220); }
+.badge--amber  { background: oklch(0.95 0.07 80);   color: oklch(0.40 0.14 80); }
+.badge--purple { background: oklch(0.93 0.05 295);  color: oklch(0.38 0.12 295); }
+.badge--green  { background: oklch(0.92 0.08 150);  color: oklch(0.32 0.12 150); }
+.badge--red    { background: oklch(0.95 0.04 25);   color: oklch(0.46 0.18 25); }
+
+.table-wrap { overflow-x: auto; }
+.data-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.data-table thead th {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+.data-table tbody td {
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+.data-table tbody tr:last-child td { border-bottom: none; }
+.td-strong { font-weight: 500; color: var(--color-ink); }
+.td-muted { color: var(--color-muted); white-space: nowrap; }
+.td-mono { font-family: var(--font-mono); }
+
+@media (max-width: 768px) {
+  .grid-2col { grid-template-columns: 1fr; }
+}
+</style>

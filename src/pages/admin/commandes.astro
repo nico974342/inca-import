@@ -6,6 +6,9 @@ import { sendOrderConfirmedWebhook } from '../../lib/webhooks';
 import { logAdminAction } from '../../lib/audit';
 import { ORDER_STATUSES, ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, marginColorClass, isOrderEditable } from '../../lib/constants';
 import { formatDateReunion } from '../../lib/datetime';
+import { isAdmin } from '../../lib/roles';
+
+const viewerIsAdmin = isAdmin((Astro.locals as any).user);
 
 // Handle POST: update order status
 if (Astro.request.method === 'POST') {
@@ -383,7 +386,7 @@ const EDIT_ERROR_MSG: Record<string, string> = {
                   <p class="no-items">Aucun article enregistré.</p>
                 )}
 
-                {margin !== null && (
+                {viewerIsAdmin && margin !== null && (
                   <div class={`margin-bar margin-bar--${marginColorClass(margin.pct)}`}>
                     <span class="margin-label">
                       Marge{margin.partial ? '*' : ''} :
@@ -470,14 +473,16 @@ const EDIT_ERROR_MSG: Record<string, string> = {
                   </form>
                 </div>
 
-                <form
-                  method="post"
-                  action={`/api/admin/orders/${order.id}/delete`}
-                  class="order-delete-form"
-                  onsubmit={`return confirm('Supprimer la commande #${shortId(order.id)} ?\\nCette action est irréversible.')`}
-                >
-                  <button type="submit" class="btn-delete-order">Supprimer cette commande</button>
-                </form>
+                {viewerIsAdmin && (
+                  <form
+                    method="post"
+                    action={`/api/admin/orders/${order.id}/delete`}
+                    class="order-delete-form"
+                    onsubmit={`return confirm('Supprimer la commande #${shortId(order.id)} ?\\nCette action est irréversible.')`}
+                  >
+                    <button type="submit" class="btn-delete-order">Supprimer cette commande</button>
+                  </form>
+                )}
               </div>
             </details>
           </li>

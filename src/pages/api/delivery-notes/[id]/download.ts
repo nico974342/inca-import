@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../lib/supabase';
 import { findClientByEmail } from '../../../../lib/clients';
+import { isClientRole } from '../../../../lib/roles';
 
 export const GET: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -8,8 +9,9 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
 
   if (!user) return new Response('Non autorisé', { status: 401 });
 
-  // Site-wide convention: any authenticated non-client user is an admin
-  const isClient = user.user_metadata?.role === 'client';
+  // Staff (admin or commercial) can download any delivery note — only a
+  // client account is restricted to its own.
+  const isClient = isClientRole(user);
 
   const { id } = params;
   if (!id) return new Response('Non trouvé', { status: 404 });

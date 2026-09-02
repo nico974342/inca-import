@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../lib/supabase';
+import { isStaff } from '../../../../lib/roles';
 
 const MAX_MESSAGES = 200;
 const MAX_LENGTH = 2000;
@@ -8,17 +9,17 @@ function json(body: Record<string, unknown>, status: number) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-async function requireAdmin(request: Request, cookies: any) {
+async function requireStaff(request: Request, cookies: any) {
   const supabase = createAuthClient(request, cookies);
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user || user.user_metadata?.role === 'client') return null;
+  if (!user || !isStaff(user)) return null;
   return user;
 }
 
 // Full refetch every poll — simplest option for a two-person internal chat,
 // no cursor/delta tracking needed at this volume.
 export const GET: APIRoute = async ({ request, cookies }) => {
-  const user = await requireAdmin(request, cookies);
+  const user = await requireStaff(request, cookies);
   if (!user) return json({ error: 'Non autorisé' }, 401);
 
   const { data, error } = await supabaseAdmin
@@ -36,7 +37,7 @@ export const GET: APIRoute = async ({ request, cookies }) => {
 };
 
 export const POST: APIRoute = async ({ request, cookies }) => {
-  const user = await requireAdmin(request, cookies);
+  const user = await requireStaff(request, cookies);
   if (!user || !user.email) return json({ error: 'Non autorisé' }, 401);
 
   const body = await request.json().catch(() => null) as { content?: string } | null;

@@ -3,6 +3,9 @@ import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { sanitizeText } from '../../lib/sanitize';
 import { DELAI_LIVRAISON_DEFAUT_JOURS } from '../../lib/constants';
+import { isAdmin } from '../../lib/roles';
+
+if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
 // jours_securite et cycle_commande_jours peuvent chacun ne pas encore
 // exister selon que leur migration respective a été lancée — deux sondes

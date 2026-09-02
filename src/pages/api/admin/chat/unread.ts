@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../lib/supabase';
+import { isStaff } from '../../../../lib/roles';
 
 function json(body: Record<string, unknown>, status: number) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -10,7 +11,7 @@ function json(body: Record<string, unknown>, status: number) {
 export const GET: APIRoute = async ({ request, cookies, url }) => {
   const supabase = createAuthClient(request, cookies);
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user || user.user_metadata?.role === 'client') return json({ error: 'Non autorisé' }, 401);
+  if (!user || !isStaff(user)) return json({ error: 'Non autorisé' }, 401);
 
   const since = url.searchParams.get('since');
   if (!since) return json({ count: 0 }, 200);

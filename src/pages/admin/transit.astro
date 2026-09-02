@@ -9,6 +9,9 @@ import {
   computeShipmentProgress, allocateCargoSlots, type ShipmentStatus,
 } from '../../lib/constants';
 import { formatDateReunion, todayReunionISO } from '../../lib/datetime';
+import { isAdmin } from '../../lib/roles';
+
+if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
 // ── Écritures : uniquement sur shipments / shipment_items. Ni products,
 //    ni stock, ni PUMP — le transit est du suivi, pas du mouvement. ──

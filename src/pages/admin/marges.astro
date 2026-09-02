@@ -3,6 +3,9 @@ import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { marginColorClass } from '../../lib/constants';
 import { formatDateReunion, reunionMonthStart } from '../../lib/datetime';
+import { isAdmin } from '../../lib/roles';
+
+if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
 // Last 12 months (full calendar months, oldest first) — bornes ancrées sur
 // le calendrier de La Réunion, voir reunionMonthStart().

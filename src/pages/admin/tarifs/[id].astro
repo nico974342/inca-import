@@ -2,6 +2,9 @@
 import AdminLayout from '../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../lib/supabase';
 import { logAdminAction } from '../../../lib/audit';
+import { isAdmin } from '../../../lib/roles';
+
+const viewerIsAdmin = isAdmin((Astro.locals as any).user);
 
 const { id } = Astro.params;
 const adminEmail = (Astro.locals as any).user?.email ?? 'inconnu';
@@ -15,6 +18,10 @@ const { data: group } = await supabaseAdmin
 if (!group) return Astro.redirect('/admin/tarifs');
 
 if (Astro.request.method === 'POST') {
+  // Modifier les prix d'un groupe — admin uniquement ; un commercial ne
+  // voit ces tarifs qu'en lecture (voir le rendu plus bas).
+  if (!viewerIsAdmin) return new Response('Non autorisé', { status: 403 });
+
   const form = await Astro.request.formData();
 
   const toUpsert: { price_group_id: string; product_id: string; price_ht: number }[] = [];
@@ -119,17 +126,25 @@ const saved = !!Astro.url.searchParams.get('saved');
               <td class="td-muted">{p.categoryLabel}</td>
               <td class="th-num td-muted">{p.basePrice != null ? `${p.basePrice.toFixed(2).replace('.', ',')} €` : '—'}</td>
               <td class="th-num">
-                <input
-                  type="number"
-                  name={`price_${p.id}`}
-                  class="price-input"
-                  min="0"
-                  step="0.01"
-                  placeholder={p.basePrice != null ? p.basePrice.toFixed(2) : '0.00'}
-                  value={p.override != null ? p.override.toFixed(2) : ''}
-                  aria-label={`Prix pour ${p.name} dans ce groupe`}
-                />
-                <span class="unit">€</span>
+                {viewerIsAdmin ? (
+                  <>
+                    <input
+                      type="number"
+                      name={`price_${p.id}`}
+                      class="price-input"
+                      min="0"
+                      step="0.01"
+                      placeholder={p.basePrice != null ? p.basePrice.toFixed(2) : '0.00'}
+                      value={p.override != null ? p.override.toFixed(2) : ''}
+                      aria-label={`Prix pour ${p.name} dans ce groupe`}
+                    />
+                    <span class="unit">€</span>
+                  </>
+                ) : (
+                  <span class="price-readonly">
+                    {p.override != null ? `${p.override.toFixed(2).replace('.', ',')} €` : '—'}
+                  </span>
+                )}
               </td>
             </tr>
           ))}
@@ -138,9 +153,11 @@ const saved = !!Astro.url.searchParams.get('saved');
       <p class="no-results" id="noResults" hidden>Aucun produit ne correspond à votre recherche.</p>
     </div>
 
-    <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Enregistrer les prix</button>
-    </div>
+    {viewerIsAdmin && (
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Enregistrer les prix</button>
+      </div>
+    )}
   </form>
 </AdminLayout>
 
@@ -286,6 +303,11 @@ const saved = !!Astro.url.searchParams.get('saved');
   border: 1.5px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
   outline: none;
+}
+.price-readonly {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
 }
 .price-input:focus { border-color: var(--color-primary); }
 .unit { margin-left: var(--space-2); font-size: var(--text-xs); color: var(--color-muted); }

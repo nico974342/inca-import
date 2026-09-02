@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../lib/supabase';
 import { logAdminAction } from '../../../lib/audit';
+import { isAdmin, isStaff } from '../../../lib/roles';
 
 // products.stock_updated_at n'a jamais existé : schema_v9.sql, qui l'ajoutait,
 // n'a jamais été lancé. Les replis qui vivaient ici masquaient l'absence de
@@ -58,7 +59,8 @@ async function zeroAllStock() {
 export const GET: APIRoute = async ({ request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user || user.user_metadata?.role === 'client') {
+  // Lecture seule — un commercial peut consulter le stock disponible.
+  if (!user || !isStaff(user)) {
     return new Response('Non autorisé', { status: 401 });
   }
 
@@ -71,7 +73,8 @@ export const GET: APIRoute = async ({ request, cookies }) => {
 export const POST: APIRoute = async ({ request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user || user.user_metadata?.role === 'client') {
+  // Ajustement de stock — admin uniquement.
+  if (!user || !isAdmin(user)) {
     return new Response('Non autorisé', { status: 401 });
   }
   const adminEmail = user.email ?? 'inconnu';

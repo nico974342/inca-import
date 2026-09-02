@@ -2,6 +2,9 @@
 import AdminLayout from '../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../lib/supabase';
 import { todayReunionISO } from '../../../lib/datetime';
+import { isAdmin } from '../../../lib/roles';
+
+if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
 const { data: products } = await supabaseAdmin
   .from('products')

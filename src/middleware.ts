@@ -1,14 +1,33 @@
 import { defineMiddleware } from 'astro:middleware';
 import { createAuthClient } from './lib/supabase';
+import { isStaff } from './lib/roles';
 
 export const onRequest = defineMiddleware(async (context, next) => {
   const path = context.url.pathname;
 
-  // Admin protection — block unauthenticated users and client accounts
+  // API baseline — these prefixes are staff-only surface area with no page
+  // middleware of their own (Astro middleware only runs for page routes it
+  // matches by path here, not automatically for /api/*, so each prefix needs
+  // its own check). Per-route handlers still gate admin-only actions more
+  // precisely; this is the backstop that closes the "route left unguarded"
+  // gap rather than the only line of defense.
+  if (path.startsWith('/api/admin') || path.startsWith('/api/produits')) {
+    const supabase = createAuthClient(context.request, context.cookies);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user || !isStaff(user)) {
+      return new Response('Non autorisé', { status: 401 });
+    }
+    context.locals.user = user;
+    return next();
+  }
+
+  // Admin protection — block unauthenticated users and client accounts.
+  // Passing this gate only means "some staff seat" (admin or commercial) —
+  // individual admin-only pages still gate themselves with isAdmin().
   if (path.startsWith('/admin') && path !== '/admin/login') {
     const supabase = createAuthClient(context.request, context.cookies);
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user || user.user_metadata?.role === 'client') {
+    if (!user || !isStaff(user)) {
       return context.redirect('/admin/login');
     }
 
@@ -48,7 +67,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
   if (path === '/') {
     const supabase = createAuthClient(context.request, context.cookies);
     const { data: { user } } = await supabase.auth.getUser();
-    if (user && user.user_metadata?.role !== 'client') {
+    if (isStaff(user)) {
       return context.redirect('/admin');
     }
   }

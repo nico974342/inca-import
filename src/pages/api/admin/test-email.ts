@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { Resend } from 'resend';
 import { createAuthClient } from '../../../lib/supabase';
+import { isAdmin } from '../../../lib/roles';
 
 /**
  * Diagnostic endpoint — GET /api/admin/test-email
@@ -16,7 +17,7 @@ import { createAuthClient } from '../../../lib/supabase';
 export const GET: APIRoute = async ({ url, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user || user.user_metadata?.role === 'client') {
+  if (!user || !isAdmin(user)) {
     return new Response('Non autorisé', { status: 401 });
   }
 

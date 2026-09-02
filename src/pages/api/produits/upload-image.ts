@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../lib/supabase';
+import { isAdmin } from '../../../lib/roles';
 
 const BUCKET = 'product-images';
 const MAX_SIZE = 5 * 1024 * 1024; // 5 MB
@@ -39,7 +40,7 @@ async function ensureBucket() {
 export const POST: APIRoute = async ({ request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user || user.user_metadata?.role === 'client') {
+  if (!user || !isAdmin(user)) {
     return json({ error: 'Non autorisé' }, 401);
   }
 

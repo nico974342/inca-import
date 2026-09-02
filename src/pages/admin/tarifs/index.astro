@@ -3,10 +3,16 @@ import AdminLayout from '../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../lib/supabase';
 import { sanitizeText } from '../../../lib/sanitize';
 import { logAdminAction } from '../../../lib/audit';
+import { isAdmin } from '../../../lib/roles';
 
+const viewerIsAdmin = isAdmin((Astro.locals as any).user);
 const adminEmail = (Astro.locals as any).user?.email ?? 'inconnu';
 
 if (Astro.request.method === 'POST') {
+  // Créer un groupe ou changer la grille par défaut — admin uniquement. Un
+  // commercial ne voit ces tarifs qu'en lecture (voir le rendu plus bas).
+  if (!viewerIsAdmin) return new Response('Non autorisé', { status: 403 });
+
   const data   = await Astro.request.formData();
   const action = data.get('action') as string;
 
@@ -100,26 +106,28 @@ const ERR_MSG: Record<string, string> = {
     <>
       {ok  && <div class="alert alert--ok" role="status">Enregistré.</div>}
       {err && <div class="alert alert--error" role="alert">{ERR_MSG[err] ?? ERR_MSG.erreur}</div>}
-      {!hasDefaultGroup && groups.length > 0 && (
+      {viewerIsAdmin && !hasDefaultGroup && groups.length > 0 && (
         <div class="alert alert--warn" role="status">
           Aucune grille n'est définie par défaut — tout client sans groupe assigné voit le prix catalogue de base.
           Cliquez sur « Définir par défaut » sur la grille de votre choix ci-dessous pour changer cela.
         </div>
       )}
 
-      <form method="post" class="add-form">
-        <input type="hidden" name="action" value="create_group" />
-        <div class="field">
-          <label class="field-label" for="pg-name">Nouveau groupe tarifaire</label>
-          <input type="text" id="pg-name" name="name" required maxlength="80" placeholder="Ex. Stations Incana" autocomplete="off" />
-        </div>
-        <button type="submit" class="btn btn-primary">Créer</button>
-      </form>
+      {viewerIsAdmin && (
+        <form method="post" class="add-form">
+          <input type="hidden" name="action" value="create_group" />
+          <div class="field">
+            <label class="field-label" for="pg-name">Nouveau groupe tarifaire</label>
+            <input type="text" id="pg-name" name="name" required maxlength="80" placeholder="Ex. Stations Incana" autocomplete="off" />
+          </div>
+          <button type="submit" class="btn btn-primary">Créer</button>
+        </form>
+      )}
 
       {groups.length === 0 ? (
         <div class="empty-state">
           <p class="empty-title">Aucun groupe tarifaire.</p>
-          <p class="empty-body">Créez-en un ci-dessus. Tant qu'aucun groupe n'existe, tous les clients voient le prix catalogue.</p>
+          <p class="empty-body">{viewerIsAdmin ? 'Créez-en un ci-dessus. ' : ''}Tant qu'aucun groupe n'existe, tous les clients voient le prix catalogue.</p>
         </div>
       ) : (
         <div class="table-wrap">
@@ -157,7 +165,7 @@ const ERR_MSG: Record<string, string> = {
                   <td class="th-num td-muted">{itemCountByGroup.get(g.id) ?? 0}</td>
                   <td class="th-num td-muted">{clientCountByGroup.get(g.id) ?? 0}</td>
                   <td class="td-note">
-                    {!g.is_default && (
+                    {viewerIsAdmin && !g.is_default && (
                       <form method="post" onsubmit={`return confirm('Faire de « ${g.name.replace(/'/g, "\\'")} » la grille par défaut ?\\nTout client sans groupe assigné basculera sur ces prix.')`}>
                         <input type="hidden" name="action" value="set_default" />
                         <input type="hidden" name="id" value={g.id} />
@@ -166,7 +174,7 @@ const ERR_MSG: Record<string, string> = {
                     )}
                   </td>
                   <td class="td-note">
-                    <a href={`/admin/tarifs/${g.id}`} class="edit-link">Modifier les prix →</a>
+                    <a href={`/admin/tarifs/${g.id}`} class="edit-link">{viewerIsAdmin ? 'Modifier les prix →' : 'Voir les prix →'}</a>
                   </td>
                 </tr>
               ))}

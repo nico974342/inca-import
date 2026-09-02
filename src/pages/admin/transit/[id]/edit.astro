@@ -4,6 +4,9 @@ import { supabaseAdmin } from '../../../../lib/supabase';
 import { sanitizeText } from '../../../../lib/sanitize';
 import { logAdminAction } from '../../../../lib/audit';
 import { SHIPMENT_STATUSES, SHIPMENT_STATUS_LABEL, type ShipmentStatus } from '../../../../lib/constants';
+import { isAdmin } from '../../../../lib/roles';
+
+if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
 const { id } = Astro.params;
 

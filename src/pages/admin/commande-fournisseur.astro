@@ -12,6 +12,9 @@ import {
   estimatedArrivalWithMargin, estimatedRuptureDate,
   type ModeCommande,
 } from '../../lib/constants';
+import { isAdmin } from '../../lib/roles';
+
+if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'];
 

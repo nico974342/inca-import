@@ -1,12 +1,14 @@
 ---
 import type { User } from '@supabase/supabase-js';
+import { isClientRole, isStaff as isStaffRole, ROLE_LABEL, getRole } from '../lib/roles';
 
 interface Props {
   user?: User | null;
 }
 const { user } = Astro.props;
-const isClient = user?.user_metadata?.role === 'client';
-const isAdmin = !!user && !isClient;
+const isClient = isClientRole(user);
+const isAdmin = isStaffRole(user);
+const staffLabel = ROLE_LABEL[getRole(user) ?? 'admin'];
 ---
 <header class="site-header" id="site-header">
   <div class="container nav-inner">
@@ -15,7 +17,7 @@ const isAdmin = !!user && !isClient;
       <a href="/" class="wordmark" aria-label="Inca Import — accueil">
         <span class="wm-inca">Inca</span><span class="wm-import">Import</span>
       </a>
-      {isAdmin && <span class="admin-badge">Admin</span>}
+      {isAdmin && <span class="admin-badge">{staffLabel}</span>}
     </div>
 
     {!isAdmin && (

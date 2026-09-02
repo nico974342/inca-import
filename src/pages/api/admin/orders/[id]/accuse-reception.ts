@@ -3,12 +3,13 @@ import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
 import { generateInvoicePDF } from '../../../../../lib/pdf';
 import { findClientByEmail } from '../../../../../lib/clients';
 import { formatDateReunion } from '../../../../../lib/datetime';
+import { isStaff } from '../../../../../lib/roles';
 
 export const GET: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
   const { data: { user } } = await supabase.auth.getUser();
 
-  if (!user || user.user_metadata?.role === 'client') {
+  if (!user || !isStaff(user)) {
     return new Response('Non autorisé', { status: 401 });
   }
 

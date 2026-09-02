@@ -1,6 +1,9 @@
 ---
 import AdminLayout from '../../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../../lib/supabase';
+import { isAdmin } from '../../../../lib/roles';
+
+if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
 const { id } = Astro.params;
 if (!id) return Astro.redirect('/admin/reception', 302);
