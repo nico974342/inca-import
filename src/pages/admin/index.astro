@@ -44,7 +44,7 @@ const [
   supabaseAdmin.from('contact_requests').select('id, nom, societe, status, created_at').order('created_at', { ascending: false }).limit(5),
   supabaseAdmin
     .from('orders')
-    .select('id, created_at, order_items(product_id, product_name, quantity, unit, price_ht_snapshot, pump_snapshot, products(category))')
+    .select('id, created_at, status, order_items(product_id, product_name, quantity, unit, price_ht_snapshot, pump_snapshot, products(category))')
     .in('status', REVENUE_STATUSES)
     .gte('created_at', marginWindowStart),
   supabaseAdmin.from('products').select('id, name, stock_quantity, prix_achat_moyen_ht, price_ht'),
@@ -64,11 +64,21 @@ const margin12moByProduct = new Map<string, number>();
 const cogs12moByProduct = new Map<string, number>();
 const CURRENT_IDX = MONTHS_BACK - 1;
 
+// Mois en cours seulement : part déjà livrée (acquise) vs part encore sur
+// des commandes confirmées/en préparation/expédiées (pas encore acquise —
+// une commande non livrée peut encore être annulée ou modifiée). Sommées
+// avec les mêmes filtres que buckets[].caHt/margeHt (prix non nul pour le
+// CA, prix ET pump non nuls pour la marge) — livrée + en cours doit donc
+// toujours reconstituer exactement le total du mois.
+let caMonthLivree = 0, caMonthEnCours = 0;
+let margeMonthLivree = 0, margeMonthEnCours = 0;
+
 for (const order of (twelveMonthOrders ?? [])) {
   const ts = new Date(order.created_at).getTime();
   const idx = monthDefs.findIndex(m => ts >= m.start.getTime() && ts < m.end.getTime());
   const isCurrentMonth = idx === CURRENT_IDX;
   if (idx !== -1) buckets[idx].orderCount++;
+  const isLivree = (order as any).status === 'livree';
 
   for (const item of ((order as any).order_items ?? [])) {
     const qty  = item.quantity ?? 0;
@@ -90,6 +100,12 @@ for (const order of (twelveMonthOrders ?? [])) {
     }
 
     if (isCurrentMonth) {
+      if (isLivree) caMonthLivree += prix * qty; else caMonthEnCours += prix * qty;
+      if (pump != null) {
+        const margeLigne = (prix - pump) * qty;
+        if (isLivree) margeMonthLivree += margeLigne; else margeMonthEnCours += margeLigne;
+      }
+
       const key  = item.product_id ?? item.product_name ?? 'inconnu';
       const prev = productAgg.get(key) ?? { productId: item.product_id ?? null, name: item.product_name ?? 'Produit', unit: item.unit ?? null, qty: 0, ca: 0, marge: 0, hasPump: false };
       prev.qty += qty;
@@ -207,6 +223,16 @@ const breakEvenPct: number = MONTHLY_MARGIN_BREAKEVEN > 0 ? (margeMonthHt / MONT
 const breakEvenColor: 'red' | 'amber' | 'green' = breakEvenPct >= 100 ? 'green' : breakEvenPct >= 50 ? 'amber' : 'red';
 const breakEvenSurplus = margeMonthHt - MONTHLY_MARGIN_BREAKEVEN;
 
+// Barre en deux segments : la part livrée (acquise, couleur de statut
+// habituelle) puis la part encore en cours (pas acquise — commande
+// confirmée/en préparation/expédiée, donc annulable ou modifiable — dans
+// une couleur neutre distincte). Le total des deux segments reste plafonné
+// à 100 % de la barre comme avant ; le surplus au-delà du point mort continue
+// à être annoncé en texte plutôt qu'en dépassant la barre.
+const breakEvenTotalWidth  = Math.min(100, Math.max(0, breakEvenPct));
+const breakEvenLivreeWidth = Math.min(breakEvenTotalWidth, Math.max(0, MONTHLY_MARGIN_BREAKEVEN > 0 ? (margeMonthLivree / MONTHLY_MARGIN_BREAKEVEN) * 100 : 0));
+const breakEvenEnCoursWidth = Math.max(0, breakEvenTotalWidth - breakEvenLivreeWidth);
+
 // ── Top 5 products this month, by margin HT generated ──────────────────────
 const top5Products = Array.from(productAgg.values())
   .sort((a, b) => b.marge - a.marge)
@@ -313,6 +339,11 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
       </div>
       <span class="kpi-label">CA du mois (HT)</span>
       <span class="kpi-value">{formatCA(caMonth)}</span>
+      {caMonth > 0 && (
+        <span class="kpi-breakdown">
+          dont <span class="kpi-breakdown--livree">{formatCA(caMonthLivree)} livrés</span>, <span class="kpi-breakdown--encours">{formatCA(caMonthEnCours)} en cours</span>
+        </span>
+      )}
       <span class={`kpi-trend kpi-trend--${caTrend.dir}`}>
         <span class="kpi-trend-arrow">{caTrend.dir === 'up' ? '▲' : caTrend.dir === 'down' ? '▼' : '–'}</span>
         {trendLabel(caTrend)}
@@ -333,6 +364,11 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
         {formatCA(margeMonthHt)}
         {margeMonthPct != null && <span class="kpi-value-sub">{margeMonthPct.toFixed(1)} %</span>}
       </span>
+      {margeMonthHt !== 0 && (
+        <span class="kpi-breakdown">
+          dont <span class="kpi-breakdown--livree">{formatCA(margeMonthLivree)} livrés</span>, <span class="kpi-breakdown--encours">{formatCA(margeMonthEnCours)} en cours</span>
+        </span>
+      )}
       <span class={`kpi-trend kpi-trend--${margeTrend.dir}`}>
         <span class="kpi-trend-arrow">{margeTrend.dir === 'up' ? '▲' : margeTrend.dir === 'down' ? '▼' : '–'}</span>
         {margeTrend.pct == null ? '—' : `${margeTrend.pct > 0 ? '+' : margeTrend.pct < 0 ? '-' : ''}${formatCA(Math.abs(margeTrend.pct))}`}
@@ -340,7 +376,16 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
       </span>
       <div class="breakeven">
         <div class="breakeven-bar">
-          <div class={`breakeven-fill breakeven-fill--${breakEvenColor}`} style={`width:${Math.min(100, Math.max(0, breakEvenPct))}%`}></div>
+          <div
+            class={`breakeven-fill breakeven-fill--${breakEvenColor}`}
+            style={`width:${breakEvenLivreeWidth}%`}
+            title={`Livré : ${formatCA(margeMonthLivree)}`}
+          ></div>
+          <div
+            class="breakeven-fill breakeven-fill--encours"
+            style={`width:${breakEvenEnCoursWidth}%`}
+            title={`En cours (pas encore livré) : ${formatCA(margeMonthEnCours)}`}
+          ></div>
         </div>
         <div class="breakeven-label">
           <span>{formatCA(margeMonthHt)} / {formatCA(MONTHLY_MARGIN_BREAKEVEN)} <span class="breakeven-caption">point mort</span></span>
@@ -927,6 +972,19 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
   font-weight: 600;
 }
 
+.kpi-breakdown {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
+.kpi-breakdown--livree {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+.kpi-breakdown--encours {
+  color: oklch(0.50 0.05 255);
+  font-weight: 600;
+}
+
 .kpi-trend {
   margin-top: var(--space-2);
   display: inline-flex;
@@ -955,15 +1013,22 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
   border-radius: 999px;
   background: var(--color-surface-2);
   overflow: hidden;
+  display: flex;
 }
 .breakeven-fill {
   height: 100%;
-  border-radius: 999px;
-  transition: width 0.3s ease;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .breakeven-fill { transition: width 0.3s ease; }
 }
 .breakeven-fill--red   { background: oklch(0.62 0.19 25);  }
 .breakeven-fill--amber { background: oklch(0.72 0.15 65);  }
 .breakeven-fill--green { background: oklch(0.62 0.14 145); }
+/* Part encore en cours (commande confirmée/en préparation/expédiée, pas
+   encore livrée donc pas acquise) — teinte neutre volontairement à part de
+   l'échelle rouge/amber/vert du réalisé, pour ne jamais se lire comme un
+   niveau d'alerte. */
+.breakeven-fill--encours { background: oklch(0.80 0.03 255); }
 .breakeven-label {
   display: flex;
   flex-direction: column;
