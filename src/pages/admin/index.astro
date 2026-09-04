@@ -1,9 +1,10 @@
 ---
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
-import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, CONTACT_STATUS_LABEL, CONTACT_STATUS_COLOR, computeGmroi, gmroiColorClass, computeStockRotation, rotationColorClass, MONTHLY_MARGIN_BREAKEVEN } from '../../lib/constants';
+import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, CONTACT_STATUS_LABEL, CONTACT_STATUS_COLOR, computeGmroi, gmroiColorClass, computeStockRotation, rotationColorClass, MONTHLY_MARGIN_BREAKEVEN_FALLBACK } from '../../lib/constants';
 import { formatDateReunion, reunionMonthStart } from '../../lib/datetime';
 import { isAdmin } from '../../lib/roles';
+import { fetchCharges, resolveBreakEven } from '../../lib/charges';
 
 // Marge, valeur de stock, produits à surveiller : ce tableau de bord est
 // admin uniquement. Un commercial voit une version allégée à la place.
@@ -36,6 +37,7 @@ const [
   { data: recentContacts },
   { data: twelveMonthOrders },
   { data: allProductsRaw },
+  charges,
 ] = await Promise.all([
   supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }).eq('status', 'en_attente'),
   supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }).in('status', ['confirmee', 'en_preparation', 'expediee']),
@@ -48,6 +50,7 @@ const [
     .in('status', REVENUE_STATUSES)
     .gte('created_at', marginWindowStart),
   supabaseAdmin.from('products').select('id, name, stock_quantity, prix_achat_moyen_ht, price_ht'),
+  fetchCharges(),
 ]);
 
 // ── Bucket the order set by month for the 6-month chart, aggregate
@@ -219,9 +222,16 @@ const margeTrend: Trend = Math.abs(margeDiffHt) < 0.5
   : { dir: margeDiffHt > 0 ? 'up' : 'down', pct: margeDiffHt };
 
 // ── Point mort (break-even) progress for the current month ───────────────
-const breakEvenPct: number = MONTHLY_MARGIN_BREAKEVEN > 0 ? (margeMonthHt / MONTHLY_MARGIN_BREAKEVEN) * 100 : 0;
+// Calculé sur les charges fixes réellement saisies ; repli sur la constante
+// manuelle tant qu'aucune charge n'existe (voir lib/charges.ts).
+const currentMonthStart = reunionMonthStart(0);
+const currentMonthEndExclusive = reunionMonthStart(-1);
+const breakEven = resolveBreakEven(charges, currentMonthStart, currentMonthEndExclusive, MONTHLY_MARGIN_BREAKEVEN_FALLBACK);
+const breakEvenValue = breakEven.value;
+
+const breakEvenPct: number = breakEvenValue > 0 ? (margeMonthHt / breakEvenValue) * 100 : 0;
 const breakEvenColor: 'red' | 'amber' | 'green' = breakEvenPct >= 100 ? 'green' : breakEvenPct >= 50 ? 'amber' : 'red';
-const breakEvenSurplus = margeMonthHt - MONTHLY_MARGIN_BREAKEVEN;
+const breakEvenSurplus = margeMonthHt - breakEvenValue;
 
 // Barre en deux segments : la part livrée (acquise, couleur de statut
 // habituelle) puis la part encore en cours (pas acquise — commande
@@ -230,7 +240,7 @@ const breakEvenSurplus = margeMonthHt - MONTHLY_MARGIN_BREAKEVEN;
 // à 100 % de la barre comme avant ; le surplus au-delà du point mort continue
 // à être annoncé en texte plutôt qu'en dépassant la barre.
 const breakEvenTotalWidth  = Math.min(100, Math.max(0, breakEvenPct));
-const breakEvenLivreeWidth = Math.min(breakEvenTotalWidth, Math.max(0, MONTHLY_MARGIN_BREAKEVEN > 0 ? (margeMonthLivree / MONTHLY_MARGIN_BREAKEVEN) * 100 : 0));
+const breakEvenLivreeWidth = Math.min(breakEvenTotalWidth, Math.max(0, breakEvenValue > 0 ? (margeMonthLivree / breakEvenValue) * 100 : 0));
 const breakEvenEnCoursWidth = Math.max(0, breakEvenTotalWidth - breakEvenLivreeWidth);
 
 // ── Top 5 products this month, by margin HT generated ──────────────────────
@@ -388,7 +398,17 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
           ></div>
         </div>
         <div class="breakeven-label">
-          <span>{formatCA(margeMonthHt)} / {formatCA(MONTHLY_MARGIN_BREAKEVEN)} <span class="breakeven-caption">point mort</span></span>
+          <span>
+            {formatCA(margeMonthHt)} / {formatCA(breakEvenValue)} <span class="breakeven-caption">point mort</span>
+            <span
+              class="breakeven-source"
+              title={breakEven.source === 'calcule'
+                ? 'Somme de vos charges fixes actives ce mois-ci (/admin/marges).'
+                : `Aucune charge saisie — valeur fixée manuellement (${formatCA(MONTHLY_MARGIN_BREAKEVEN_FALLBACK)}). Configurez vos charges sur /admin/marges pour un point mort réel.`}
+            >
+              {breakEven.source === 'calcule' ? 'calculé sur vos charges' : 'valeur fixée manuellement'}
+            </span>
+          </span>
           {breakEvenPct >= 100 && <span class="breakeven-surplus">+{formatCA(breakEvenSurplus)} au-dessus du point mort</span>}
         </div>
       </div>
@@ -1040,6 +1060,15 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
 .breakeven-caption {
   color: var(--color-muted);
   font-weight: 400;
+}
+.breakeven-source {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 10px;
+  font-style: italic;
+  color: var(--color-muted);
+  cursor: help;
+  border-bottom: 1px dotted var(--color-border-strong);
 }
 .breakeven-surplus {
   color: oklch(0.38 0.14 145);

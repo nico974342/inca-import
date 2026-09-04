@@ -22,7 +22,10 @@ export const GET: APIRoute = async ({ request, cookies, url }) => {
     return new Response('La date de début doit précéder la date de fin.', { status: 400 });
   }
 
-  const { markdown } = await buildMargesExport(debut, fin);
+  const coefRaw = url.searchParams.get('coef');
+  const coefPct = coefRaw != null && Number.isFinite(Number(coefRaw)) && Number(coefRaw) >= 0 ? Number(coefRaw) : 100;
+
+  const { markdown } = await buildMargesExport(debut, fin, coefPct);
 
   return new Response(markdown, {
     status: 200,

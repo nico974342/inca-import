@@ -77,6 +77,13 @@ export function todayReunionISO(): string {
  * (heure de La Réunion) se ferait autrement compter dans le mois précédent,
  * puisqu'il n'est encore que 22h la veille en UTC.
  */
+/** Instant UTC correspondant à 00h00 à La Réunion pour une date "AAAA-MM-JJ"
+ *  (typiquement une valeur de <input type="date">, ou une colonne DATE
+ *  postgres déjà rendue en chaîne par le client Supabase). */
+export function reunionDateStartUTC(dateStr: string): Date {
+  return new Date(`${dateStr}T00:00:00+04:00`);
+}
+
 export function reunionMonthStart(monthsAgo = 0): Date {
   const [y, m] = new Intl.DateTimeFormat('en-CA', {
     timeZone: REUNION_TIMEZONE,

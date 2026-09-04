@@ -19,9 +19,12 @@ export const COMPANY_ADDRESS_LINE = `${COMPANY.addressLine}, ${COMPANY.postalCod
 /** Fallback rate used only when a product/order line has no tva_rate snapshot. */
 export const DEFAULT_TVA_RATE = 0.085;
 
-/** Fixed monthly gross-margin break-even (point mort), in euros HT. Update
- *  here if the business's break-even point changes. */
-export const MONTHLY_MARGIN_BREAKEVEN = 7000;
+/** Repli du point mort mensuel (euros HT), utilisé UNIQUEMENT tant qu'aucune
+ *  charge fixe n'est saisie dans la table `charges` — dès qu'il y en a une,
+ *  le point mort réel devient la somme des charges actives du mois (voir
+ *  lib/charges.ts, resolveBreakEven). Ne plus modifier cette valeur à la
+ *  main une fois les charges renseignées : elle ne sera plus utilisée. */
+export const MONTHLY_MARGIN_BREAKEVEN_FALLBACK = 7000;
 
 export const RESEND_DEFAULT_FROM = `${COMPANY.name} <noreply@inca-import.re>`;
 

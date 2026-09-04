@@ -1,7 +1,11 @@
 import { supabaseAdmin } from './supabase';
 import { fetchAvailability } from './stock';
-import { formatDateReunion, formatDateTimeReunion } from './datetime';
+import { formatDateReunion, formatDateTimeReunion, reunionDateStartUTC } from './datetime';
 import { CATEGORY_LABEL, ORDER_STATUS_LABEL } from './constants';
+import {
+  fetchCharges, computeChargesForPeriod, projectCharges, fetchRecentCompleteMonthMargins,
+  MONTHS_HISTORY_FOR_PROJECTION, MONTHS_AHEAD_FOR_PROJECTION,
+} from './charges';
 
 /**
  * Statuts inclus dans l'export — mêmes bornes que /admin/marges, à ne pas
@@ -23,13 +27,9 @@ export type MargesExportResult = {
   sizeChars: number;
 };
 
-function reunionDayStartUTC(dateStr: string): Date {
-  return new Date(`${dateStr}T00:00:00+04:00`);
-}
-
 /** Borne de fin exclusive : minuit du lendemain du dernier jour inclus. */
 function reunionDayEndExclusiveUTC(dateStr: string): Date {
-  const d = reunionDayStartUTC(dateStr);
+  const d = reunionDateStartUTC(dateStr);
   d.setUTCDate(d.getUTCDate() + 1);
   return d;
 }
@@ -88,13 +88,13 @@ type OrderRow = {
 
 /** Validation légère des bornes reçues du formulaire (YYYY-MM-DD, calendrier Réunion). */
 export function isValidDateStr(s: string | null | undefined): s is string {
-  return !!s && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(reunionDayStartUTC(s).getTime());
+  return !!s && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(reunionDateStartUTC(s).getTime());
 }
 
-export async function buildMargesExport(debut: string, fin: string): Promise<MargesExportResult> {
-  const startISO = reunionDayStartUTC(debut).toISOString();
+export async function buildMargesExport(debut: string, fin: string, coefPct: number = 100): Promise<MargesExportResult> {
+  const startISO = reunionDateStartUTC(debut).toISOString();
   const endISOExclusive = reunionDayEndExclusiveUTC(fin).toISOString();
-  const nbJours = Math.round((reunionDayEndExclusiveUTC(fin).getTime() - reunionDayStartUTC(debut).getTime()) / 86_400_000);
+  const nbJours = Math.round((reunionDayEndExclusiveUTC(fin).getTime() - reunionDateStartUTC(debut).getTime()) / 86_400_000);
 
   const [
     { data: ordersRaw },
@@ -103,6 +103,8 @@ export async function buildMargesExport(debut: string, fin: string): Promise<Mar
     { data: clientsRaw },
     { data: priceGroupsRaw },
     { data: firstOrderRaw },
+    charges,
+    historicalMonthMargins,
   ] = await Promise.all([
     supabaseAdmin
       .from('orders')
@@ -127,6 +129,8 @@ export async function buildMargesExport(debut: string, fin: string): Promise<Mar
       .select('id, nom, societe, email, points_de_vente, price_group_id, remise'),
     supabaseAdmin.from('price_groups').select('id, name, is_default'),
     supabaseAdmin.from('orders').select('created_at').order('created_at', { ascending: true }).limit(1),
+    fetchCharges(),
+    fetchRecentCompleteMonthMargins(MONTHS_HISTORY_FOR_PROJECTION),
   ]);
 
   const orders = (ordersRaw ?? []) as unknown as OrderRow[];
@@ -337,6 +341,15 @@ export async function buildMargesExport(debut: string, fin: string): Promise<Mar
   const totalMargePct = totalCaHt > 0 ? (totalMargeHt / totalCaHt) * 100 : null;
   const totalCartons = produitAggs.reduce((s, p) => s + p.cartons, 0);
 
+  // Charges au prorata des jours de la période dans chaque mois civil — voir
+  // computeChargesForPeriod pour la méthode exacte.
+  const chargesPeriode = computeChargesForPeriod(charges, debut, fin);
+  const resultatNetPeriode = totalMargeHt - chargesPeriode;
+  const resultatPctPeriode = totalCaHt > 0 ? (resultatNetPeriode / totalCaHt) * 100 : null;
+
+  // ── Prévisionnel — mêmes règles que /admin/marges (lib/charges.ts) ───────
+  const projection = projectCharges(charges, historicalMonthMargins, coefPct, MONTHS_AHEAD_FOR_PROJECTION);
+
   // ── Limites des données ─────────────────────────────────────────────────
   const firstOrderDate = firstOrderRaw?.[0]?.created_at ? new Date(firstOrderRaw[0].created_at) : null;
   const historiqueJours = firstOrderDate ? Math.round((Date.now() - firstOrderDate.getTime()) / 86_400_000) : null;
@@ -347,7 +360,7 @@ export async function buildMargesExport(debut: string, fin: string): Promise<Mar
 
   parts.push('# Export brut — Historique des marges (Inca Import)\n');
   parts.push(
-    `- Période couverte : ${formatDateReunion(reunionDayStartUTC(debut))} → ${formatDateReunion(reunionDayStartUTC(fin))} (${nbJours} jour${nbJours > 1 ? 's' : ''})\n` +
+    `- Période couverte : ${formatDateReunion(reunionDateStartUTC(debut))} → ${formatDateReunion(reunionDateStartUTC(fin))} (${nbJours} jour${nbJours > 1 ? 's' : ''})\n` +
     `- Généré le ${genere} (heure de La Réunion)\n` +
     `- Statuts de commande inclus : Confirmée, En préparation, Expédiée, Livrée\n` +
     `- Commandes sur la période : ${orders.length}\n` +
@@ -356,6 +369,7 @@ export async function buildMargesExport(debut: string, fin: string): Promise<Mar
   );
 
   parts.push('\n## Totaux\n');
+  parts.push('_Charges et résultat net au prorata des jours de la période dans chaque mois civil — voir Limites des données._\n\n');
   parts.push(mdTable(
     ['Indicateur', 'Valeur'],
     [
@@ -363,6 +377,9 @@ export async function buildMargesExport(debut: string, fin: string): Promise<Mar
       ['Coût HT', eur(totalCostHt)],
       ['Marge HT', eur(totalMargeHt)],
       ['Marge %', pct(totalMargePct)],
+      ['Charges (période, au prorata)', eur(chargesPeriode)],
+      ['Résultat net (période)', eur(resultatNetPeriode)],
+      ['Résultat %', pct(resultatPctPeriode)],
       ['Cartons vendus', totalCartons],
       ['Valeur du stock (à la génération)', eur(valeurStock)],
     ],
@@ -400,6 +417,26 @@ export async function buildMargesExport(debut: string, fin: string): Promise<Mar
     stockRows,
   ));
 
+  parts.push(`\n## Prévisionnel — ${MONTHS_AHEAD_FOR_PROJECTION} prochains mois\n`);
+  if (historicalMonthMargins.length === 0) {
+    parts.push(`Pas assez d'historique pour projeter : aucun des ${MONTHS_HISTORY_FOR_PROJECTION} mois précédant le mois en cours n'a encore de commande.\n`);
+  } else {
+    parts.push(
+      `Marge prévisionnelle mensuelle : moyenne des ${historicalMonthMargins.length} dernier${historicalMonthMargins.length > 1 ? 's' : ''} mois complet${historicalMonthMargins.length > 1 ? 's' : ''} ` +
+      `(${eur(projection.avgMargeHistorique)}) × coefficient d'ajustement ${coefPct} % = ${eur(projection.margePrevisionnelleMensuelle)}, appliquée identiquement à chaque mois projeté. ` +
+      `Seules les charges varient mois par mois, selon les dates de fin déjà saisies.\n\n`
+    );
+    parts.push(mdTable(
+      ['Mois', 'Marge prévisionnelle', 'Charges prévisionnelles', 'Résultat net', 'Cumulé'],
+      projection.months.map(m => [m.label, eur(m.margePrevisionnelle), eur(m.chargesPrevisionnelles), eur(m.resultatNet), eur(m.cumule)]),
+    ));
+    parts.push(
+      projection.moisSeuilDurable != null
+        ? `\nPoint mort franchi de façon durable dès **${projection.months[projection.moisSeuilDurable - 1].label}** : le résultat net reste positif ou nul jusqu'à la fin de l'horizon projeté.\n`
+        : `\nLe point mort n'est pas identifiable comme durablement franchi sur les ${MONTHS_AHEAD_FOR_PROJECTION} prochains mois avec ces hypothèses.\n`
+    );
+  }
+
   parts.push('\n## Limites des données\n');
   const limites: string[] = [];
   limites.push(
@@ -422,6 +459,13 @@ export async function buildMargesExport(debut: string, fin: string): Promise<Mar
   limites.push(`Les ruptures de stock passées ne sont pas tracées : une vente faible sur une référence peut refléter une indisponibilité plutôt qu'un manque d'intérêt client.`);
   limites.push(`La saisonnalité locale (fêtes, période scolaire, cyclone…) n'est pas modélisée dans ces chiffres.`);
   limites.push(`Les montants de vente viennent des snapshots pris à la commande (prix, coût) : ils restent corrects même si le prix catalogue ou le coût d'achat ont changé depuis.`);
+  limites.push(`Les charges de la période sont calculées au prorata du nombre de jours de chaque mois civil couvert par la période — une charge mensuelle n'est pas comptée en entier si la période ne couvre que quelques jours de son mois.`);
+  if (historicalMonthMargins.length > 0 && historicalMonthMargins.length < MONTHS_HISTORY_FOR_PROJECTION) {
+    limites.push(`Le prévisionnel s'appuie sur seulement ${historicalMonthMargins.length} mois complet${historicalMonthMargins.length > 1 ? 's' : ''} d'historique (activité trop récente pour ${MONTHS_HISTORY_FOR_PROJECTION}) : la moyenne qui le fonde peut ne pas être représentative — c'est une estimation à calibrer, pas un engagement.`);
+  } else if (historicalMonthMargins.length >= MONTHS_HISTORY_FOR_PROJECTION) {
+    limites.push(`Le prévisionnel est une estimation basée sur ${MONTHS_HISTORY_FOR_PROJECTION} mois d'historique dans une activité qui a démarré récemment — à calibrer avec prudence, pas à traiter comme un engagement.`);
+  }
+  limites.push(`Le coefficient d'ajustement du prévisionnel utilisé ici est ${coefPct} %${coefPct === 100 ? ' (valeur par défaut)' : ''} — ajustable sur /admin/marges.`);
   parts.push(limites.map(l => `- ${l}`).join('\n') + '\n');
 
   const markdown = parts.join('');
