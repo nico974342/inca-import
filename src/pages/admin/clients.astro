@@ -7,7 +7,7 @@ import { sendClientActivationEmail } from '../../lib/email';
 import { logAdminAction } from '../../lib/audit';
 import { CLIENT_STATUSES, CLIENT_STATUS_LABEL, CLIENT_STATUS_COLOR, CLIENT_TYPES, CLIENT_TYPE_LABEL } from '../../lib/constants';
 import { formatDateReunion } from '../../lib/datetime';
-import { isAdmin, ROLE_LABEL } from '../../lib/roles';
+import { isAdmin, getRole, ROLE_LABEL } from '../../lib/roles';
 
 const viewerIsAdmin = isAdmin((Astro.locals as any).user);
 
@@ -194,10 +194,12 @@ const contacts = contactsRaw ?? [];
 const priceGroups = priceGroupsRaw ?? [];
 
 // Staff role (admin/commercial) by email, for the badge in the list below.
+// app_metadata is the source of truth (lib/roles.ts) — user_metadata can be
+// written by the account holder and must never be trusted for this.
 const staffRoleByEmail = new Map<string, string>(
   ((authUsersData as any)?.users ?? [])
-    .map((u: any) => [u.email as string, u.user_metadata?.role as string])
-    .filter(([email, role]: [string, string]) => email && (role === 'admin' || role === 'commercial'))
+    .map((u: any) => [u.email as string, getRole(u)])
+    .filter(([email, role]: [string, string | null]) => email && (role === 'admin' || role === 'commercial'))
 );
 
 const pendingCount = clients.filter(c => c.status === 'en_attente').length;

@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../lib/supabase';
+import { isClientRole } from '../../../lib/roles';
 
 export const POST: APIRoute = async ({ request, cookies }) => {
   const json = (status: number, body: object) =>
@@ -11,7 +12,7 @@ export const POST: APIRoute = async ({ request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
   const { data: { user } } = await supabase.auth.getUser();
 
-  if (!user || user.user_metadata?.role !== 'client') {
+  if (!user || !isClientRole(user)) {
     return json(401, { error: 'Unauthorized' });
   }
 

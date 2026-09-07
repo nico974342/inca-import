@@ -5,11 +5,12 @@ import Footer from '../components/Footer.astro';
 import { supabaseAdmin, createAuthClient } from '../lib/supabase';
 import { findClientByEmail } from '../lib/clients';
 import { formatDateReunion } from '../lib/datetime';
+import { isClientRole } from '../lib/roles';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
 
-if (!user || user.user_metadata?.role !== 'client') {
+if (!user || !isClientRole(user)) {
   return Astro.redirect('/connexion?from=/mes-livraisons');
 }
 

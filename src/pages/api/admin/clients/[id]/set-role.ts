@@ -2,7 +2,7 @@ import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
 import { logAdminAction } from '../../../../../lib/audit';
 import { findAuthUserIdByEmail } from '../../../../../lib/clients';
-import { isAdmin, ROLE_LABEL, type UserRole } from '../../../../../lib/roles';
+import { isAdmin, getRole, ROLE_LABEL, type UserRole } from '../../../../../lib/roles';
 
 const ASSIGNABLE_ROLES: readonly UserRole[] = ['admin', 'commercial', 'client'];
 
@@ -53,10 +53,14 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
   }
 
   const { data: found } = await supabaseAdmin.auth.admin.getUserById(authUserId);
-  const previousRole = (found?.user?.user_metadata as any)?.role ?? 'client';
+  const previousRole = getRole(found?.user as any) ?? 'client';
 
+  // app_metadata, jamais user_metadata — ce dernier est modifiable par le
+  // compte lui-même via l'API Supabase (auth.updateUser), ce qui permettrait
+  // à n'importe quel client de s'auto-attribuer un rôle. app_metadata ne
+  // s'écrit qu'avec la clé service_role, donc uniquement depuis ce serveur.
   const { error: updateErr } = await supabaseAdmin.auth.admin.updateUserById(authUserId, {
-    user_metadata: { role: newRole },
+    app_metadata: { role: newRole },
   });
 
   if (updateErr) {

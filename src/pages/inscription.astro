@@ -5,11 +5,12 @@ import { sanitizeText, sanitizeEmail } from '../lib/sanitize';
 import { getClientIp, isRateLimited } from '../lib/rateLimit';
 import { sendClientRegisteredWebhook } from '../lib/webhooks';
 import { sendAdminNewClientEmail } from '../lib/email';
+import { isClientRole } from '../lib/roles';
 
 // Already logged-in clients go straight to catalogue
 const supabaseCheck = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user: existing } } = await supabaseCheck.auth.getUser();
-if (existing?.user_metadata?.role === 'client') {
+if (isClientRole(existing)) {
   return Astro.redirect('/catalogue');
 }
 
@@ -36,10 +37,15 @@ if (Astro.request.method === 'POST') {
   }
 
   const supabase = createAuthClient(Astro.request, Astro.cookies);
+  // Only profile fields go in user_metadata here — the anon client used for
+  // signUp() cannot write app_metadata (service_role only), which is exactly
+  // why the role now lives there instead: a brand new account has no
+  // app_metadata.role at all, and getRole() defaults that to 'client', the
+  // correct outcome for a fresh signup without needing to write it explicitly.
   const { data: authData, error: authError } = await supabase.auth.signUp({
     email,
     password,
-    options: { data: { role: 'client', nom, societe, telephone, points_de_vente: pointsDeVente || null } },
+    options: { data: { nom, societe, telephone, points_de_vente: pointsDeVente || null } },
   });
 
   if (authError) {

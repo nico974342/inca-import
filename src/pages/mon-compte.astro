@@ -3,11 +3,12 @@ import '../styles/global.css';
 import { createAuthClient, supabaseAdmin } from '../lib/supabase';
 import { sanitizeText } from '../lib/sanitize';
 import { findClientByEmail } from '../lib/clients';
+import { isClientRole } from '../lib/roles';
 import Nav from '../components/Nav.astro';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
-if (!user || user.user_metadata?.role !== 'client') {
+if (!user || !isClientRole(user)) {
   return Astro.redirect('/connexion/client');
 }
 

@@ -9,7 +9,7 @@ import {
   ORDER_STATUS_LABEL as SHARED_ORDER_STATUS_LABEL, ORDER_STATUS_COLOR as SHARED_ORDER_STATUS_COLOR,
 } from '../../../lib/constants';
 import { formatDateReunion, reunionMonthStart } from '../../../lib/datetime';
-import { isAdmin, ROLE_LABEL, type UserRole } from '../../../lib/roles';
+import { isAdmin, getRole, ROLE_LABEL, type UserRole } from '../../../lib/roles';
 
 const viewerIsAdmin = isAdmin((Astro.locals as any).user);
 
@@ -234,22 +234,23 @@ const { data: deliveryNotes } = await supabaseAdmin
   .eq('client_id', id)
   .order('created_at', { ascending: false });
 
-// Resolve auth user and current role
+// Resolve auth user and current role — app_metadata is the source of truth
+// (see lib/roles.ts), not user_metadata, which the account holder can write.
 let authUserId: string | null = (client as any).user_id ?? null;
-let authRole: string | null = null;
+let authRole: UserRole | null = null;
 if (client.email) {
   if (authUserId) {
     const { data: found } = await supabaseAdmin.auth.admin.getUserById(authUserId);
-    authRole = (found?.user as any)?.user_metadata?.role ?? null;
+    authRole = getRole(found?.user as any);
   } else {
     const { data: users } = await supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 });
     const found = users?.users?.find((u: any) => u.email === client.email);
     authUserId = found?.id ?? null;
-    authRole = (found as any)?.user_metadata?.role ?? null;
+    authRole = getRole(found as any);
   }
 }
 const hasAuthAccount = !!authUserId;
-const currentRole: UserRole = (authRole === 'admin' || authRole === 'commercial') ? authRole : 'client';
+const currentRole: UserRole = authRole ?? 'client';
 
 const roleError = Astro.url.searchParams.get('role_error');
 

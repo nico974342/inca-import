@@ -1,5 +1,7 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../lib/supabase';
+import { isClientRole } from '../../../lib/roles';
+import { isClientAccountActive } from '../../../lib/clients';
 
 export const POST: APIRoute = async ({ request, cookies }) => {
   const json = (status: number, body: object) =>
@@ -11,8 +13,15 @@ export const POST: APIRoute = async ({ request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
   const { data: { user } } = await supabase.auth.getUser();
 
-  if (!user || user.user_metadata?.role !== 'client') {
+  if (!user || !isClientRole(user)) {
     return json(401, { error: 'Unauthorized' });
+  }
+
+  // Faille 2 : un compte pas encore validé (en_attente/suspendu/prospect) ne
+  // doit pas pouvoir construire un panier qu'il ne pourra de toute façon pas
+  // valider — order_create_checked le bloquerait, mais autant le signaler ici.
+  if (!(await isClientAccountActive(user.email))) {
+    return json(403, { error: 'Compte en attente de validation' });
   }
 
   let productId: string, qty: number;

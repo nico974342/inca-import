@@ -29,6 +29,23 @@ export async function findClientByEmail<T = Record<string, unknown>>(
 }
 
 /**
+ * Whether a client is allowed to place or modify an order. No matching
+ * client_accounts row, or any status other than 'actif' (en_attente,
+ * suspendu, prospect), fails closed — an account pending manual approval
+ * must never be treated as active by default.
+ *
+ * This is UX-only when called from a page/API route — the real, unbypassable
+ * gate is the same check inside the order_create_checked SQL function, which
+ * runs in the same transaction as order creation. Call this here anyway so
+ * the client gets a clear message before hitting that wall, and so the cart
+ * itself doesn't silently accept items for an account that can never check out.
+ */
+export async function isClientAccountActive(email: string | null | undefined): Promise<boolean> {
+  const account = await findClientByEmail<{ status: string }>(email, 'status');
+  return account?.status === 'actif';
+}
+
+/**
  * Resolves the auth.users id behind a client email. `client_accounts` has no
  * user_id column, so email is the only link. Paginated because Supabase caps
  * each listUsers() page.

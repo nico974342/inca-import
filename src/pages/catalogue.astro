@@ -5,6 +5,7 @@ import Footer from '../components/Footer.astro';
 import { supabaseAdmin, createAuthClient } from '../lib/supabase';
 import { fetchAvailability, sellableQty } from '../lib/stock';
 import { fetchClientPriceOverrides, resolveClientPrice } from '../lib/clients';
+import { isClientRole } from '../lib/roles';
 
 const { data: products } = await supabaseAdmin
   .from('products')
@@ -20,7 +21,7 @@ const dispo = (id: string) => sellableQty(availability.get(id));
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
-const isClient = user?.user_metadata?.role === 'client';
+const isClient = isClientRole(user);
 
 let isPending = false;
 let remisePct: number | null = null;

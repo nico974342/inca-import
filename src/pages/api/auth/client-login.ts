@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient } from '../../../lib/supabase';
 import { getClientIp, isRateLimited, isLoginBlocked, recordFailedLogin, clearFailedLogins } from '../../../lib/rateLimit';
+import { isClientRole } from '../../../lib/roles';
 
 export const POST: APIRoute = async ({ request, cookies, redirect }) => {
   const ip = getClientIp(request);
@@ -29,8 +30,8 @@ export const POST: APIRoute = async ({ request, cookies, redirect }) => {
     return redirect('/connexion/client?error=identifiants_invalides');
   }
 
-  // Block admin accounts from the client login flow
-  if (authData.user?.user_metadata?.role !== 'client') {
+  // Block admin/commercial accounts from the client login flow
+  if (!isClientRole(authData.user)) {
     await supabase.auth.signOut();
     recordFailedLogin(ip);
     return redirect('/connexion/client?error=identifiants_invalides');

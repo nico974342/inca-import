@@ -1,10 +1,11 @@
 ---
 import '../../styles/global.css';
 import { createAuthClient } from '../../lib/supabase';
+import { isClientRole } from '../../lib/roles';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
-if (user?.user_metadata?.role === 'client') return Astro.redirect('/catalogue');
+if (isClientRole(user)) return Astro.redirect('/catalogue');
 
 const error = Astro.url.searchParams.get('error');
 const reinitialise = !!Astro.url.searchParams.get('reinitialise');

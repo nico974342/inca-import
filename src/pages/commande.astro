@@ -15,9 +15,17 @@ const user = Astro.locals.user;
 if (!user) return Astro.redirect('/connexion');
 
 // Negotiated discount, if any — applied to every line at order time
-const clientAccount = await findClientByEmail<{ remise: number | null; price_group_id: string | null }>(user.email, 'remise, price_group_id');
+const clientAccount = await findClientByEmail<{ remise: number | null; price_group_id: string | null; status: string | null }>(user.email, 'remise, price_group_id, status');
 const remisePct = clientAccount?.remise ?? null;
 const priceOverrides = await fetchClientPriceOverrides(clientAccount?.price_group_id ?? null);
+
+// Faille 2 (audit externe) : un compte pas encore validé par un admin
+// (en_attente, suspendu, ou une fiche prospect jamais convertie) ne doit pas
+// pouvoir commander. C'est de la seule ergonomie ici — le rempart réel est
+// dans order_create_checked (même vérification, dans la transaction), ce
+// contrôle-ci sert seulement à ne pas laisser quelqu'un remplir un panier
+// entier pour échouer uniquement au moment de valider.
+const accountActive = clientAccount?.status === 'actif';
 const resolvedPrice = (basePriceHt: number | null | undefined, productId: string) =>
   resolveClientPrice(productId, basePriceHt, priceOverrides, remisePct);
 
@@ -31,6 +39,8 @@ const CAT_LABEL: Record<string, string> = {
 
 // ── POST: confirm order ────────────────────────────────────────
 if (Astro.request.method === 'POST') {
+  if (!accountActive) return Astro.redirect('/commande?error=compte_non_actif');
+
   const form  = await Astro.request.formData();
   const notes = sanitizeText(form.get('notes') as string, 1000);
 
@@ -75,6 +85,12 @@ if (Astro.request.method === 'POST') {
     // refusées plutôt que de tout ressaisir.
     if ('conflicts' in result) {
       return Astro.redirect(`/commande?error=stock&detail=${encodeURIComponent(describeConflicts(result.conflicts).slice(0, 300))}`);
+    }
+    // Filet de secours si le statut a changé entre le chargement de la page
+    // et la soumission (ex. suspension pendant que le formulaire était ouvert)
+    // — order_create_checked applique la même règle dans sa transaction.
+    if ('error' in result && result.error === 'COMPTE_NON_ACTIF') {
+      return Astro.redirect('/commande?error=compte_non_actif');
     }
     return Astro.redirect('/commande?error=1');
   }
@@ -162,7 +178,7 @@ if (Astro.request.method === 'POST') {
 // ── GET: show cart ─────────────────────────────────────────────
 const success    = !!Astro.url.searchParams.get('success');
 const errorParam = Astro.url.searchParams.get('error');
-const hasError   = !!errorParam && errorParam !== 'stock';
+const hasError   = !!errorParam && errorParam !== 'stock' && errorParam !== 'compte_non_actif';
 const stockError = errorParam === 'stock';
 // Détail renvoyé par la vérification atomique : quel produit, combien demandé,
 // combien réellement disponible. Sans lui, le client ne sait pas quoi ajuster.
@@ -280,6 +296,12 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
       )}
 
       {/* ── Error banner ──────────────────────────── */}
+      {!accountActive && !success && (
+        <p class="order-error" role="alert">
+          Votre compte est en attente de validation par notre équipe — vous ne pouvez pas encore passer commande.
+          Vous serez notifié par email dès son activation.
+        </p>
+      )}
       {hasError && !success && (
         <p class="order-error" role="alert">
           Une erreur est survenue lors de la validation. Veuillez réessayer.
@@ -435,20 +457,26 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
                 Ajustez les quantités ci-dessus avant de confirmer.
               </p>
 
-              <form method="POST">
-                <div class="field">
-                  <label for="notes">Notes ou précisions</label>
-                  <textarea
-                    id="notes"
-                    name="notes"
-                    rows="4"
-                    placeholder="Contraintes de livraison, quantités à ajuster…"
-                  ></textarea>
-                </div>
-                <button type="submit" class="btn btn-primary confirm-btn">
-                  Envoyer ma commande →
-                </button>
-              </form>
+              {accountActive ? (
+                <form method="POST">
+                  <div class="field">
+                    <label for="notes">Notes ou précisions</label>
+                    <textarea
+                      id="notes"
+                      name="notes"
+                      rows="4"
+                      placeholder="Contraintes de livraison, quantités à ajuster…"
+                    ></textarea>
+                  </div>
+                  <button type="submit" class="btn btn-primary confirm-btn">
+                    Envoyer ma commande →
+                  </button>
+                </form>
+              ) : (
+                <p class="stock-block-msg" role="alert">
+                  Compte en attente de validation — impossible de commander pour l'instant.
+                </p>
+              )}
 
               <p class="confirm-back">
                 <a href="/catalogue">← Modifier le panier</a>

@@ -1,26 +1,37 @@
 /**
  * Single source of truth for role checks. The role lives in
- * user_metadata.role ('admin' | 'commercial' | 'client') — never derive
- * authorization from "not a client", which silently grants every future
- * role admin-level access. Use isAdmin() for admin-only actions/pages and
- * isStaff() for anything a commercial should also reach.
+ * app_metadata.role ('admin' | 'commercial' | 'client') — never
+ * user_metadata, which the user themselves can overwrite via the Supabase
+ * client SDK (auth.updateUser()). app_metadata can only be written with the
+ * service_role key, i.e. from our own server code, never by the account
+ * holder. Use isAdmin() for admin-only actions/pages and isStaff() for
+ * anything a commercial should also reach.
  */
 export type UserRole = 'admin' | 'commercial' | 'client';
 
-type MetaUser = { user_metadata?: { role?: string | null } | null } | null | undefined;
+// The index signature matters, not just cosmetic: Supabase's real
+// UserAppMetadata type is itself `{ provider?, providers?, [key: string]: any }`.
+// Without a matching index signature here, TS treats this as a "weak type"
+// with zero properties in common with the real one and refuses the
+// assignment at every call site that passes a properly-typed User (as
+// opposed to the `(Astro.locals as any).user` cast used elsewhere).
+type MetaUser = { app_metadata?: { role?: string | null; [key: string]: any } | null } | null | undefined;
 
 const ROLES: readonly UserRole[] = ['admin', 'commercial', 'client'];
 
 export function getRole(user: MetaUser): UserRole | null {
   if (!user) return null;
-  const r = user.user_metadata?.role;
+  const r = user.app_metadata?.role;
   if ((ROLES as readonly string[]).includes(r as string)) return r as UserRole;
-  // Accounts created before the role field existed (or via the Supabase
-  // dashboard directly) have no role set at all. The old authorization
-  // shortcut ("anything that isn't 'client' is staff") treated every one of
-  // them as a full admin — defaulting an unrecognized/missing role to
-  // 'admin' here preserves that instead of silently locking them out.
-  return 'admin';
+  // A missing, empty, or unrecognized role resolves to 'client' — the
+  // least-privileged real role, never 'admin'. This used to default to
+  // 'admin' (to avoid locking out a legacy account with no role field);
+  // that was itself the vulnerability an external audit flagged, since
+  // app_metadata being unset is indistinguishable from a role having been
+  // stripped or never assigned. Every account that should be staff now has
+  // an explicit app_metadata.role written by the role migration — nothing
+  // should ever legitimately hit this fallback and need admin access.
+  return 'client';
 }
 
 export function isAdmin(user: MetaUser): boolean {
