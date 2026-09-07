@@ -24,7 +24,24 @@ if (Astro.request.method === 'POST') {
       .select('status, nom, societe, email, telephone, user_id, created_at')
       .eq('id', order_id).single();
 
+    // Une commande livrée qui retombe à un statut antérieur (hors annulation,
+    // déjà gérée plus bas) ne doit jamais faire silencieusement re-basculer le
+    // stock déjà décrémenté en "réservé" — ni le restaurer sans le dire. On
+    // exige un choix explicite, visible dans le formulaire : la marchandise
+    // revient-elle physiquement en stock ?
+    const isBackwardFromLivree = current?.status === 'livree' && new_status !== 'livree' && new_status !== 'annulee';
+    const restock = data.get('restock') as string | null;
+    if (isBackwardFromLivree && restock !== 'oui' && restock !== 'non') {
+      return Astro.redirect('/admin/commandes?edit_error=confirmation_stock_requise');
+    }
+
     await supabaseAdmin.from('orders').update({ status: new_status }).eq('id', order_id);
+
+    if (isBackwardFromLivree && restock === 'oui') {
+      const { error: restoreErr } = await supabaseAdmin
+        .rpc('order_cancel_livree', { p_order_id: order_id });
+      if (restoreErr) console.error('[commandes] order_cancel_livree (retour arrière) failed:', restoreErr.message);
+    }
 
     // Notify the client by email on every status change — fire-and-forget
     if (current && current.status !== new_status && current.email) {
@@ -134,7 +151,11 @@ if (Astro.request.method === 'POST') {
         targetType: 'order',
         targetId: order_id,
         targetLabel: current.societe ?? current.nom,
-        details: { ancien: current.status, nouveau: new_status },
+        details: {
+          ancien: current.status,
+          nouveau: new_status,
+          ...(isBackwardFromLivree ? { stock_restaure: restock === 'oui' } : {}),
+        },
       });
     }
   }
@@ -265,6 +286,7 @@ const orderUpdated = !!Astro.url.searchParams.get('updated');
 const editError = Astro.url.searchParams.get('edit_error');
 const EDIT_ERROR_MSG: Record<string, string> = {
   trop_tard: 'Cette commande ne peut plus être modifiée (déjà livrée ou annulée).',
+  confirmation_stock_requise: 'Cette commande était livrée : précisez si la marchandise revient physiquement en stock avant de changer son statut.',
 };
 ---
 <AdminLayout title="Commandes" activeNav="commandes">
@@ -332,11 +354,18 @@ const EDIT_ERROR_MSG: Record<string, string> = {
                 <form method="POST" class="status-form">
                   <input type="hidden" name="order_id" value={order.id} />
                   <label class="status-label-text">Statut :</label>
-                  <select name="status" class="status-select">
+                  <select name="status" class="status-select" data-status-select>
                     {Object.entries(STATUS_LABEL).map(([val, lbl]) => (
                       <option value={val} selected={status === val}>{lbl}</option>
                     ))}
                   </select>
+                  {status === 'livree' && (
+                    <select name="restock" class="status-select restock-select" data-restock-select style="display:none">
+                      <option value="">Retour en stock ?</option>
+                      <option value="oui">Oui — la marchandise revient en stock</option>
+                      <option value="non">Non — le stock reste décompté</option>
+                    </select>
+                  )}
                   <button type="submit" class="status-save">Enregistrer</button>
                   {isOrderEditable(status) && (
                     <a href={`/admin/commandes/${order.id}/edit`} class="edit-order-link">Modifier la commande</a>
@@ -1147,6 +1176,20 @@ details[open] .chevron { transform: rotate(180deg); }
 </style>
 
 <script>
+// Une commande livrée qui repasse à un autre statut (hors annulation) exige
+// un choix explicite sur le retour en stock — le champ n'apparaît que si la
+// nouvelle valeur choisie s'y prête.
+document.addEventListener('change', (e) => {
+  const sel = (e.target as HTMLElement)?.closest('[data-status-select]') as HTMLSelectElement | null;
+  if (!sel) return;
+  const form = sel.closest('form');
+  const restock = form?.querySelector<HTMLSelectElement>('[data-restock-select]');
+  if (!restock) return;
+  const show = sel.value !== 'livree' && sel.value !== 'annulee';
+  restock.style.display = show ? '' : 'none';
+  if (!show) restock.value = '';
+});
+
 // Show selected filename in upload label
 document.querySelectorAll<HTMLInputElement>('.inv-file-label input[type="file"]').forEach(input => {
   const span = input.closest('.inv-file-label')?.querySelector('span');

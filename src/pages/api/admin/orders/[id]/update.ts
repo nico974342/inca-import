@@ -4,6 +4,7 @@ import { logAdminAction } from '../../../../../lib/audit';
 import { findClientByEmail, fetchClientPriceOverrides, resolveClientPrice } from '../../../../../lib/clients';
 import { isStaff } from '../../../../../lib/roles';
 import { isOrderEditable } from '../../../../../lib/constants';
+import { updateOrderChecked, type OrderLineInput } from '../../../../../lib/stock';
 
 export const POST: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -53,24 +54,9 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
 
   const { data: productsData } = await supabaseAdmin
     .from('products')
-    .select('id, name, unit, price_ht, tva_rate, prix_achat_moyen_ht, stock_quantity')
+    .select('id, name, unit, price_ht, tva_rate, prix_achat_moyen_ht')
     .in('id', [...submitted.keys()]);
   const productMap = new Map((productsData ?? []).map(p => [p.id, p]));
-
-  // Stock only needs checking when a line is new or its quantity is going UP —
-  // nothing was ever decremented for this order pre-livraison, so an unchanged
-  // or reduced line can never violate availability.
-  const violations: string[] = [];
-  for (const [pid, qty] of submitted) {
-    const existing = currentByProduct.get(pid);
-    const baseline = existing?.quantity ?? 0;
-    if (qty > baseline) {
-      const prod = productMap.get(pid);
-      const stock = prod?.stock_quantity ?? 0;
-      if (qty > stock) violations.push(prod?.name ?? existing?.product_name ?? pid);
-    }
-  }
-  if (violations.length > 0) return redirectTo(`/admin/commandes/${id}/edit?error=stock`);
 
   // New lines are priced from current product data, resolved the same way
   // the order was originally priced (client's price group, then their
@@ -82,20 +68,27 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
   const added: Array<{ name: string; qty: number }> = [];
   const removed: Array<{ name: string; qty: number }> = [];
   const changed: Array<{ name: string; from: number; to: number }> = [];
-  const toInsert: Array<Record<string, unknown>> = [];
+  const items: OrderLineInput[] = [];
 
   for (const [pid, qty] of submitted) {
     const existing = currentByProduct.get(pid);
     if (existing) {
-      if (existing.quantity !== qty) {
-        await supabaseAdmin.from('order_items').update({ quantity: qty }).eq('id', existing.id);
-        changed.push({ name: existing.product_name, from: existing.quantity, to: qty });
-      }
+      // Only the quantity changes for an existing line — snapshot fields are
+      // left untouched by the RPC's update branch.
+      items.push({
+        product_id:        pid,
+        product_name:      existing.product_name,
+        quantity:          qty,
+        unit:              null,
+        price_ht_snapshot: null,
+        tva_rate_snapshot: null,
+        pump_snapshot:     null,
+      });
+      if (existing.quantity !== qty) changed.push({ name: existing.product_name, from: existing.quantity, to: qty });
     } else {
       const prod = productMap.get(pid);
       if (!prod) continue;
-      toInsert.push({
-        order_id:          id,
+      items.push({
         product_id:        pid,
         product_name:      prod.name,
         quantity:          qty,
@@ -108,18 +101,20 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
     }
   }
 
-  if (toInsert.length > 0) {
-    const { error: insertErr } = await supabaseAdmin.from('order_items').insert(toInsert);
-    if (insertErr) {
-      console.error('[orders/update] insert error:', insertErr.message);
-      return redirectTo(`/admin/commandes/${id}/edit?error=erreur`);
-    }
-  }
-
   const toDelete = (currentItems ?? []).filter(it => it.product_id && !submitted.has(it.product_id));
-  for (const it of toDelete) {
-    await supabaseAdmin.from('order_items').delete().eq('id', it.id);
-    removed.push({ name: it.product_name, qty: it.quantity });
+  for (const it of toDelete) removed.push({ name: it.product_name, qty: it.quantity });
+
+  if (items.length === 0) return redirectTo(`/admin/commandes/${id}/edit?error=empty`);
+
+  // Atomic RPC: verrouille les produits concernés, recalcule le disponible en
+  // excluant les propres lignes de cette commande, puis n'écrit que si tout
+  // passe — jamais de vérification-puis-écriture en étapes séparées (même
+  // exigence que la création, voir order_create_checked).
+  const result = await updateOrderChecked(id, items);
+
+  if (!result.ok) {
+    if ('conflicts' in result) return redirectTo(`/admin/commandes/${id}/edit?error=stock`);
+    return redirectTo(`/admin/commandes/${id}/edit?error=erreur`);
   }
 
   if (added.length || removed.length || changed.length) {

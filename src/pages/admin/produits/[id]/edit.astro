@@ -71,17 +71,18 @@ if (Astro.request.method === 'POST') {
   const units_per_carton = data.get('units_per_carton')  ? parseInt(data.get('units_per_carton') as string, 10) || null : null;
   const image_url        = (data.get('image_url')        as string)?.trim() || null;
   const position       = data.get('position') ? parseInt(data.get('position') as string) : 0;
-  const stock_quantity = data.get('stock_quantity') ? parseInt(data.get('stock_quantity') as string, 10) : 0;
-  const in_stock       = stock_quantity > 0;
   const seuil_reappro         = data.get('seuil_reappro')         ? parseInt(data.get('seuil_reappro') as string, 10) : null;
   const delai_livraison_jours = data.get('delai_livraison_jours') ? parseInt(data.get('delai_livraison_jours') as string, 10) : null;
 
   if (!name || !slug || !category) {
     formError = 'Le nom, le slug et la catégorie sont requis.';
   } else {
+    // stock_quantity/in_stock ne sont jamais soumis par ce formulaire : ils se
+    // gèrent exclusivement depuis /admin/stocks (RPC atomiques), pour ne pas
+    // écraser le stock avec une valeur de page potentiellement obsolète.
     const { error } = await supabaseAdmin
       .from('products')
-      .update({ name, slug, category, description, sku, price_ht, tva_rate, unit, units_per_carton, image_url, in_stock, position, stock_quantity, seuil_reappro, delai_livraison_jours })
+      .update({ name, slug, category, description, sku, price_ht, tva_rate, unit, units_per_carton, image_url, position, seuil_reappro, delai_livraison_jours })
       .eq('id', id);
 
     if (error) {
@@ -196,12 +197,13 @@ if (Astro.request.method === 'POST') {
 
         <div class="field-group field-group--3">
           <div class="field">
-            <label for="stock_quantity">Quantité en stock</label>
-            <input type="number" id="stock_quantity" name="stock_quantity" min="0" value={product.stock_quantity ?? 0} />
+            <label>Quantité en stock</label>
+            <div class="status-display">{product.stock_quantity ?? 0}</div>
+            <p class="field-computed-hint">Lecture seule — modifiez le stock depuis <a href="/admin/stocks">la page Stocks</a>.</p>
           </div>
           <div class="field">
             <label>Disponibilité</label>
-            <div class="status-display" id="stockStatus">
+            <div class="status-display">
               {(product.stock_quantity ?? 0) > 0
                 ? <span class="status-badge status-badge--ok">En stock</span>
                 : <span class="status-badge status-badge--out">Rupture de stock</span>
@@ -628,17 +630,6 @@ const tvaField  = document.querySelector<HTMLElement>('[data-tva-manual-field]')
 if (tvaSelect && tvaField) {
   tvaSelect.addEventListener('change', () => {
     tvaField.classList.toggle('tva-manual-hidden', tvaSelect.value !== 'custom');
-  });
-}
-
-const qtyInput  = document.getElementById('stock_quantity') as HTMLInputElement | null;
-const statusEl  = document.getElementById('stockStatus');
-if (qtyInput && statusEl) {
-  qtyInput.addEventListener('input', () => {
-    const qty = parseInt(qtyInput.value) || 0;
-    statusEl.innerHTML = qty > 0
-      ? '<span class="status-badge status-badge--ok">En stock</span>'
-      : '<span class="status-badge status-badge--out">Rupture de stock</span>';
   });
 }
 

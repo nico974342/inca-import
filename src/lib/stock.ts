@@ -130,6 +130,41 @@ export async function createOrderChecked(
   return { ok: true, orderId: row.r_order_id };
 }
 
+export type OrderUpdateResult =
+  | { ok: true }
+  | { ok: false; conflicts: OrderConflict[] }
+  | { ok: false; error: string };
+
+/**
+ * Édite les lignes d'une commande existante en vérifiant le disponible dans
+ * la même transaction — même exigence que la création (createOrderChecked) :
+ * jamais de vérification-puis-écriture en étapes séparées.
+ *
+ * Le disponible est recalculé en excluant les réservations de la commande en
+ * cours d'édition elle-même, sinon elle se bloquerait sur sa propre
+ * réservation.
+ */
+export async function updateOrderChecked(
+  orderId: string,
+  items: OrderLineInput[],
+): Promise<OrderUpdateResult> {
+  const { data, error } = await supabaseAdmin.rpc('order_update_checked', {
+    p_order_id: orderId,
+    p_items: items,
+  });
+
+  if (error) {
+    console.error('[stock] order_update_checked:', error.message);
+    return { ok: false, error: error.message };
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  const conflicts = (row?.r_conflicts ?? []) as OrderConflict[];
+
+  if (conflicts.length > 0) return { ok: false, conflicts };
+  return { ok: true };
+}
+
 /** Résumé lisible d'un conflit, pour un message d'erreur. */
 export function describeConflicts(conflicts: OrderConflict[]): string {
   return conflicts

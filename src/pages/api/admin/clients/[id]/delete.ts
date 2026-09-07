@@ -47,20 +47,20 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
   const emailFilter = client.email ? normalizeEmail(client.email) : '';
 
   const { data: ordersByEmail, error: obeErr } = emailFilter
-    ? await supabaseAdmin.from('orders').select('id, status').eq('email', emailFilter)
-    : { data: [] as { id: string; status: string }[], error: null };
+    ? await supabaseAdmin.from('orders').select('id').eq('email', emailFilter)
+    : { data: [] as { id: string }[], error: null };
   if (obeErr) return fail('lecture_commandes', obeErr.message);
 
   const { data: ordersByUser, error: obuErr } = authUserId
-    ? await supabaseAdmin.from('orders').select('id, status').eq('user_id', authUserId)
-    : { data: [] as { id: string; status: string }[], error: null };
+    ? await supabaseAdmin.from('orders').select('id').eq('user_id', authUserId)
+    : { data: [] as { id: string }[], error: null };
   if (obuErr) return fail('lecture_commandes', obuErr.message);
 
-  const ordersById = new Map<string, { id: string; status: string }>();
-  for (const o of [...(ordersByEmail ?? []), ...(ordersByUser ?? [])]) ordersById.set(o.id, o);
-  const orderIds = [...ordersById.keys()];
+  const orderIds = [...new Set([...(ordersByEmail ?? []), ...(ordersByUser ?? [])].map(o => o.id))];
 
-  // CA/margin impact for the audit trail + stock restore for livree orders
+  // CA/margin impact for the audit trail. Archivage administratif : le stock
+  // ne bouge jamais ici, y compris pour les commandes livrées — la
+  // marchandise est physiquement chez le client, pas de retour réel.
   let caHt = 0, margeHt = 0, hasPump = false;
   if (orderIds.length) {
     const { data: allItems, error: itemsErr } = await supabaseAdmin
@@ -75,14 +75,6 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
       if (prix == null) continue;
       caHt += prix * item.quantity;
       if (pump != null) { margeHt += (prix - pump) * item.quantity; hasPump = true; }
-    }
-
-    // Stock restore must succeed before the order disappears, otherwise the
-    // returned units are lost with no way to recompute them.
-    const livreeIds = orderIds.filter(oid => ordersById.get(oid)?.status === 'livree');
-    for (const oid of livreeIds) {
-      const { error: restoreErr } = await supabaseAdmin.rpc('order_cancel_livree', { p_order_id: oid });
-      if (restoreErr) return fail('restauration_stock', `commande ${oid} : ${restoreErr.message}`);
     }
 
     const { error: oiErr } = await supabaseAdmin.from('order_items').delete().in('order_id', orderIds);

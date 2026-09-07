@@ -32,11 +32,6 @@ const existingItems = ((reception as any).stock_reception_items ?? []).map((it: 
   <div class="page-header">
     <a href="/admin/reception" class="back-link">← Retour aux réceptions</a>
     <h1 class="page-title">Modifier la réception</h1>
-    {(reception as any).stock_applied ? (
-      <span class="badge-live">Stock appliqué</span>
-    ) : (
-      <span class="badge-histo">Historique — stock non modifié</span>
-    )}
   </div>
 
   <form method="post" action={`/api/admin/reception/${id}/update`} class="reception-form" id="receptionForm">
@@ -59,6 +54,20 @@ const existingItems = ((reception as any).stock_reception_items ?? []).map((it: 
           <label for="notes" class="label">Notes (optionnel)</label>
           <input type="text" id="notes" name="notes" class="input"
             value={(reception as any).notes ?? ''} placeholder="Numéro BL fournisseur, remarques…" />
+        </div>
+        <div class="field field--full">
+          <label class="label">Effet sur le stock</label>
+          <div class="stock-toggle">
+            <label class="stock-toggle-opt">
+              <input type="radio" name="stock_applied" value="oui" checked={(reception as any).stock_applied === true} />
+              <span class="badge-live">Stock appliqué</span> — les quantités ont été ajoutées au stock physique
+            </label>
+            <label class="stock-toggle-opt">
+              <input type="radio" name="stock_applied" value="non" checked={(reception as any).stock_applied !== true} />
+              <span class="badge-histo">Historique</span> — le stock n'a pas été modifié
+            </label>
+          </div>
+          <p class="field-hint">Ce réglage reflète l'état actuel et n'est jamais recalculé à partir de la date. Ne le changez que si vous voulez explicitement appliquer ou annuler l'effet stock de cette réception.</p>
         </div>
       </div>
     </section>
@@ -246,7 +255,7 @@ function checkDateHint() {
   if (!dateInput || !dateHint) return;
   const today = new Date().toISOString().slice(0, 10);
   if (dateInput.value && dateInput.value < today) {
-    dateHint.textContent = '⚠ Date antérieure à aujourd\'hui — le PUMP sera recalculé mais le stock ne sera pas modifié.';
+    dateHint.textContent = 'ℹ Date antérieure à aujourd\'hui — le PUMP sera recalculé pour les produits concernés. L\'effet sur le stock dépend uniquement du réglage « Effet sur le stock » ci-dessus, pas de cette date.';
     dateHint.style.display = '';
   } else {
     dateHint.style.display = 'none';
@@ -304,6 +313,13 @@ if (existingItems.length === 0) addRow(null, null, null);
   color: oklch(0.36 0.12 75);
   border: 1px solid oklch(0.85 0.10 75);
 }
+
+.stock-toggle { display: flex; flex-direction: column; gap: var(--space-2); }
+.stock-toggle-opt {
+  display: flex; align-items: center; gap: var(--space-2);
+  font-size: var(--text-sm); color: var(--color-ink); cursor: pointer;
+}
+.stock-toggle-opt input { cursor: pointer; }
 
 .reception-form { display: flex; flex-direction: column; gap: var(--space-6); }
 

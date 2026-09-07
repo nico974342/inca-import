@@ -1,7 +1,6 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
 import { logAdminAction } from '../../../../../lib/audit';
-import { todayReunionISO } from '../../../../../lib/datetime';
 import { isAdmin } from '../../../../../lib/roles';
 
 export const POST: APIRoute = async ({ params, request, cookies }) => {
@@ -45,9 +44,15 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
     return Response.redirect(new URL(editUrl, request.url), 303);
   }
 
-  // "Aujourd'hui" heure de La Réunion, pas UTC (serveur) — voir create.ts.
-  const todayStr        = todayReunionISO();
-  const newStockApplied = receivedAt >= todayStr;
+  // L'effet sur le stock est une décision figée à la création (voir create.ts) :
+  // une correction ultérieure ne doit jamais la recalculer à partir de la date
+  // du jour. Le formulaire soumet un choix explicite et visible ; on ne fait
+  // que le relayer tel quel.
+  const stockAppliedRaw = form.get('stock_applied') as string | null;
+  if (stockAppliedRaw !== 'oui' && stockAppliedRaw !== 'non') {
+    return Response.redirect(new URL(editUrl, request.url), 303);
+  }
+  const stockApplied = stockAppliedRaw === 'oui';
 
   // Atomic RPC: reverses previously-applied stock, replaces items, updates
   // the header, recalculates PUMP for old ∪ new products and applies the new
@@ -57,7 +62,7 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
     p_supplier_name: supplierName,
     p_received_at:   receivedAt,
     p_notes:         notes,
-    p_stock_applied: newStockApplied,
+    p_stock_applied: stockApplied,
     p_items: newRows.map(r => ({
       product_id:   r.productId,
       quantity:     r.quantity,
@@ -81,7 +86,7 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
     targetLabel:  supplierName,
     details: {
       received_at:    receivedAt,
-      historique:     !newStockApplied,
+      historique:     !stockApplied,
       products_count: newRows.length,
       total_units:    newRows.reduce((s, r) => s + r.quantity, 0),
       total_cost_ht:  newRows.reduce((s, r) => s + r.quantity * r.unitCost, 0),

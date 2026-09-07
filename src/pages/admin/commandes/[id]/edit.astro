@@ -2,6 +2,7 @@
 import AdminLayout from '../../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../../lib/supabase';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, DEFAULT_TVA_RATE, isOrderEditable } from '../../../../lib/constants';
+import { fetchReservedByProduct } from '../../../../lib/stock';
 
 const { id } = Astro.params;
 if (!id) return Astro.redirect('/admin/commandes');
@@ -39,15 +40,28 @@ const { data: productsRaw } = await supabaseAdmin
   .order('category', { ascending: true })
   .order('name', { ascending: true });
 
-const products = (productsRaw ?? []).map(p => ({
-  id: p.id,
-  name: p.name,
-  category: p.category,
-  unit: p.unit ?? '',
-  price: Number(p.price_ht ?? 0),
-  tva_rate: p.tva_rate != null ? Number(p.tva_rate) : DEFAULT_TVA_RATE,
-  stock: p.stock_quantity ?? 0,
-}));
+// Le cap client n'est que de l'ergonomie (le RPC order_update_checked fait
+// foi côté serveur) — mais il doit refléter le disponible, pas le physique
+// seul, en excluant les propres lignes de cette commande de la réservation.
+const reservedByProduct = await fetchReservedByProduct(productsRaw?.map(p => p.id) ?? []);
+const ownQtyByProduct = new Map<string, number>();
+for (const it of existingItems) {
+  if (!it.product_id) continue;
+  ownQtyByProduct.set(it.product_id, (ownQtyByProduct.get(it.product_id) ?? 0) + it.quantity);
+}
+
+const products = (productsRaw ?? []).map(p => {
+  const reservedOthers = Math.max(0, (reservedByProduct.get(p.id) ?? 0) - (ownQtyByProduct.get(p.id) ?? 0));
+  return {
+    id: p.id,
+    name: p.name,
+    category: p.category,
+    unit: p.unit ?? '',
+    price: Number(p.price_ht ?? 0),
+    tva_rate: p.tva_rate != null ? Number(p.tva_rate) : DEFAULT_TVA_RATE,
+    stock: Math.max(0, (p.stock_quantity ?? 0) - reservedOthers),
+  };
+});
 
 const CAT_LABEL: Record<string, string> = {
   boissons: 'Boissons', snacks: 'Snacks', chips: 'Chips', confiseries: 'Confiseries', divers: 'Divers',
