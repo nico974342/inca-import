@@ -4,7 +4,7 @@ import { supabaseAdmin } from '../../lib/supabase';
 import { sendLowStockAlert, sendOrderStatusEmail } from '../../lib/email';
 import { sendOrderConfirmedWebhook } from '../../lib/webhooks';
 import { logAdminAction } from '../../lib/audit';
-import { ORDER_STATUSES, ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, marginColorClass, isOrderEditable } from '../../lib/constants';
+import { ORDER_STATUSES, ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, marginColorClass, margeCouverte, isOrderEditable } from '../../lib/constants';
 import { formatDateReunion } from '../../lib/datetime';
 import { isAdmin } from '../../lib/roles';
 
@@ -195,23 +195,27 @@ function orderTotal(orderId: string): number | null {
   return hasPrice ? total : null;
 }
 
-function orderMargin(orderId: string): { margeHt: number; pct: number; partial: boolean } | null {
+function orderMargin(orderId: string): { margeHt: number; pct: number | null; partial: boolean; couverturePct: number | null } | null {
   const items = itemsByOrder[orderId] ?? [];
-  let margeHt = 0, caHt = 0, hasPump = false, missingPump = false;
+  let caHt = 0, caCalculable = 0, costHt = 0, hasPump = false, missingPump = false;
   for (const item of items) {
     const prix = (item as any).price_ht_snapshot;
     const pump = (item as any).pump_snapshot;
     if (prix == null) continue;
     caHt += Number(prix) * item.quantity;
     if (pump != null) {
-      margeHt += (Number(prix) - Number(pump)) * item.quantity;
+      caCalculable += Number(prix) * item.quantity;
+      costHt += Number(pump) * item.quantity;
       hasPump = true;
     } else {
       missingPump = true;
     }
   }
   if (!hasPump || caHt === 0) return null;
-  return { margeHt, pct: (margeHt / caHt) * 100, partial: missingPump };
+  // margeCouverte : pct sur caCalculable (coût connu), jamais sur caHt total
+  // — un coût d'achat absent est inconnu, pas nul, voir lib/constants.ts.
+  const m = margeCouverte(caCalculable, costHt, caHt);
+  return { margeHt: m.margeHt, pct: m.margePct, partial: missingPump, couverturePct: m.couverturePct };
 }
 
 function pennylaneSummary(order: (typeof orders)[number], items: any[], total: number | null): string {
@@ -392,8 +396,12 @@ const EDIT_ERROR_MSG: Record<string, string> = {
                       Marge{margin.partial ? '*' : ''} :
                     </span>
                     <span class="margin-ht">{margin.margeHt >= 0 ? '+' : ''}{margin.margeHt.toFixed(2).replace('.', ',')} € HT</span>
-                    <span class="margin-pct">{margin.pct.toFixed(1)} %</span>
-                    {margin.partial && <span class="margin-partial">* certains produits sans PUMP</span>}
+                    <span class="margin-pct">{margin.pct != null ? `${margin.pct.toFixed(1)} %` : '—'}</span>
+                    {margin.partial && (
+                      <span class="margin-partial" title={margin.couverturePct != null ? `Calculée sur ${margin.couverturePct.toFixed(1)} % du CA de cette commande` : undefined}>
+                        * certains produits sans coût d'achat connu — marge incomplète, pas surévaluée
+                      </span>
+                    )}
                   </div>
                 )}
 

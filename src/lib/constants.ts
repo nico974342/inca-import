@@ -105,6 +105,47 @@ export const CONTACT_STATUS_COLOR: Record<ContactStatus, string> = {
   rejete:   'muted',
 };
 
+// ── Marge avec couverture (point mort du 2026-09) ───────────────────────
+// Un coût d'achat absent (pump_snapshot/prix_achat_moyen_ht null) n'est pas
+// un coût nul : c'est un coût inconnu. Sommer le CA de TOUTES les ventes
+// (coût connu ou pas) et n'en soustraire que le coût des lignes connues —
+// comme le faisait auparavant l'export financier — gonfle mécaniquement la
+// marge affichée (ex. deux ventes de 100 €, une à 60 € de coût connu, une
+// sans coût connu : CA=200, coût=60 → marge affichée 140 € alors que seule
+// la première vente a une marge calculable, 40 €). La marge de la seconde
+// n'est pas nulle, elle est inconnue.
+//
+// Chaque appelant construit lui-même caCalculable (le CA des SEULES lignes
+// à coût connu) et caTotal (tout le CA, coût connu ou non) en parcourant ses
+// lignes — le regroupement diffère par page (mois, commande, produit,
+// client) donc cette fonction ne fait qu'appliquer la formule une fois que
+// les sommes sont faites, pour qu'elle ne puisse pas diverger d'un endroit
+// à l'autre.
+export type MargeCouverte = {
+  /** CA des lignes à coût connu — le seul dénominateur valable pour une marge %. */
+  caCalculable: number;
+  /** CA de toutes les lignes, coût connu ou non — reste un chiffre juste en soi (le prix est toujours connu). */
+  caTotal: number;
+  coutHt: number;
+  margeHt: number;
+  /** Sur caCalculable, jamais sur caTotal — null si caCalculable = 0 (rien à mesurer). */
+  margePct: number | null;
+  /** Part du CA total dont le coût est connu — à afficher à côté de toute marge. */
+  couverturePct: number | null;
+};
+
+export function margeCouverte(caCalculable: number, coutHt: number, caTotal: number): MargeCouverte {
+  const margeHt = caCalculable - coutHt;
+  return {
+    caCalculable,
+    caTotal,
+    coutHt,
+    margeHt,
+    margePct: caCalculable > 0 ? (margeHt / caCalculable) * 100 : null,
+    couverturePct: caTotal > 0 ? (caCalculable / caTotal) * 100 : null,
+  };
+}
+
 // ── Margin color thresholds (percent) ──────────────────────────────────
 export function marginColorClass(pct: number | null): 'green' | 'amber' | 'red' | 'none' {
   if (pct == null) return 'none';

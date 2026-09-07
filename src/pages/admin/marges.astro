@@ -113,13 +113,17 @@ const { data: orders } = await supabaseAdmin
 
 type MonthRow = {
   label: string; start: Date; end: Date;
-  caHt: number; costHt: number; margeHt: number; pct: number | null; orderCount: number; hasFullPump: boolean;
+  caHt: number;
+  /** CA des seules lignes à coût connu — le dénominateur de pct, jamais caHt. */
+  caCalculable: number;
+  costHt: number; margeHt: number; pct: number | null; couverturePct: number | null;
+  orderCount: number; hasFullPump: boolean;
   chargesHt: number; resultatNet: number; resultatPct: number | null; hasNoCharges: boolean;
 };
 
 const rows: MonthRow[] = months.map(m => ({
   label: m.label, start: m.start, end: m.end,
-  caHt: 0, costHt: 0, margeHt: 0, pct: null, orderCount: 0, hasFullPump: true,
+  caHt: 0, caCalculable: 0, costHt: 0, margeHt: 0, pct: null, couverturePct: null, orderCount: 0, hasFullPump: true,
   chargesHt: 0, resultatNet: 0, resultatPct: null, hasNoCharges: true,
 }));
 
@@ -143,6 +147,7 @@ for (const order of (orders ?? [])) {
 
     rows[mi].caHt += prix * qty;
     if (pump != null) {
+      rows[mi].caCalculable += prix * qty;
       rows[mi].costHt  += pump * qty;
       rows[mi].margeHt += (prix - pump) * qty;
     } else {
@@ -155,24 +160,30 @@ for (const order of (orders ?? [])) {
 const produitsSansCoutCount = productsWithoutCostIds.size;
 const produitsVendusCount = productsSoldIds.size;
 
-// Charges / résultat net par mois, puis pourcentages (après agrégation)
+// Charges / résultat net par mois, puis pourcentages (après agrégation).
+// pct et resultatPct se calculent sur caCalculable (coût connu), jamais sur
+// caHt total — un coût absent est inconnu, pas nul, voir lib/constants.ts
+// (margeCouverte). resultatNet reste en euros sur toute la marge connue ;
+// seule sa lecture en % change de dénominateur.
 for (const row of rows) {
   row.chargesHt = computeMonthlyChargesTotal(charges, row.start, row.end);
   row.hasNoCharges = row.chargesHt === 0;
   row.resultatNet = row.margeHt - row.chargesHt;
-  if (row.caHt > 0 && row.margeHt !== 0) row.pct = (row.margeHt / row.caHt) * 100;
-  if (row.caHt > 0) row.resultatPct = (row.resultatNet / row.caHt) * 100;
+  if (row.caCalculable > 0) row.pct = (row.margeHt / row.caCalculable) * 100;
+  if (row.caCalculable > 0) row.resultatPct = (row.resultatNet / row.caCalculable) * 100;
+  if (row.caHt > 0) row.couverturePct = (row.caCalculable / row.caHt) * 100;
 }
 
 const totals = rows.reduce(
   (acc, r) => ({
-    caHt: acc.caHt + r.caHt, costHt: acc.costHt + r.costHt, margeHt: acc.margeHt + r.margeHt,
+    caHt: acc.caHt + r.caHt, caCalculable: acc.caCalculable + r.caCalculable, costHt: acc.costHt + r.costHt, margeHt: acc.margeHt + r.margeHt,
     orderCount: acc.orderCount + r.orderCount, chargesHt: acc.chargesHt + r.chargesHt, resultatNet: acc.resultatNet + r.resultatNet,
   }),
-  { caHt: 0, costHt: 0, margeHt: 0, orderCount: 0, chargesHt: 0, resultatNet: 0 },
+  { caHt: 0, caCalculable: 0, costHt: 0, margeHt: 0, orderCount: 0, chargesHt: 0, resultatNet: 0 },
 );
-const totalPct = totals.caHt > 0 ? (totals.margeHt / totals.caHt) * 100 : null;
-const totalResultatPct = totals.caHt > 0 ? (totals.resultatNet / totals.caHt) * 100 : null;
+const totalPct = totals.caCalculable > 0 ? (totals.margeHt / totals.caCalculable) * 100 : null;
+const totalResultatPct = totals.caCalculable > 0 ? (totals.resultatNet / totals.caCalculable) * 100 : null;
+const totalCouverturePct = totals.caHt > 0 ? (totals.caCalculable / totals.caHt) * 100 : null;
 const anyMonthMissingCharges = rows.some(r => r.hasNoCharges && r.caHt > 0);
 
 function fmtEur(n: number) {
@@ -277,6 +288,10 @@ const pjLastPoint = pjPoints[pjPoints.length - 1];
     <div class={`total-card total-card--pct total-card--${margeClass(totalPct)}`}>
       <span class="total-label">Taux de marge moyen</span>
       <span class="total-value">{totalPct != null ? totalPct.toFixed(1) + ' %' : '—'}</span>
+      <span class="total-caption">
+        calculé sur {totalCouverturePct != null ? totalCouverturePct.toFixed(1) + ' %' : '—'} du CA
+        ({fmtEur(totals.caCalculable)} sur {fmtEur(totals.caHt)})
+      </span>
     </div>
   </div>
 
@@ -314,7 +329,10 @@ const pjLastPoint = pjPoints[pjPoints.length - 1];
               <td class="col-month">
                 <span class="month-label">{r.label}</span>
                 {!r.hasFullPump && r.caHt > 0 && (
-                  <span class="partial-badge" title="Certains produits sans coût d'achat renseigné — marge partielle">~</span>
+                  <span
+                    class="partial-badge"
+                    title={`Marge calculée sur ${r.couverturePct != null ? r.couverturePct.toFixed(1) : '?'} % du CA de ce mois (coût d'achat inconnu sur le reste) — pas surévaluée, incomplète.`}
+                  >~</span>
                 )}
                 {isCurrent && <span class="current-badge">Mois en cours</span>}
               </td>
@@ -374,8 +392,10 @@ const pjLastPoint = pjPoints[pjPoints.length - 1];
   </div>
 
   <p class="footnote">
-    Marge HT = CA HT − coût d'achat. Résultat net = Marge HT − Charges. Les lignes marquées ~ incluent des produits
-    sans coût d'achat renseigné — la marge est sous-estimée. Configurez les coûts via <a href="/admin/reception/new">Réception stock</a>.
+    Marge HT = CA HT à coût connu − coût d'achat (jamais le CA HT total : un coût d'achat non renseigné est inconnu,
+    pas nul, donc exclu du calcul plutôt que compté pour zéro). Marge % et Résultat % se calculent sur ce même CA à
+    coût connu. Résultat net = Marge HT − Charges. Les lignes marquées ~ incluent des produits sans coût d'achat
+    renseigné — la marge de ce mois est incomplète, pas surévaluée. Configurez les coûts via <a href="/admin/reception/new">Réception stock</a>.
     {produitsVendusCount > 0 && (
       <> Sur les {produitsVendusCount} produits vendus sur ces 12 mois, {produitsSansCoutCount} n'{produitsSansCoutCount === 1 ? 'a' : 'ont'} pas de coût d'achat renseigné et {produitsSansCoutCount === 1 ? 'est' : 'sont'} exclu{produitsSansCoutCount > 1 ? 's' : ''} des calculs de marge.</>
     )}
@@ -874,6 +894,12 @@ const pjLastPoint = pjPoints[pjPoints.length - 1];
 .total-value--cost    { color: oklch(0.42 0.06 220); }
 .total-value--marge   { color: oklch(0.38 0.12 145); }
 .total-value--charges { color: oklch(0.50 0.06 255); }
+
+.total-caption {
+  font-size: 10px;
+  color: var(--color-muted);
+  line-height: 1.4;
+}
 
 .total-card--pct .total-value { font-size: 1.5rem; }
 .total-card--green { border-color: oklch(0.80 0.12 145); background: oklch(0.96 0.04 145); }

@@ -56,10 +56,15 @@ const [
 // ── Bucket the order set by month for the 6-month chart, aggregate
 //    current-month products/categories, AND sum 12-month margin per
 //    product for GMROI — all in one pass over one query's data. ──────────
-type MonthBucket = { label: string; caHt: number; margeHt: number; hasPump: boolean; orderCount: number };
-const buckets: MonthBucket[] = monthDefs.map(m => ({ label: m.label, caHt: 0, margeHt: 0, hasPump: false, orderCount: 0 }));
+// caCalculable = CA des lignes à coût connu — le seul dénominateur valable
+// pour une marge %, jamais caHt (qui reste le CA total, complet et correct
+// en lui-même puisque le prix de vente est toujours connu). Voir
+// lib/constants.ts (margeCouverte) pour le pourquoi : un coût d'achat absent
+// est inconnu, pas nul, et le compter comme tel gonflait la marge affichée.
+type MonthBucket = { label: string; caHt: number; caCalculable: number; margeHt: number; hasPump: boolean; orderCount: number };
+const buckets: MonthBucket[] = monthDefs.map(m => ({ label: m.label, caHt: 0, caCalculable: 0, margeHt: 0, hasPump: false, orderCount: 0 }));
 
-const productAgg = new Map<string, { productId: string | null; name: string; unit: string | null; qty: number; ca: number; marge: number; hasPump: boolean }>();
+const productAgg = new Map<string, { productId: string | null; name: string; unit: string | null; qty: number; ca: number; caCalculable: number; marge: number; hasPump: boolean }>();
 const categoryAgg = new Map<string, number>();
 const categoryMargeAgg = new Map<string, number>();
 const categoryMargePartial = new Set<string>();
@@ -98,6 +103,7 @@ for (const order of (twelveMonthOrders ?? [])) {
 
     buckets[idx].caHt += prix * qty;
     if (pump != null) {
+      buckets[idx].caCalculable += prix * qty;
       buckets[idx].margeHt += (prix - pump) * qty;
       buckets[idx].hasPump = true;
     }
@@ -110,10 +116,11 @@ for (const order of (twelveMonthOrders ?? [])) {
       }
 
       const key  = item.product_id ?? item.product_name ?? 'inconnu';
-      const prev = productAgg.get(key) ?? { productId: item.product_id ?? null, name: item.product_name ?? 'Produit', unit: item.unit ?? null, qty: 0, ca: 0, marge: 0, hasPump: false };
+      const prev = productAgg.get(key) ?? { productId: item.product_id ?? null, name: item.product_name ?? 'Produit', unit: item.unit ?? null, qty: 0, ca: 0, caCalculable: 0, marge: 0, hasPump: false };
       prev.qty += qty;
       prev.ca  += prix * qty;
       if (pump != null) {
+        prev.caCalculable += prix * qty;
         prev.marge += (prix - pump) * qty;
         prev.hasPump = true;
       }
@@ -180,16 +187,20 @@ const avgRotation = totalStockValue > 0 ? totalCogs12mo / totalStockValue : null
 const stockValueCost = totalStockValue;
 const stockMargePotentielle = stockValueSell - stockValueCost;
 
-const caMonth         = buckets[CURRENT_IDX].caHt;
-const margeMonthHt     = buckets[CURRENT_IDX].margeHt;
-const margeMonthPct    = buckets[CURRENT_IDX].hasPump && caMonth > 0 ? (margeMonthHt / caMonth) * 100 : null;
-const orderCountMonth  = buckets[CURRENT_IDX].orderCount;
-const panierMoyen      = orderCountMonth > 0 ? caMonth / orderCountMonth : 0;
+const caMonth           = buckets[CURRENT_IDX].caHt;
+const caMonthCalculable = buckets[CURRENT_IDX].caCalculable;
+const margeMonthHt      = buckets[CURRENT_IDX].margeHt;
+// Sur caCalculable, jamais sur caMonth (CA total) — voir margeCouverte.
+const margeMonthPct     = caMonthCalculable > 0 ? (margeMonthHt / caMonthCalculable) * 100 : null;
+const couvertureMonthPct = caMonth > 0 ? (caMonthCalculable / caMonth) * 100 : null;
+const orderCountMonth   = buckets[CURRENT_IDX].orderCount;
+const panierMoyen       = orderCountMonth > 0 ? caMonth / orderCountMonth : 0;
 
-const caPrev           = buckets[CURRENT_IDX - 1].caHt;
-const margePrevPct     = buckets[CURRENT_IDX - 1].hasPump && caPrev > 0 ? (buckets[CURRENT_IDX - 1].margeHt / caPrev) * 100 : null;
-const orderCountPrev   = buckets[CURRENT_IDX - 1].orderCount;
-const panierMoyenPrev  = orderCountPrev > 0 ? caPrev / orderCountPrev : 0;
+const caPrev            = buckets[CURRENT_IDX - 1].caHt;
+const caPrevCalculable  = buckets[CURRENT_IDX - 1].caCalculable;
+const margePrevPct      = caPrevCalculable > 0 ? (buckets[CURRENT_IDX - 1].margeHt / caPrevCalculable) * 100 : null;
+const orderCountPrev    = buckets[CURRENT_IDX - 1].orderCount;
+const panierMoyenPrev   = orderCountPrev > 0 ? caPrev / orderCountPrev : 0;
 
 const missingPumpSomeMonth = buckets.some(b => b.caHt > 0 && !b.hasPump);
 
@@ -374,6 +385,14 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
         {formatCA(margeMonthHt)}
         {margeMonthPct != null && <span class="kpi-value-sub">{margeMonthPct.toFixed(1)} %</span>}
       </span>
+      {couvertureMonthPct != null && couvertureMonthPct < 99.95 && (
+        <span
+          class="kpi-caption"
+          title="Un coût d'achat non renseigné est traité comme inconnu, jamais comme nul — ces ventes sont exclues du calcul plutôt que de gonfler la marge."
+        >
+          marge calculée sur {couvertureMonthPct.toFixed(1)} % du CA du mois (coût connu)
+        </span>
+      )}
       {margeMonthHt !== 0 && (
         <span class="kpi-breakdown">
           dont <span class="kpi-breakdown--livree">{formatCA(margeMonthLivree)} livrés</span>, <span class="kpi-breakdown--encours">{formatCA(margeMonthEnCours)} en cours</span>
@@ -650,12 +669,21 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
               <tbody>
                 {top5Products.map(p => {
                   const g = p.productId ? gmroiById.get(p.productId) ?? null : null;
+                  const partial = p.hasPump && p.caCalculable < p.ca;
                   return (
                     <tr>
                       <td class="top5-name">{p.name}</td>
                       <td class="th-r top5-qty">{p.qty}{p.unit ? <span class="top5-unit"> {p.unit}{p.qty > 1 ? 's' : ''}</span> : null}</td>
                       <td class="th-r top5-ca">{formatCA(p.ca)}</td>
-                      <td class="th-r top5-marge">{p.hasPump ? formatCA(p.marge) : '—'}</td>
+                      <td class="th-r top5-marge">
+                        {p.hasPump ? formatCA(p.marge) : '—'}
+                        {partial && (
+                          <span
+                            class="partial-badge"
+                            title={`Marge calculée sur ${((p.caCalculable / p.ca) * 100).toFixed(1)} % du CA de ce produit ce mois-ci — coût d'achat inconnu sur le reste, pas nul.`}
+                          >~</span>
+                        )}
+                      </td>
                       <td class="th-r"><span class={`gmroi-chip gmroi-chip--${gmroiColorClass(g)}`}>{g != null ? g.toFixed(1) + '×' : '—'}</span></td>
                     </tr>
                   );
@@ -990,6 +1018,15 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
 .kpi-extra-line--accent {
   color: var(--color-primary-deep);
   font-weight: 600;
+}
+
+.kpi-caption {
+  display: block;
+  font-size: 10px;
+  color: var(--color-muted);
+  cursor: help;
+  border-bottom: 1px dotted var(--color-border-strong);
+  width: fit-content;
 }
 
 .kpi-breakdown {
@@ -1342,6 +1379,20 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
 .top5-unit { color: var(--color-muted); font-size: var(--text-xs); }
 .top5-ca { font-weight: 500; color: var(--color-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .top5-marge { font-weight: 700; color: oklch(0.40 0.13 150); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.partial-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  background: oklch(0.95 0.07 60);
+  color: oklch(0.38 0.14 60);
+  border-radius: var(--radius-full);
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: var(--space-1);
+  cursor: help;
+}
 
 .gmroi-chip {
   display: inline-flex;

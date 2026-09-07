@@ -1,7 +1,7 @@
 import { supabaseAdmin } from './supabase';
 import { fetchAvailability } from './stock';
 import { formatDateReunion, formatDateTimeReunion, reunionDateStartUTC } from './datetime';
-import { CATEGORY_LABEL, ORDER_STATUS_LABEL } from './constants';
+import { CATEGORY_LABEL, ORDER_STATUS_LABEL, margeCouverte } from './constants';
 import {
   fetchCharges, computeChargesForPeriod, projectCharges, fetchRecentCompleteMonthMargins,
   MONTHS_HISTORY_FOR_PROJECTION, MONTHS_AHEAD_FOR_PROJECTION,
@@ -157,6 +157,8 @@ export async function buildMargesExport(debut: string, fin: string, coefPct: num
     unitsPerCarton: number | null;
     cartons: number;
     caHt: number;
+    /** CA des seules lignes à coût connu — le dénominateur valable pour marge %, pas caHt. */
+    caCalculable: number;
     costHt: number;
     hasMissingCost: boolean;
   };
@@ -175,7 +177,7 @@ export async function buildMargesExport(debut: string, fin: string, coefPct: num
           category: meta?.category ?? null,
           unit: meta?.unit ?? item.unit,
           unitsPerCarton: meta?.units_per_carton ?? null,
-          cartons: 0, caHt: 0, costHt: 0, hasMissingCost: false,
+          cartons: 0, caHt: 0, caCalculable: 0, costHt: 0, hasMissingCost: false,
         };
         prodAggByKey.set(key, agg);
       }
@@ -184,8 +186,12 @@ export async function buildMargesExport(debut: string, fin: string, coefPct: num
       const pump = item.pump_snapshot != null ? Number(item.pump_snapshot) : null;
       agg.cartons += qty;
       if (prix != null) agg.caHt += prix * qty;
-      if (pump != null) agg.costHt += pump * qty;
-      else agg.hasMissingCost = true;
+      if (prix != null && pump != null) {
+        agg.caCalculable += prix * qty;
+        agg.costHt += pump * qty;
+      } else if (pump == null) {
+        agg.hasMissingCost = true;
+      }
     }
   }
 
@@ -193,8 +199,7 @@ export async function buildMargesExport(debut: string, fin: string, coefPct: num
   const produitsSansCoutCount = produitAggs.filter(p => p.hasMissingCost).length;
 
   const ventesParProduitRows = produitAggs.map(p => {
-    const margeHt = p.caHt - p.costHt;
-    const margePct = p.caHt > 0 ? (margeHt / p.caHt) * 100 : null;
+    const m = margeCouverte(p.caCalculable, p.costHt, p.caHt);
     const prixMoyen = p.cartons > 0 ? p.caHt / p.cartons : null;
     const unitesVendues = p.unitsPerCarton != null ? p.cartons * p.unitsPerCarton : null;
     const avail = p.productId ? availability.get(p.productId) : undefined;
@@ -207,9 +212,10 @@ export async function buildMargesExport(debut: string, fin: string, coefPct: num
       unitesVendues ?? '—',
       prixMoyen != null ? eur(prixMoyen) : '—',
       eur(p.caHt),
-      eur(p.costHt),
-      eur(margeHt),
-      pct(margePct),
+      eur(m.coutHt),
+      eur(m.margeHt),
+      pct(m.margePct),
+      pct(m.couverturePct),
       avail ? avail.available : '—',
     ];
   });
@@ -335,17 +341,26 @@ export async function buildMargesExport(debut: string, fin: string, coefPct: num
   });
 
   // ── Totaux ──────────────────────────────────────────────────────────────
+  // margeCouverte, pas caHt − costHt : caHt inclut les ventes sans coût connu,
+  // costHt non — la soustraction directe gonflait la marge (voir la note en
+  // tête de margeCouverte dans lib/constants.ts). totalMargeHt ne porte donc
+  // que sur totalCaCalculable, jamais sur totalCaHt.
   const totalCaHt = produitAggs.reduce((s, p) => s + p.caHt, 0);
+  const totalCaCalculable = produitAggs.reduce((s, p) => s + p.caCalculable, 0);
   const totalCostHt = produitAggs.reduce((s, p) => s + p.costHt, 0);
-  const totalMargeHt = totalCaHt - totalCostHt;
-  const totalMargePct = totalCaHt > 0 ? (totalMargeHt / totalCaHt) * 100 : null;
+  const totalMarge = margeCouverte(totalCaCalculable, totalCostHt, totalCaHt);
+  const totalMargeHt = totalMarge.margeHt;
+  const totalMargePct = totalMarge.margePct;
+  const totalCouverturePct = totalMarge.couverturePct;
   const totalCartons = produitAggs.reduce((s, p) => s + p.cartons, 0);
 
   // Charges au prorata des jours de la période dans chaque mois civil — voir
-  // computeChargesForPeriod pour la méthode exacte.
+  // computeChargesForPeriod pour la méthode exacte. Résultat net dérivé de la
+  // marge corrigée (totalMargeHt) — jamais divisé par le CA total non plus,
+  // pour la même raison.
   const chargesPeriode = computeChargesForPeriod(charges, debut, fin);
   const resultatNetPeriode = totalMargeHt - chargesPeriode;
-  const resultatPctPeriode = totalCaHt > 0 ? (resultatNetPeriode / totalCaHt) * 100 : null;
+  const resultatPctPeriode = totalCaCalculable > 0 ? (resultatNetPeriode / totalCaCalculable) * 100 : null;
 
   // ── Prévisionnel — mêmes règles que /admin/marges (lib/charges.ts) ───────
   const projection = projectCharges(charges, historicalMonthMargins, coefPct, MONTHS_AHEAD_FOR_PROJECTION);
@@ -369,11 +384,17 @@ export async function buildMargesExport(debut: string, fin: string, coefPct: num
   );
 
   parts.push('\n## Totaux\n');
-  parts.push('_Charges et résultat net au prorata des jours de la période dans chaque mois civil — voir Limites des données._\n\n');
+  parts.push(
+    '_Marge HT, Marge %, Résultat net et Résultat % ne portent que sur le CA à coût connu (Couverture ci-dessous), pas sur le CA HT total — ' +
+    'un coût d\'achat absent est traité comme inconnu, jamais comme nul. Charges et résultat net par ailleurs au prorata des jours de la période ' +
+    'dans chaque mois civil — voir Limites des données._\n\n'
+  );
   parts.push(mdTable(
     ['Indicateur', 'Valeur'],
     [
-      ['CA HT', eur(totalCaHt)],
+      ['CA HT (total)', eur(totalCaHt)],
+      ['CA HT à coût connu (base de la marge)', eur(totalCaCalculable)],
+      ['Couverture (part du CA à coût connu)', pct(totalCouverturePct)],
       ['Coût HT', eur(totalCostHt)],
       ['Marge HT', eur(totalMargeHt)],
       ['Marge %', pct(totalMargePct)],
@@ -386,9 +407,13 @@ export async function buildMargesExport(debut: string, fin: string, coefPct: num
   ));
 
   parts.push('\n## Ventes par produit\n');
-  parts.push('_† = au moins une vente sans coût d\'achat connu ; coût et marge sous-estimés pour cette ligne, voir Limites des données._\n\n');
+  parts.push(
+    '_† = au moins une vente sans coût d\'achat connu. Coût HT, Marge HT et Marge % ne portent QUE sur les lignes à coût connu — pas sur le CA HT total ' +
+    'affiché à côté (qui, lui, reste complet puisque le prix de vente est toujours connu). Couverture = part de ce CA HT total dont le coût est connu ; ' +
+    'en dessous de 100 %, la marge de ce produit est incomplète, pas surévaluée — voir Limites des données._\n\n'
+  );
   parts.push(mdTable(
-    ['Produit', 'SKU', 'Catégorie', 'Conditionnement', 'Cartons vendus', 'Unités vendues', 'Prix de vente moyen HT', 'CA HT', 'Coût HT', 'Marge HT', 'Marge %', 'Stock disponible'],
+    ['Produit', 'SKU', 'Catégorie', 'Conditionnement', 'Cartons vendus', 'Unités vendues', 'Prix de vente moyen HT', 'CA HT', 'Coût HT', 'Marge HT', 'Marge %', 'Couverture', 'Stock disponible'],
     ventesParProduitRows,
   ));
 
@@ -441,7 +466,7 @@ export async function buildMargesExport(debut: string, fin: string, coefPct: num
   const limites: string[] = [];
   limites.push(
     produitsSansCoutCount > 0
-      ? `Sur les ${produitAggs.length} produits vendus sur la période, ${produitsSansCoutCount} n'avaient pas de coût d'achat renseigné sur au moins une vente (marqués †) : leur coût et leur marge dans ce document sont sous-estimés, pas absents.`
+      ? `Sur les ${produitAggs.length} produits vendus sur la période, ${produitsSansCoutCount} n'avaient pas de coût d'achat renseigné sur au moins une vente (marqués †). Leur coût et leur marge dans ce document ne portent que sur les ventes à coût connu (voir la colonne Couverture) — un coût absent est traité comme inconnu, jamais comme nul, donc exclu du calcul plutôt que sous-estimé.`
       : `Tous les produits vendus sur la période avaient un coût d'achat renseigné.`
   );
   limites.push(

@@ -36,6 +36,10 @@ const { data: marginRows } = await supabaseAdmin
   .gte('orders.created_at', twelveMonthsAgoIso);
 
 const margin12moByProduct = new Map<string, number>();
+// CA des seules lignes à coût connu — le dénominateur valable pour une marge
+// %, jamais revenue12moByProduct (qui reste volontairement le CA total, voir
+// juste en dessous). Un coût d'achat absent est inconnu, pas nul.
+const caCalculable12moByProduct = new Map<string, number>();
 // Quantities and revenue feed the search summary banner. They use looser gates
 // than margin on purpose: a line still sold and still earned even when its
 // PUMP snapshot is missing, so only the margin sums skip those rows.
@@ -67,6 +71,7 @@ for (const row of (marginRows ?? [])) {
 
   if (prix == null || pump == null) continue;
   margin12moByProduct.set(row.product_id, (margin12moByProduct.get(row.product_id) ?? 0) + (prix - pump) * row.quantity);
+  caCalculable12moByProduct.set(row.product_id, (caCalculable12moByProduct.get(row.product_id) ?? 0) + prix * row.quantity);
 }
 
 // ── Vitesse de vente / jours avant rupture — same order_items pull
@@ -172,6 +177,7 @@ const rows = filteredProducts.map(p => {
       stockCartons,
       stockValue: hasPumpValue ? stockCartons * pump : 0,
       caHt: revenue12moByProduct.get(p.id) ?? 0,
+      caCalculable: caCalculable12moByProduct.get(p.id) ?? 0,
       margeHt: margin12moByProduct.get(p.id) ?? 0,
       // Flags so the banner can say its totals are understated rather than
       // quietly reporting a number that is too low.
@@ -402,6 +408,7 @@ const DELETE_ERROR_MSG: Record<string, string> = {
               data-stock-cartons={p.agg.stockCartons}
               data-stock-value={p.agg.stockValue}
               data-ca={p.agg.caHt}
+              data-ca-calculable={p.agg.caCalculable}
               data-marge={p.agg.margeHt}
               data-partial-units={p.agg.partialUnits ? '1' : null}
               data-partial-stock={p.agg.partialStock ? '1' : null}
@@ -551,7 +558,7 @@ const DELETE_ERROR_MSG: Record<string, string> = {
       return;
     }
 
-    let units = 0, cartonsSold = 0, stockCartons = 0, stockValue = 0, ca = 0, marge = 0;
+    let units = 0, cartonsSold = 0, stockCartons = 0, stockValue = 0, ca = 0, caCalculable = 0, marge = 0;
     let partialUnits = false, partialStock = false;
 
     for (const row of matched) {
@@ -560,6 +567,7 @@ const DELETE_ERROR_MSG: Record<string, string> = {
       stockCartons += numAttr(row, 'stockCartons');
       stockValue   += numAttr(row, 'stockValue');
       ca           += numAttr(row, 'ca');
+      caCalculable += numAttr(row, 'caCalculable');
       marge        += numAttr(row, 'marge');
       if (row.dataset.partialUnits) partialUnits = true;
       if (row.dataset.partialStock) partialStock = true;
@@ -575,12 +583,15 @@ const DELETE_ERROR_MSG: Record<string, string> = {
     setText('ssStockValue', `${eur.format(stockValue)} de stock`);
     setText('ssCa', eur.format(ca));
     setText('ssMarge', eur.format(marge));
-    setText('ssMargePct', ca > 0 ? `${((marge / ca) * 100).toFixed(1)} % du CA` : '—');
+    // Sur caCalculable (coût connu), jamais sur ca (CA total) — un coût
+    // d'achat absent est inconnu, pas nul, voir lib/constants.ts (margeCouverte).
+    setText('ssMargePct', caCalculable > 0 ? `${((marge / caCalculable) * 100).toFixed(1)} % du CA à coût connu` : '—');
 
     // Say so when a total is understated rather than letting it read as exact.
     const notes: string[] = [];
     if (partialUnits) notes.push('unités partielles (conditionnement non défini pour certains produits)');
     if (partialStock) notes.push('valeur de stock partielle (PUMP non défini pour certains produits)');
+    if (ca > 0 && caCalculable < ca) notes.push(`marge calculée sur ${((caCalculable / ca) * 100).toFixed(1)} % du CA (coût d'achat inconnu sur le reste)`);
     const noteEl = el('ssNote');
     if (noteEl) {
       noteEl.textContent = notes.length ? `* ${notes.join(' · ')}` : '';
