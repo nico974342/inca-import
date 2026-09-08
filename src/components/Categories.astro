@@ -1,9 +1,14 @@
 ---
+interface Props {
+  counts: { boissons: number; snacks: number; confiseries: number };
+}
+const { counts } = Astro.props;
+
 const categories = [
   {
     slug: 'boissons',
     name: 'Boissons',
-    count: '120+ références',
+    count: `${counts.boissons} références`,
     desc: 'Eaux minérales, sodas, energy drinks, jus de fruits et boissons chaudes — toute la gamme pour satisfaire vos clients.',
     img: 'https://images.unsplash.com/photo-1619719304580-c6f308e5315a?auto=format&fit=crop&w=960&q=80',
     alt: 'Bouteilles de boissons variées alignées',
@@ -11,15 +16,15 @@ const categories = [
   {
     slug: 'snacks',
     name: 'Snacks',
-    count: '85+ références',
-    desc: 'Chips, biscuits apéro, cacahuètes, barres énergétiques — les en-cas préférés de vos clients, toujours disponibles.',
+    count: `${counts.snacks} références`,
+    desc: 'Chips, biscuits apéro, cacahuètes, barres énergétiques — les en-cas préférés de vos clients.',
     img: 'https://images.unsplash.com/photo-1613919113640-25732ec5e61f?auto=format&fit=crop&w=960&q=80',
     alt: 'Assortiment de snacks et chips',
   },
   {
     slug: 'confiseries',
     name: 'Confiseries',
-    count: '60+ références',
+    count: `${counts.confiseries} références`,
     desc: "Bonbons, chocolats, chewing-gums et friandises — l'impulsion qui génère du chiffre d'affaires en caisse.",
     img: 'https://images.unsplash.com/photo-1633158832466-be592c721217?auto=format&fit=crop&w=960&q=80',
     alt: 'Confiseries colorées variées',

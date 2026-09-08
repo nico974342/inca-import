@@ -7,18 +7,29 @@ import Brands from '../components/Brands.astro';
 import WhyInca from '../components/WhyInca.astro';
 import FaqCta from '../components/FaqCta.astro';
 import Footer from '../components/Footer.astro';
-import { createAuthClient } from '../lib/supabase';
+import { createAuthClient, supabaseAdmin } from '../lib/supabase';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
+
+// Comptes de références affichés en page d'accueil : calculés depuis le
+// catalogue à chaque rendu, pour ne jamais afficher un chiffre périmé.
+const { data: productsRaw } = await supabaseAdmin.from('products').select('category');
+const products = productsRaw ?? [];
+const totalRefs = products.length;
+const categoryCounts = {
+  boissons:    products.filter(p => p.category === 'boissons').length,
+  snacks:      products.filter(p => p.category === 'snacks').length,
+  confiseries: products.filter(p => p.category === 'confiseries').length,
+};
 ---
 <Base>
   <Nav user={user} />
   <main>
-    <Hero />
-    <Categories />
+    <Hero totalRefs={totalRefs} />
+    <Categories counts={categoryCounts} />
     <Brands />
-    <WhyInca />
+    <WhyInca totalRefs={totalRefs} />
     <FaqCta />
   </main>
   <Footer />

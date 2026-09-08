@@ -1,4 +1,6 @@
 ---
+import { COMPANY } from '../lib/constants';
+
 const year = new Date().getFullYear();
 ---
 <footer class="site-footer">
@@ -38,7 +40,7 @@ const year = new Date().getFullYear();
           29 Route des Premiers Français<br>97460 Saint-Paul, La Réunion
         </li>
         <li class="footer-address">
-          SIRET 945 112 753
+          SIRET {COMPANY.siret}
         </li>
       </ul>
     </div>

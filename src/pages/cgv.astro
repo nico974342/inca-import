@@ -3,6 +3,7 @@ import Base from '../layouts/Base.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import { createAuthClient } from '../lib/supabase';
+import { COMPANY } from '../lib/constants';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -25,10 +26,10 @@ const { data: { user } } = await supabase.auth.getUser();
           <h2>1. Objet et champ d'application</h2>
           <p>
             Les présentes conditions générales de vente (CGV) régissent exclusivement les relations
-            commerciales entre la société <strong>INCA IMPORT</strong> (SIRET 945 112 753), grossiste
+            commerciales entre la société <strong>INCA IMPORT</strong> (SIRET {COMPANY.siret}), grossiste
             en boissons, snacks et confiseries, et ses clients professionnels (commerçants, gérants
             de stations-service, supérettes, etc.). Elles s'appliquent à toute commande passée via
-            la plateforme inca-import.fr, à l'exclusion de toute vente aux consommateurs.
+            la plateforme inca-import.re, à l'exclusion de toute vente aux consommateurs.
           </p>
           <p>
             Toute commande implique l'acceptation sans réserve des présentes CGV par le client

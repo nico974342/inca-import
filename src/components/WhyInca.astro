@@ -1,6 +1,11 @@
 ---
+interface Props {
+  totalRefs: number;
+}
+const { totalRefs } = Astro.props;
+
 const points = [
-  { word: 'Stock permanent', sub: '120+ références toujours disponibles, jamais de rupture.' },
+  { word: 'Stock permanent', sub: `${totalRefs} références en catalogue, réapprovisionnement continu.` },
   { word: 'Livraison 48h', sub: 'Partout à La Réunion, sans exception.' },
   { word: 'Famille réunionnaise 7j/7', sub: "Une équipe locale qui vous connaît, pas un centre d'appels." },
 ];

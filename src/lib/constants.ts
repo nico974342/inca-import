@@ -7,7 +7,7 @@ export const COMPANY = {
   postalCode:   '97460',
   city:         'Saint-Paul',
   region:       'La Réunion',
-  siret:        '945 112 753',
+  siret:        '945 112 753 00013',
   phoneDisplay: '0692 47 89 41',
   phoneHref:    '+262692478941',
   contactEmail: 'inca-import@hotmail.com',

@@ -3,6 +3,7 @@ import Base from '../layouts/Base.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import { createAuthClient } from '../lib/supabase';
+import { COMPANY } from '../lib/constants';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -23,7 +24,7 @@ const { data: { user } } = await supabase.auth.getUser();
 
         <section class="legal-section">
           <h2>1. Éditeur du site</h2>
-          <p>Le site <strong>inca-import.fr</strong> est édité par :</p>
+          <p>Le site <strong>inca-import.re</strong> est édité par :</p>
           <dl class="legal-dl">
             <div class="dl-row">
               <dt>Raison sociale</dt>
@@ -39,7 +40,7 @@ const { data: { user } } = await supabase.auth.getUser();
             </div>
             <div class="dl-row">
               <dt>SIRET</dt>
-              <dd>945 112 753 00000</dd>
+              <dd>{COMPANY.siret}</dd>
             </div>
             <div class="dl-row">
               <dt>Siège social</dt>

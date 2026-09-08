@@ -3,6 +3,7 @@ import Base from '../layouts/Base.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import { createAuthClient } from '../lib/supabase';
+import { COMPANY } from '../lib/constants';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -26,7 +27,7 @@ const { data: { user } } = await supabase.auth.getUser();
           <p>
             Le responsable du traitement de vos données personnelles est la société
             <strong>INCA IMPORT</strong>, SARL au capital de 1 000 €, immatriculée sous le numéro
-            SIRET 945 112 753, dont le siège social est situé au 29 Route des Premiers Français,
+            SIRET {COMPANY.siret}, dont le siège social est situé au 29 Route des Premiers Français,
             97460 Saint-Paul, La Réunion.
           </p>
           <p>

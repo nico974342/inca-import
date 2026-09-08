@@ -90,7 +90,7 @@ const staffLabel = ROLE_LABEL[getRole(user) ?? 'admin'];
           ) : (
             <>
               <a href="/connexion">Connexion</a>
-              <a href="/inscription" class="btn btn-primary mobile-cta">Ouvrir un compte →</a>
+              <a href="/inscription" class="btn btn-primary mobile-cta">Ouvrir mon compte pro</a>
             </>
           )}
         </nav>
@@ -379,6 +379,11 @@ const staffLabel = ROLE_LABEL[getRole(user) ?? 'admin'];
   margin-top: var(--space-6);
   border-bottom: none !important;
   justify-content: center;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  white-space: normal;
+  text-align: center;
 }
 
 /* Mobile logged-in user */
