@@ -10,6 +10,7 @@ import {
   SHIPMENT_ACTIVE_STATUSES, computeShipmentProgress,
   DELAI_LIVRAISON_DEFAUT_JOURS, resolveDelaiLivraison, delaiAVerifier,
   COUVERTURE_CIBLE_DEFAUT_JOURS, resolveCouvertureCible,
+  matchSupplierName, type SupplierMatchStatus,
   classifyReorder, computeReorderQtyWithBridge, applyMoqAndMultiple,
   engagementNonCouvert,
   type ArrivalEvent, type ConfianceVentes,
@@ -93,41 +94,13 @@ if (productIds.length > 0) {
   }
 }
 
-// ── Fournisseur + date de première réception + mouvements de stock (pour la
-//    reconstruction des périodes de rupture) — une ligne de réception est un
-//    mouvement positif à sa date. ──
-const supplierByProduct = new Map<string, string>();
-const firstReceptionByProduct = new Map<string, string>();
-const receptionMovementsByProduct = new Map<string, { date: Date; delta: number }[]>();
-if (productIds.length > 0) {
-  const { data: receptionRows } = await supabaseAdmin
-    .from('stock_reception_items')
-    .select('product_id, quantity, created_at, stock_receptions(supplier_name, received_at)')
-    .order('created_at', { ascending: false });
-  for (const row of (receptionRows ?? [])) {
-    if (!row.product_id) continue;
-    const rec = (row as any).stock_receptions;
-    if (rec?.supplier_name && !supplierByProduct.has(row.product_id)) {
-      supplierByProduct.set(row.product_id, rec.supplier_name);
-    }
-    if (rec?.received_at) {
-      const cur = firstReceptionByProduct.get(row.product_id);
-      if (!cur || rec.received_at < cur) firstReceptionByProduct.set(row.product_id, rec.received_at);
-      const list = receptionMovementsByProduct.get(row.product_id) ?? [];
-      list.push({ date: new Date(rec.received_at), delta: row.quantity ?? 0 });
-      receptionMovementsByProduct.set(row.product_id, list);
-    }
-  }
-}
-
-// ── Délais + sécurité + couverture cible par fournisseur. Le
-//    cycle_commande_jours n'est plus consulté ici : la couverture cible le
-//    remplace, pour ne plus imposer une cadence de commande calquée sur le
-//    fournisseur — voir la demande explicite de ne pas forcer une fréquence
-//    égale au délai. ──
-let delaiBySupplier = new Map<string, number | null>();
-let securiteBySupplier = new Map<string, number | null>();
-let couvertureBySupplier = new Map<string, number | null>();
+// ── Fournisseurs : chargés en premier, id compris — délai/sécurité/
+//    couverture sont désormais résolus PAR IDENTIFIANT (voir plus bas), plus
+//    par correspondance de nom. Le cycle_commande_jours n'est plus consulté
+//    ici : la couverture cible le remplace, pour ne plus imposer une cadence
+//    de commande calquée sur le fournisseur. ──
+type SupplierRow = { id: string; name: string; delai: number | null; securite: number | null; couverture: number | null };
+let allSuppliers: SupplierRow[] = [];
 let suppliersTableMissing = false;
 let securiteColumnMissing = false;
 let couvertureColumnMissing = false;
@@ -140,16 +113,79 @@ let couvertureColumnMissing = false;
     securiteColumnMissing = probeSecurite.error?.code === '42703';
     const probeCouverture = await supabaseAdmin.from('suppliers').select('couverture_cible_jours').limit(1);
     couvertureColumnMissing = probeCouverture.error?.code === '42703';
-    const cols = ['name', 'delai_livraison_jours'];
+    const cols = ['id', 'name', 'delai_livraison_jours'];
     if (!securiteColumnMissing) cols.push('jours_securite');
     if (!couvertureColumnMissing) cols.push('couverture_cible_jours');
     const res = await supabaseAdmin.from('suppliers').select(cols.join(', '));
-    for (const s of (res.data ?? []) as any[]) {
-      delaiBySupplier.set(s.name, s.delai_livraison_jours);
-      securiteBySupplier.set(s.name, securiteColumnMissing ? null : s.jours_securite);
-      couvertureBySupplier.set(s.name, couvertureColumnMissing ? null : s.couverture_cible_jours);
+    allSuppliers = ((res.data ?? []) as any[]).map(s => ({
+      id: s.id,
+      name: s.name,
+      delai: s.delai_livraison_jours,
+      securite: securiteColumnMissing ? null : s.jours_securite,
+      couverture: couvertureColumnMissing ? null : s.couverture_cible_jours,
+    }));
+  }
+}
+const suppliersById = new Map(allSuppliers.map(s => [s.id, s]));
+const suppliersForMatch = allSuppliers.map(s => ({ id: s.id, name: s.name }));
+
+// ── Fournisseur + date de première réception + mouvements de stock (pour la
+//    reconstruction des périodes de rupture) — une ligne de réception est un
+//    mouvement positif à sa date. Identifiant stable (supplier_id) prioritaire
+//    quand présent ; sinon rapprochement en direct par nom normalisé (casse +
+//    espaces) via matchSupplierName — même filet de sécurité qu'avant la
+//    migration qui persiste ce lien, donc aucune régression si la migration
+//    n'est pas encore appliquée, et aucune casse silencieuse si un nom
+//    ressaisi diffère de la casse enregistrée. Toute correspondance ambiguë
+//    ou introuvable est signalée (voir supplierMatchStatus plus bas), jamais
+//    fusionnée automatiquement. ──
+const supplierByProduct = new Map<string, { supplierId: string | null; rawName: string }>();
+const firstReceptionByProduct = new Map<string, string>();
+const receptionMovementsByProduct = new Map<string, { date: Date; delta: number }[]>();
+if (productIds.length > 0) {
+  const probeReceptionSupplierId = await supabaseAdmin.from('stock_receptions').select('supplier_id').limit(1);
+  const receptionSupplierIdMissing = probeReceptionSupplierId.error?.code === '42703';
+  const receptionCols = receptionSupplierIdMissing
+    ? 'stock_receptions(supplier_name, received_at)'
+    : 'stock_receptions(supplier_name, supplier_id, received_at)';
+  const { data: receptionRows } = await supabaseAdmin
+    .from('stock_reception_items')
+    .select(`product_id, quantity, created_at, ${receptionCols}`)
+    .order('created_at', { ascending: false });
+  for (const row of (receptionRows ?? [])) {
+    if (!row.product_id) continue;
+    const rec = (row as any).stock_receptions;
+    if (rec?.supplier_name && !supplierByProduct.has(row.product_id)) {
+      supplierByProduct.set(row.product_id, { supplierId: rec.supplier_id ?? null, rawName: rec.supplier_name });
+    }
+    if (rec?.received_at) {
+      const cur = firstReceptionByProduct.get(row.product_id);
+      if (!cur || rec.received_at < cur) firstReceptionByProduct.set(row.product_id, rec.received_at);
+      const list = receptionMovementsByProduct.get(row.product_id) ?? [];
+      list.push({ date: new Date(rec.received_at), delta: row.quantity ?? 0 });
+      receptionMovementsByProduct.set(row.product_id, list);
     }
   }
+}
+
+/** Résout le fournisseur d'un produit : identifiant persisté d'abord (fiable,
+ *  insensible à un renommage ultérieur du fournisseur) ; sinon rapprochement
+ *  en direct par nom normalisé. `status` distingue 'matched' (fiable),
+ *  'ambiguous' (plusieurs fournisseurs partagent la même clé normalisée),
+ *  'unmatched' (aucun ne correspond) et 'none' (aucune réception du tout). */
+function resolveProductSupplier(entry: { supplierId: string | null; rawName: string } | undefined): {
+  supplierId: string | null; displayName: string | null; status: SupplierMatchStatus | 'none';
+} {
+  if (!entry) return { supplierId: null, displayName: null, status: 'none' };
+  if (entry.supplierId && suppliersById.has(entry.supplierId)) {
+    return { supplierId: entry.supplierId, displayName: suppliersById.get(entry.supplierId)!.name, status: 'matched' };
+  }
+  const m = matchSupplierName(entry.rawName, suppliersForMatch);
+  return {
+    supplierId: m.supplierId,
+    displayName: m.supplierId ? suppliersById.get(m.supplierId)!.name : entry.rawName,
+    status: m.status,
+  };
 }
 
 // ── Arrivages actifs (commandes fournisseur déjà passées + transit) —
@@ -231,17 +267,18 @@ const rows = allProducts.map(p => {
 
   const hasSales = vitesseVente > 0;
 
-  const supplierName = supplierByProduct.get(p.id) ?? null;
+  const supplierResolved = resolveProductSupplier(supplierByProduct.get(p.id));
+  const supplierRow = supplierResolved.supplierId ? suppliersById.get(supplierResolved.supplierId) ?? null : null;
   const delai = resolveDelaiLivraison(
     (p as any).delai_livraison_jours,
     (p as any).delai_livraison_override,
-    supplierName,
-    supplierName ? delaiBySupplier.get(supplierName) ?? null : null,
+    supplierResolved.displayName,
+    supplierRow?.delai ?? null,
   );
   const aVerifierDelai = delaiAVerifier((p as any).delai_livraison_jours, (p as any).delai_livraison_override);
-  const joursSecurite = ((supplierName ? securiteBySupplier.get(supplierName) : null) ?? 0) + securiteExtraJours;
+  const joursSecurite = (supplierRow?.securite ?? 0) + securiteExtraJours;
   const couverture = resolveCouvertureCible(
-    supplierName ? couvertureBySupplier.get(supplierName) ?? null : null,
+    supplierRow?.couverture ?? null,
     simulateCouverture,
     couvertureSimulationJours,
   );
@@ -311,14 +348,16 @@ const rows = allProducts.map(p => {
     confiance, stockoutDetected, reconstructionApplied, reconstructionUncertain, outlierDetected, orderCount, qtySold,
     suggestedQty, covered,
     delai, aVerifierDelai, joursSecurite, couverture,
-    couvertureFournisseurJours: supplierName ? couvertureBySupplier.get(supplierName) ?? null : null,
+    couvertureFournisseurJours: supplierRow?.couverture ?? null,
     trigger, manqueEngage,
     transitQty, transitHasUnknownEta, transitLate,
     nextArrivalLabel: nextArrivalEta ? fmtDate(nextArrivalEta) : null,
     arrivals: arrivals.map(a => ({ quantity: a.quantity, eta: a.eta ? a.eta.toISOString() : null, status: a.status })),
     pump, missingPump: pump == null, missingDelai: delai.source === 'defaut',
     unitsPerCarton: upc != null && upc > 0 ? upc : null,
-    supplier: supplierName ?? UNGROUPED_LABEL,
+    supplier: supplierResolved.displayName ?? UNGROUPED_LABEL,
+    supplierId: supplierResolved.supplierId,
+    supplierMatchStatus: supplierResolved.status,
     stockPhysique, stockReserve, stockDisponible,
     minCartons: (p as any).commande_min_cartons ?? null,
     multipleCartons: (p as any).commande_multiple_cartons ?? null,
@@ -360,7 +399,11 @@ const supplierGroups = supplierNamesOrder.map(name => {
   const cost = visible.reduce((s, r) => s + lineCost(r), 0);
   const missingPumpCount = visible.filter(r => r.missingPump).length;
   const groupUrgency = items.length ? Math.min(...items.map(urgencyRank)) : 5;
-  return { name, items, visibleCount: visible.length, cartons, cost, missingPumpCount, groupUrgency };
+  // Un seul et même fournisseur (suppliers.name est UNIQUE) ne peut porter
+  // qu'un seul supplierId au sein d'un groupe déjà regroupé par nom affiché.
+  const supplierId = items.find(r => r.supplierId)?.supplierId ?? null;
+  const unresolved = items.some(r => r.supplierMatchStatus === 'ambiguous' || r.supplierMatchStatus === 'unmatched');
+  return { name, supplierId, unresolved, items, visibleCount: visible.length, cartons, cost, missingPumpCount, groupUrgency };
 }).sort((a, b) => a.groupUrgency - b.groupUrgency || b.cartons - a.cartons || a.name.localeCompare(b.name, 'fr'));
 
 const activeSupplierGroups = supplierGroups.filter(g => g.visibleCount > 0);
@@ -518,10 +561,17 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
     ) : null}
 
     {supplierGroups.map(g => (
-      <section class="supplier-block" data-role="supplier-block" data-supplier={g.name} hidden={g.visibleCount === 0}>
+      <section class="supplier-block" data-role="supplier-block" data-supplier={g.name} data-supplier-id={g.supplierId ?? ''} hidden={g.visibleCount === 0}>
         <div class="supplier-head">
           <div class="supplier-head-main">
-            <h2 class="supplier-name">{g.name}</h2>
+            <h2 class="supplier-name">
+              {g.name}
+              {g.unresolved && (
+                <span class="pr-badge pr-badge--warn supplier-name-badge" title="Aucun fournisseur enregistré ne correspond avec certitude à ce nom — délai, sécurité et couverture par défaut tant qu'il n'est pas rapproché sur /admin/fournisseurs">
+                  ⚠ fournisseur non identifié
+                </span>
+              )}
+            </h2>
             <p class="supplier-stats">
               <span data-role="supplier-cartons">{g.cartons} carton{g.cartons === 1 ? '' : 's'}</span>
               · <span data-role="supplier-cost">
@@ -817,6 +867,7 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
         block.className = 'supplier-block';
         block.dataset.role = 'supplier-block';
         block.dataset.supplier = supplierName;
+        block.dataset.supplierId = row.dataset.supplierId ?? '';
         block.innerHTML = `
           <div class="supplier-head">
             <div class="supplier-head-main">
@@ -916,6 +967,7 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
       const btn = e.currentTarget as HTMLButtonElement;
       if (btn.disabled) return; // filet en plus de la désactivation synchrone ci-dessous
       const supplierName = block.dataset.supplier ?? '';
+      const supplierId = block.dataset.supplierId || null;
       const visibleRows = Array.from(block.querySelectorAll<HTMLElement>('[data-role="product-row"]')).filter(r => !r.hidden);
       const items = visibleRows.map(row => ({
         product_id: row.dataset.id ?? '',
@@ -930,7 +982,7 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
         const res = await fetch('/api/admin/commande-fournisseur/marquer-commande', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ supplier_name: supplierName, items, idempotency_key: btn.dataset.idempotencyKey }),
+          body: JSON.stringify({ supplier_name: supplierName, supplier_id: supplierId, items, idempotency_key: btn.dataset.idempotencyKey }),
         });
         if (res.ok) {
           btn.textContent = '✓ Commande enregistrée';
@@ -1135,7 +1187,18 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
   border-bottom: 1px solid var(--color-border);
   flex-wrap: wrap;
 }
-.supplier-name { font-size: var(--text-lg); font-weight: 700; color: var(--color-ink); }
+.supplier-name { font-size: var(--text-lg); font-weight: 700; color: var(--color-ink); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.supplier-name-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  border: 1px solid oklch(0.72 0.14 55);
+  color: oklch(0.34 0.14 45);
+  background: oklch(0.93 0.09 60);
+  white-space: nowrap;
+}
 .supplier-stats { margin: 2px 0 0; font-size: var(--text-sm); color: var(--color-muted); font-variant-numeric: tabular-nums; }
 .supplier-actions { display: flex; gap: var(--space-2); }
 

@@ -2,6 +2,7 @@ import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
 import { logAdminAction } from '../../../../../lib/audit';
 import { isAdmin } from '../../../../../lib/roles';
+import { matchSupplierName } from '../../../../../lib/constants';
 
 export const POST: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -54,12 +55,34 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
   }
   const stockApplied = stockAppliedRaw === 'oui';
 
+  // Le texte fournisseur n'est re-rapproché QUE s'il a réellement changé.
+  // Sans cette garde, modifier une quantité sur une réception déjà liée
+  // (rattachement automatique à la migration, ou lien manuel posé sur
+  // /admin/fournisseurs pour un nom resté ambigu/inconnu) recalculerait
+  // matchSupplierName sur le même texte à chaque sauvegarde — et l'écraserait
+  // à NULL dès que ce texte ne correspond plus mot pour mot au nom ACTUEL du
+  // fournisseur (renommé depuis, ou lien posé manuellement sur un texte qui
+  // ne matchait justement pas). Le lien déjà établi doit survivre à un
+  // renommage et à toute édition qui ne touche pas au champ fournisseur.
+  const { data: currentReception } = await supabaseAdmin
+    .from('stock_receptions')
+    .select('supplier_name, supplier_id')
+    .eq('id', id)
+    .single();
+
+  let supplierIdToStore: string | null = currentReception?.supplier_id ?? null;
+  if (!currentReception || currentReception.supplier_name !== supplierName) {
+    const { data: suppliersForMatch } = await supabaseAdmin.from('suppliers').select('id, name');
+    supplierIdToStore = matchSupplierName(supplierName, suppliersForMatch ?? []).supplierId;
+  }
+
   // Atomic RPC: reverses previously-applied stock, replaces items, updates
   // the header, recalculates PUMP for old ∪ new products and applies the new
   // stock — all in one transaction. Raises if the reception doesn't exist.
   const { error: rpcErr } = await supabaseAdmin.rpc('reception_update', {
     p_reception_id:  id,
     p_supplier_name: supplierName,
+    p_supplier_id:   supplierIdToStore,
     p_received_at:   receivedAt,
     p_notes:         notes,
     p_stock_applied: stockApplied,

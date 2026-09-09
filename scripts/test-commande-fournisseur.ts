@@ -10,6 +10,7 @@ import {
   computeReorderQtyWithBridge,
   applyMoqAndMultiple, engagementNonCouvert, projectStock, computeAdjustedVitesse,
   resolveCouvertureCible, COUVERTURE_CIBLE_DEFAUT_JOURS,
+  normalizeSupplierName, matchSupplierName,
   addDays,
   type ArrivalEvent,
 } from '../src/lib/constants.ts';
@@ -299,6 +300,58 @@ console.log('\nDeux fournisseurs (30 j et 60 j) utilisés simultanément, y comp
   assert(qtyA2 === 85, `fournisseur A (30 j) après coefficient 150 % → 85 cartons (obtenu: ${qtyA2})`, 'vente 3/j × 35 − 20 = 85');
   assert(qtyB2 === 175, `fournisseur B (60 j) après coefficient 150 % → 175 cartons (obtenu: ${qtyB2})`, 'vente 3/j × 65 − 20 = 175');
   assert(qtyA2 !== qtyB2 && qtyA1 !== qtyA2 && qtyB1 !== qtyB2, 'le coefficient change les deux quantités sans faire converger A et B');
+}
+
+// ── Rapprochement fournisseur : identifiant stable, sans fusion automatique ──
+console.log('\nRapprochement fournisseur — normalizeSupplierName / matchSupplierName');
+{
+  assert(normalizeSupplierName('  Chane-Hive ') === normalizeSupplierName('CHANE-HIVE'),
+    'casse et espaces ignorés (Chane-Hive vs CHANE-HIVE)');
+  assert(normalizeSupplierName('SOLO   IMPORT') === normalizeSupplierName('Solo Import'),
+    'espaces multiples réduits à un seul, casse ignorée');
+  assert(normalizeSupplierName('ECO OI') !== normalizeSupplierName('ECO-OI'),
+    'la ponctuation (tiret) reste distinctive — jamais confondue avec un espace');
+
+  const suppliers = [
+    { id: 'sup-1', name: 'Chane-Hive' },
+    { id: 'sup-2', name: 'SDR' },
+    { id: 'sup-3', name: 'ECO OI' },
+  ];
+
+  const exact = matchSupplierName('SDR', suppliers);
+  assert(exact.status === 'matched' && exact.supplierId === 'sup-2', 'correspondance exacte → matched', JSON.stringify(exact));
+
+  const caseVariant = matchSupplierName('CHANE-HIVE', suppliers);
+  assert(caseVariant.status === 'matched' && caseVariant.supplierId === 'sup-1',
+    'variante de casse → matched sur le même fournisseur (bug réel corrigé)', JSON.stringify(caseVariant));
+
+  const spaceVariant = matchSupplierName('  sdr  ', suppliers);
+  assert(spaceVariant.status === 'matched' && spaceVariant.supplierId === 'sup-2',
+    'espaces en trop + casse → matched', JSON.stringify(spaceVariant));
+
+  const hyphenVariant = matchSupplierName('ECO-OI', suppliers); // vs "ECO OI" en base
+  assert(hyphenVariant.status === 'unmatched',
+    'tiret vs espace → jamais fusionné automatiquement (unmatched, pas matched)', JSON.stringify(hyphenVariant));
+
+  const unknown = matchSupplierName('SAP', suppliers);
+  assert(unknown.status === 'unmatched' && unknown.supplierId === null, 'aucun candidat → unmatched', JSON.stringify(unknown));
+
+  const empty = matchSupplierName('   ', suppliers);
+  assert(empty.status === 'unmatched', 'texte vide → unmatched, jamais matched par accident', JSON.stringify(empty));
+
+  const nullish = matchSupplierName(null, suppliers);
+  assert(nullish.status === 'unmatched', 'null → unmatched sans lever d’exception', JSON.stringify(nullish));
+
+  // Deux fournisseurs qui ne diffèrent que par la casse/les espaces (anomalie
+  // de données) : aucun des deux n'est choisi au hasard.
+  const ambiguousSuppliers = [
+    { id: 'sup-a', name: 'Big Brand' },
+    { id: 'sup-b', name: 'BIG BRAND' },
+  ];
+  const ambiguous = matchSupplierName('big brand', ambiguousSuppliers);
+  assert(ambiguous.status === 'ambiguous' && ambiguous.supplierId === null,
+    'deux fournisseurs partageant la même clé normalisée → ambiguous, aucun id retenu', JSON.stringify(ambiguous));
+  assert(ambiguous.candidateIds.length === 2, 'les deux candidats sont rapportés pour arbitrage manuel', JSON.stringify(ambiguous));
 }
 
 console.log(`\n${pass} succès, ${fail} échec${fail === 1 ? '' : 's'}.`);

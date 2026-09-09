@@ -6,7 +6,7 @@ import { logAdminAction } from '../../lib/audit';
 import ShipRoute from '../../components/admin/ShipRoute.astro';
 import {
   SHIPMENT_STATUSES, SHIPMENT_STATUS_LABEL, SHIPMENT_ACTIVE_STATUSES,
-  computeShipmentProgress, allocateCargoSlots, type ShipmentStatus,
+  computeShipmentProgress, allocateCargoSlots, matchSupplierName, type ShipmentStatus,
 } from '../../lib/constants';
 import { formatDateReunion, todayReunionISO } from '../../lib/datetime';
 import { isAdmin } from '../../lib/roles';
@@ -32,9 +32,15 @@ if (Astro.request.method === 'POST') {
 
     if (!supplierName) return Astro.redirect('/admin/transit?err=fournisseur_requis');
 
+    // Identifiant fournisseur stable — voir matchSupplierName. Un texte
+    // ambigu ou inconnu n'empêche pas l'enregistrement de l'expédition,
+    // mais reste sans supplier_id, signalé sur /admin/fournisseurs.
+    const { data: suppliersForMatch } = await supabaseAdmin.from('suppliers').select('id, name');
+    const supplierMatch = matchSupplierName(supplierName, suppliersForMatch ?? []);
+
     const { data: created, error: insErr } = await supabaseAdmin
       .from('shipments')
-      .insert({ supplier_name: supplierName, reference, departure_date: departure, eta, status, notes })
+      .insert({ supplier_name: supplierName, supplier_id: supplierMatch.supplierId, reference, departure_date: departure, eta, status, notes })
       .select('id')
       .single();
 

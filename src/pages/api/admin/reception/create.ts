@@ -3,6 +3,7 @@ import { createAuthClient, supabaseAdmin } from '../../../../lib/supabase';
 import { logAdminAction } from '../../../../lib/audit';
 import { todayReunionISO } from '../../../../lib/datetime';
 import { isAdmin } from '../../../../lib/roles';
+import { matchSupplierName } from '../../../../lib/constants';
 
 export const POST: APIRoute = async ({ request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -47,10 +48,19 @@ export const POST: APIRoute = async ({ request, cookies }) => {
   const todayStr    = todayReunionISO();
   const stockApplied = receivedAt >= todayStr; // today/future → also update stock
 
+  // Identifiant fournisseur stable : résolu ici (casse/espaces normalisés),
+  // jamais deviné au-delà d'une correspondance certaine — voir
+  // matchSupplierName. Un texte ambigu ou inconnu reste supplier_id NULL et
+  // remonte comme "à rapprocher" sur /admin/fournisseurs, sans bloquer la
+  // réception (le texte saisi reste la trace, snapshot).
+  const { data: suppliersForMatch } = await supabaseAdmin.from('suppliers').select('id, name');
+  const supplierMatch = matchSupplierName(supplierName, suppliersForMatch ?? []);
+
   // Atomic RPC: header + items + PUMP recalc + stock increment in one
   // transaction — a mid-way failure rolls everything back.
   const { data: receptionId, error: rpcErr } = await supabaseAdmin.rpc('reception_create', {
     p_supplier_name: supplierName,
+    p_supplier_id:   supplierMatch.supplierId,
     p_received_at:   receivedAt,
     p_notes:         notes,
     p_stock_applied: stockApplied,

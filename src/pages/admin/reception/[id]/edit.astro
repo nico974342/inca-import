@@ -21,6 +21,9 @@ const { data: products } = await supabaseAdmin
   .select('id, name, sku, stock_quantity, prix_achat_moyen_ht')
   .order('name');
 
+const { data: supplierRows } = await supabaseAdmin.from('suppliers').select('name').order('name');
+const supplierNames = (supplierRows ?? []).map(s => s.name);
+
 const existingItems = ((reception as any).stock_reception_items ?? []).map((it: any) => ({
   product_id:   it.product_id,
   quantity:     it.quantity,
@@ -41,8 +44,9 @@ const existingItems = ((reception as any).stock_reception_items ?? []).map((it: 
       <div class="form-grid">
         <div class="field">
           <label for="supplier_name" class="label">Fournisseur <span class="required">*</span></label>
-          <input type="text" id="supplier_name" name="supplier_name" required class="input"
+          <input type="text" id="supplier_name" name="supplier_name" required class="input" list="supplierList"
             value={(reception as any).supplier_name} autocomplete="off" />
+          <datalist id="supplierList">{supplierNames.map(n => <option value={n}></option>)}</datalist>
         </div>
         <div class="field">
           <label for="received_at" class="label">Date de réception <span class="required">*</span></label>

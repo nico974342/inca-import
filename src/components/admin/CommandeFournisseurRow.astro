@@ -38,6 +38,8 @@ export interface Props {
     joursSecurite: number;
     couverture: { jours: number; source: string };
     couvertureFournisseurJours: number | null;
+    supplierId: string | null;
+    supplierMatchStatus: 'matched' | 'ambiguous' | 'unmatched' | 'none';
     trigger: { primary: string; margeInsuffisante: boolean; joursAvantCommande: number | null; dateCommandeConseillee: Date | null };
     manqueEngage: number;
     confiance: string;
@@ -108,6 +110,7 @@ const arrivalsJson = JSON.stringify(p.arrivals.map((a, i) => ({
   data-delai-jours={p.delai.jours}
   data-securite-jours={p.joursSecurite}
   data-couverture-fournisseur={p.couvertureFournisseurJours ?? ''}
+  data-supplier-id={p.supplierId ?? ''}
   data-stock={p.stockDisponible}
   data-has-sales={p.hasSales ? '1' : '0'}
   data-transit-qty={p.transitQty}
@@ -161,8 +164,18 @@ const arrivalsJson = JSON.stringify(p.arrivals.map((a, i) => ({
     <span class="pr-cost" data-role="cost-text" title="PUMP historique — peut différer du prix du prochain achat">{cost == null ? '—' : formatPrice(cost)}</span>
   </div>
 
-  {(!p.reliable || p.manqueEngage > 0 || p.transitQty > 0 || p.aVerifierDelai || p.missingDelai || p.missingPump || p.minCartons != null || p.multipleCartons != null || p.reconstructionApplied || p.reconstructionUncertain) && (
+  {(!p.reliable || p.manqueEngage > 0 || p.transitQty > 0 || p.aVerifierDelai || p.missingDelai || p.missingPump || p.minCartons != null || p.multipleCartons != null || p.reconstructionApplied || p.reconstructionUncertain || showSupplierTag && (p.supplierMatchStatus === 'ambiguous' || p.supplierMatchStatus === 'unmatched')) && (
     <div class="pr-badges">
+      {showSupplierTag && p.supplierMatchStatus === 'ambiguous' && (
+        <span class="pr-badge pr-badge--warn" title="Plusieurs fournisseurs enregistrés correspondent à ce nom (casse/espaces) — à choisir manuellement sur /admin/fournisseurs, aucune fusion automatique">
+          ⚠ fournisseur ambigu — délai/sécurité/couverture par défaut
+        </span>
+      )}
+      {showSupplierTag && p.supplierMatchStatus === 'unmatched' && (
+        <span class="pr-badge pr-badge--warn" title="Aucun fournisseur enregistré ne correspond à ce nom — à créer ou rapprocher sur /admin/fournisseurs">
+          ⚠ fournisseur non identifié — délai/sécurité/couverture par défaut
+        </span>
+      )}
       {!p.reliable && (
         <span class="pr-badge pr-badge--warn" title="Calculée avec la même formule validée, mais sur des données moins sûres">
           ⚠ {p.unreliableReason} — quantité peu fiable

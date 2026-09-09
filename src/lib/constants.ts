@@ -509,6 +509,62 @@ export function delaiAVerifier(
   return produitDelaiJours != null && !produitOverride;
 }
 
+// ── Rapprochement fournisseur : identifiant stable (supplier_id) plutôt que
+//    correspondance texte. stock_receptions.supplier_name et
+//    shipments.supplier_name restent des saisies libres (BL papier, formulaire
+//    de transit) — cette fonction est le SEUL endroit qui décide si un texte
+//    désigne un fournisseur connu, pour que la réception, le transit et (plus
+//    tard) la lecture de factures résolvent tous le même texte de la même
+//    façon. ──
+
+export type SupplierMatchStatus = 'matched' | 'ambiguous' | 'unmatched';
+
+export type SupplierMatch = {
+  status: SupplierMatchStatus;
+  /** Non-null seulement quand status === 'matched'. */
+  supplierId: string | null;
+  /** Fournisseurs dont le nom normalisé correspond : vide si 'unmatched',
+   *  exactement 1 (== supplierId) si 'matched', ≥ 2 si 'ambiguous'. */
+  candidateIds: string[];
+};
+
+/** Clé de comparaison insensible à la casse et aux espaces — RIEN d'autre :
+ *  la ponctuation (tiret, apostrophe…) reste distinctive. "ECO OI" et
+ *  "ECO-OI" restent deux clés différentes, volontairement : les confondre
+ *  serait une supposition, pas une certitude — voir matchSupplierName. */
+export function normalizeSupplierName(raw: string): string {
+  return raw.trim().replace(/\s+/g, ' ').toLocaleUpperCase('fr-FR');
+}
+
+/** Résout un nom de fournisseur en texte libre vers un fournisseur connu,
+ *  sans jamais deviner au-delà d'une correspondance exacte après
+ *  normalisation (casse + espaces) :
+ *   - 'matched'    exactement un fournisseur correspond → son id, fiable.
+ *   - 'ambiguous'  plusieurs fournisseurs partagent la même clé normalisée
+ *                  (typiquement deux lignes suppliers qui ne diffèrent que
+ *                  par la casse/les espaces — une anomalie de données à
+ *                  corriger dans /admin/fournisseurs, pas un choix à faire
+ *                  ici) → aucun id retenu, à signaler.
+ *   - 'unmatched'  aucun fournisseur ne correspond (texte vide, faute de
+ *                  frappe au-delà casse/espaces, ou fournisseur pas encore
+ *                  créé) → aucun id retenu, à signaler.
+ *  Réutilisable tel quel pour la future lecture automatique de factures :
+ *  un nom de fournisseur extrait d'un PDF passe par la même fonction, avec
+ *  les mêmes garanties (jamais de fusion automatique sur une supposition). */
+export function matchSupplierName(
+  raw: string | null | undefined,
+  suppliers: { id: string; name: string }[],
+): SupplierMatch {
+  const key = normalizeSupplierName(raw ?? '');
+  if (!key) return { status: 'unmatched', supplierId: null, candidateIds: [] };
+  const candidates = suppliers.filter(s => normalizeSupplierName(s.name) === key);
+  if (candidates.length === 0) return { status: 'unmatched', supplierId: null, candidateIds: [] };
+  if (candidates.length > 1) {
+    return { status: 'ambiguous', supplierId: null, candidateIds: candidates.map(c => c.id) };
+  }
+  return { status: 'matched', supplierId: candidates[0].id, candidateIds: [candidates[0].id] };
+}
+
 /** Fallback target coverage when neither the supplier nor a global
  *  simulation supplies one. Distinct from DELAI_LIVRAISON_DEFAUT_JOURS: this
  *  is a stock objective (normal-sales days to hold after receipt), not a

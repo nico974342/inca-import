@@ -29,6 +29,7 @@ export const POST: APIRoute = async ({ request, cookies }) => {
 
   let body: {
     supplier_name?: string;
+    supplier_id?: string | null;
     items?: { product_id: string; quantity: number; unit_cost_ht: number | null }[];
     idempotency_key?: string;
   };
@@ -45,6 +46,12 @@ export const POST: APIRoute = async ({ request, cookies }) => {
   );
   const idempotencyKey = typeof body.idempotency_key === 'string' && body.idempotency_key.length > 0
     ? body.idempotency_key
+    : null;
+  // Identifiant fournisseur déjà résolu côté page (supplierByProduct /
+  // resolveProductSupplier) — ni deviné ni re-matché ici, juste relayé tel
+  // quel : cette route ne connaît pas les autres fournisseurs candidats.
+  const supplierId = typeof body.supplier_id === 'string' && body.supplier_id.length > 0
+    ? body.supplier_id
     : null;
 
   if (!supplierName || items.length === 0) {
@@ -71,6 +78,7 @@ export const POST: APIRoute = async ({ request, cookies }) => {
     .from('shipments')
     .insert({
       supplier_name: supplierName,
+      supplier_id: supplierId,
       status: 'commande',
       notes: 'Généré depuis /admin/commande-fournisseur',
       idempotency_key: idempotencyKey,

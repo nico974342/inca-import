@@ -11,6 +11,9 @@ const { data: products } = await supabaseAdmin
   .select('id, name, sku, stock_quantity, prix_achat_moyen_ht')
   .order('name');
 
+const { data: supplierRows } = await supabaseAdmin.from('suppliers').select('name').order('name');
+const supplierNames = (supplierRows ?? []).map(s => s.name);
+
 const today = todayReunionISO();
 const preselectProductId = Astro.url.searchParams.get('product') ?? null;
 
@@ -65,7 +68,9 @@ if (shipmentId) {
       <div class="form-grid">
         <div class="field">
           <label for="supplier_name" class="label">Fournisseur <span class="required">*</span></label>
-          <input type="text" id="supplier_name" name="supplier_name" required class="input" placeholder="Nom du fournisseur" autocomplete="off" value={prefill?.supplierName ?? ''} />
+          <input type="text" id="supplier_name" name="supplier_name" required class="input" placeholder="Nom du fournisseur" list="supplierList" autocomplete="off" value={prefill?.supplierName ?? ''} />
+          <datalist id="supplierList">{supplierNames.map(n => <option value={n}></option>)}</datalist>
+          <p class="field-hint field-hint--soft">Choisissez un fournisseur existant pour que délai/sécurité/couverture s'appliquent — un nom nouveau ou mal orthographié reste enregistré, mais sans réglages associés.</p>
         </div>
         <div class="field">
           <label for="received_at" class="label">Date de réception <span class="required">*</span></label>
@@ -385,6 +390,16 @@ if (PREFILL_ITEMS.length > 0) {
 }
 
 .required { color: oklch(0.55 0.18 25); }
+
+.field-hint--soft {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  background: none;
+  border: none;
+  padding: 0;
+}
 
 .field-hint {
   margin-top: var(--space-1);

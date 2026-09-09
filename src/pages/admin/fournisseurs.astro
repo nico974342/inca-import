@@ -2,7 +2,7 @@
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { sanitizeText } from '../../lib/sanitize';
-import { DELAI_LIVRAISON_DEFAUT_JOURS, COUVERTURE_CIBLE_DEFAUT_JOURS } from '../../lib/constants';
+import { DELAI_LIVRAISON_DEFAUT_JOURS, COUVERTURE_CIBLE_DEFAUT_JOURS, matchSupplierName } from '../../lib/constants';
 import { isAdmin } from '../../lib/roles';
 
 if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
@@ -96,6 +96,21 @@ if (Astro.request.method === 'POST') {
       const { error } = await supabaseAdmin.from('suppliers').update(update).eq('id', id);
       if (error) return Astro.redirect('/admin/fournisseurs?err=erreur');
     }
+  } else if (action === 'link_supplier_name') {
+    // Rapprochement manuel et explicite : jamais automatique (voir
+    // matchSupplierName) — l'admin choisit lui-même le fournisseur pour un
+    // texte ambigu ou inconnu. Ne touche que les lignes dont supplier_id est
+    // encore NULL, avec ce texte exact — un texte déjà lié à un autre
+    // fournisseur n'est jamais réécrit ici.
+    const rawName = (data.get('raw_name') as string ?? '').trim();
+    const targetSupplierId = (data.get('supplier_id') as string ?? '').trim();
+    if (rawName && targetSupplierId) {
+      await supabaseAdmin.from('stock_receptions').update({ supplier_id: targetSupplierId })
+        .eq('supplier_name', rawName).is('supplier_id', null);
+      await supabaseAdmin.from('shipments').update({ supplier_id: targetSupplierId })
+        .eq('supplier_name', rawName).is('supplier_id', null);
+    }
+    return Astro.redirect('/admin/fournisseurs?ok=rapproche');
   }
   return Astro.redirect('/admin/fournisseurs?ok=1');
 }
@@ -118,19 +133,63 @@ let loadErr: { code?: string } | null = null;
 }
 
 
-// Products per supplier, via the same last-reception inference the simulator
-// uses — so this page shows how much each delay actually drives.
+// ── Rapprochement fournisseur : identifiant stable d'abord, rapprochement en
+//    direct par nom normalisé sinon — même logique que /admin/commande-
+//    fournisseur (voir matchSupplierName). Alimente à la fois le nombre de
+//    produits par fournisseur ci-dessous et le panneau "à rapprocher". ──
+const probeReceptionSupplierId = await supabaseAdmin.from('stock_receptions').select('supplier_id').limit(1);
+const receptionSupplierIdMissing = probeReceptionSupplierId.error?.code === '42703';
+const receptionCols = receptionSupplierIdMissing
+  ? 'stock_receptions(supplier_name)'
+  : 'stock_receptions(supplier_name, supplier_id)';
+
 const { data: receptionRows } = await supabaseAdmin
   .from('stock_reception_items')
-  .select('product_id, created_at, stock_receptions(supplier_name)')
+  .select(`product_id, created_at, ${receptionCols}`)
   .order('created_at', { ascending: false });
 
-const supplierByProduct = new Map<string, string>();
+const suppliersForMatch = (suppliers ?? []).map((s: any) => ({ id: s.id, name: s.name }));
+const suppliersById = new Map((suppliers ?? []).map((s: any) => [s.id, s]));
+
+const supplierByProduct = new Map<string, string>(); // display name, for the product-count column
+const unresolvedCounts = new Map<string, { count: number; status: 'ambiguous' | 'unmatched' }>();
+
+function trackResolution(rawName: string | null | undefined, storedSupplierId: string | null | undefined) {
+  if (!rawName) return null;
+  if (storedSupplierId && suppliersById.has(storedSupplierId)) {
+    return suppliersById.get(storedSupplierId)!.name as string;
+  }
+  const m = matchSupplierName(rawName, suppliersForMatch);
+  if (m.status === 'matched') return suppliersById.get(m.supplierId!)!.name as string;
+  const cur = unresolvedCounts.get(rawName);
+  unresolvedCounts.set(rawName, { count: (cur?.count ?? 0) + 1, status: m.status });
+  return rawName;
+}
+
 for (const row of (receptionRows ?? [])) {
   if (!row.product_id || supplierByProduct.has(row.product_id)) continue;
-  const s = (row as any).stock_receptions?.supplier_name;
-  if (s) supplierByProduct.set(row.product_id, s);
+  const rec = (row as any).stock_receptions;
+  const resolvedName = trackResolution(rec?.supplier_name, receptionSupplierIdMissing ? null : rec?.supplier_id);
+  if (resolvedName) supplierByProduct.set(row.product_id, resolvedName);
 }
+
+// Les expéditions en transit (shipments) ne comptent pas de produits ici
+// (comptage produit = réceptions), mais leurs noms non rapprochés doivent
+// remonter dans le même panneau — sinon "Big Brand" resterait invisible tant
+// qu'aucune réception ne le porte.
+const probeShipmentSupplierId = await supabaseAdmin.from('shipments').select('supplier_id').limit(1);
+const shipmentSupplierIdMissing = probeShipmentSupplierId.error?.code === '42703';
+const { data: shipmentRows } = await supabaseAdmin
+  .from('shipments')
+  .select(shipmentSupplierIdMissing ? 'supplier_name' : 'supplier_name, supplier_id');
+for (const s of (shipmentRows ?? []) as any[]) {
+  trackResolution(s.supplier_name, shipmentSupplierIdMissing ? null : s.supplier_id);
+}
+
+const unresolvedNames = [...unresolvedCounts.entries()]
+  .map(([name, v]) => ({ name, ...v }))
+  .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'fr'));
+
 const productCountBySupplier = new Map<string, number>();
 for (const s of supplierByProduct.values()) {
   productCountBySupplier.set(s, (productCountBySupplier.get(s) ?? 0) + 1);
@@ -343,6 +402,40 @@ const tableMissing = loadErr?.code === 'PGRST205' || loadErr?.code === '42P01';
           </table>
         </div>
       )}
+
+      {unresolvedNames.length > 0 && (
+        <section class="reconcile-section">
+          <h2 class="reconcile-title">À rapprocher ({unresolvedNames.length})</h2>
+          <p class="reconcile-intro">
+            Ces noms, saisis sur une réception ou une expédition, ne correspondent avec certitude à aucun
+            fournisseur ci-dessus — jamais fusionnés automatiquement. Choisissez le bon fournisseur pour lier
+            les entrées existantes portant exactement ce texte, ou créez le fournisseur manquant ci-dessus
+            puis revenez ici.
+          </p>
+          <div class="reconcile-list">
+            {unresolvedNames.map(u => (
+              <div class="reconcile-row">
+                <div class="reconcile-name-wrap">
+                  <span class="reconcile-name">{u.name}</span>
+                  <span class={`reconcile-badge reconcile-badge--${u.status}`}>
+                    {u.status === 'ambiguous' ? 'plusieurs correspondances' : 'aucune correspondance'}
+                  </span>
+                  <span class="reconcile-count">{u.count} référence{u.count > 1 ? 's' : ''}</span>
+                </div>
+                <form method="post" class="reconcile-form">
+                  <input type="hidden" name="action" value="link_supplier_name" />
+                  <input type="hidden" name="raw_name" value={u.name} />
+                  <select name="supplier_id" class="reconcile-select" required>
+                    <option value="" disabled selected>— Lier à —</option>
+                    {(suppliers ?? []).map((s: any) => <option value={s.id}>{s.name}</option>)}
+                  </select>
+                  <button type="submit" class="btn btn-ghost">Lier</button>
+                </form>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </>
   )}
 </AdminLayout>
@@ -483,4 +576,49 @@ const tableMissing = loadErr?.code === 'PGRST205' || loadErr?.code === '42P01';
 }
 .empty-title { font-weight: 600; color: var(--color-ink); margin-bottom: var(--space-2); }
 .empty-body  { color: var(--color-muted); }
+
+.reconcile-section {
+  margin-top: var(--space-6);
+  padding-top: var(--space-5);
+  border-top: 1px dashed var(--color-border-strong);
+}
+.reconcile-title { font-size: var(--text-lg); font-weight: 700; color: var(--color-ink); margin: 0 0 4px; }
+.reconcile-intro { margin: 0 0 var(--space-4); font-size: var(--text-sm); color: var(--color-muted); max-width: 80ch; }
+.reconcile-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.reconcile-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: oklch(0.985 0.012 60);
+  border: 1px solid oklch(0.88 0.07 60);
+  border-radius: var(--radius-sm);
+}
+.reconcile-name-wrap { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.reconcile-name { font-weight: 600; color: var(--color-ink); font-family: var(--font-mono); font-size: var(--text-sm); }
+.reconcile-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.reconcile-badge--unmatched { color: oklch(0.42 0.14 60); background: oklch(0.95 0.06 60); }
+.reconcile-badge--ambiguous { color: oklch(0.46 0.18 25); background: oklch(0.96 0.04 25); }
+.reconcile-count { font-size: var(--text-xs); color: var(--color-muted); }
+.reconcile-form { display: flex; align-items: center; gap: var(--space-2); }
+.reconcile-select {
+  padding: 0.4rem 0.6rem;
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
 </style>
