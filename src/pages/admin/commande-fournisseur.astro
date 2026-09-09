@@ -1001,8 +1001,13 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
     if (t?.dataset?.role === 'qty-input') {
       const row = t.closest<HTMLElement>('[data-role="product-row"]')!;
       row.dataset.edited = '1';
-      qtyOf(row); // met à jour l'avertissement de saisie invalide
+      const qty = qtyOf(row); // met à jour l'avertissement de saisie invalide
       updateQtyPresentation(row);
+      // Le montant de LA LIGNE doit refléter la quantité tapée immédiatement,
+      // pas seulement les totaux — un prix absent reste "—", jamais 0.
+      const pump = pumpOf(row);
+      const costText = row.querySelector<HTMLElement>('[data-role="cost-text"]');
+      if (costText) costText.textContent = pump == null ? '—' : eur.format(pump * qty);
       applyVisibility();
       recalcTotals();
     }
