@@ -48,6 +48,9 @@ const vitesseVente = computeVitesseVente(soldQty, (product as any).created_at);
 const joursAvantRupture = computeJoursAvantRupture(product.stock_quantity, vitesseVente);
 const seuilReappro = (product as any).seuil_reappro as number | null;
 const delaiLivraisonJours = (product as any).delai_livraison_jours as number | null;
+const delaiLivraisonOverride = (product as any).delai_livraison_override === true;
+const commandeMinCartons = (product as any).commande_min_cartons as number | null;
+const commandeMultipleCartons = (product as any).commande_multiple_cartons as number | null;
 const suggestedReorderQty = computeSuggestedReorderQty(vitesseVente, delaiLivraisonJours, product.stock_quantity);
 const showSuggestion = isApproachingOrBelowSeuil(product.stock_quantity, seuilReappro, joursAvantRupture, delaiLivraisonJours);
 
@@ -73,6 +76,12 @@ if (Astro.request.method === 'POST') {
   const position       = data.get('position') ? parseInt(data.get('position') as string) : 0;
   const seuil_reappro         = data.get('seuil_reappro')         ? parseInt(data.get('seuil_reappro') as string, 10) : null;
   const delai_livraison_jours = data.get('delai_livraison_jours') ? parseInt(data.get('delai_livraison_jours') as string, 10) : null;
+  // La case n'est cochable QUE si une valeur est saisie : une exception sans
+  // délai n'a pas de sens, et ne doit jamais faire primer un "override" vide
+  // sur le fournisseur (resolveDelaiLivraison, constants.ts).
+  const delai_livraison_override = data.get('delai_livraison_override') === 'on' && delai_livraison_jours != null;
+  const commande_min_cartons      = data.get('commande_min_cartons')      ? parseInt(data.get('commande_min_cartons') as string, 10) : null;
+  const commande_multiple_cartons = data.get('commande_multiple_cartons') ? parseInt(data.get('commande_multiple_cartons') as string, 10) : null;
 
   if (!name || !slug || !category) {
     formError = 'Le nom, le slug et la catégorie sont requis.';
@@ -82,7 +91,10 @@ if (Astro.request.method === 'POST') {
     // écraser le stock avec une valeur de page potentiellement obsolète.
     const { error } = await supabaseAdmin
       .from('products')
-      .update({ name, slug, category, description, sku, price_ht, tva_rate, unit, units_per_carton, image_url, position, seuil_reappro, delai_livraison_jours })
+      .update({
+        name, slug, category, description, sku, price_ht, tva_rate, unit, units_per_carton, image_url, position,
+        seuil_reappro, delai_livraison_jours, delai_livraison_override, commande_min_cartons, commande_multiple_cartons,
+      })
       .eq('id', id);
 
     if (error) {
@@ -223,9 +235,32 @@ if (Astro.request.method === 'POST') {
             <p class="field-computed-hint">Le produit sera signalé « à réassortir » quand le stock atteint ce seuil ou passe en-dessous.</p>
           </div>
           <div class="field">
-            <label for="delai_livraison_jours">Délai de livraison fournisseur (jours)</label>
-            <input type="number" id="delai_livraison_jours" name="delai_livraison_jours" min="0" value={delaiLivraisonJours ?? 21} placeholder="21" />
-            <p class="field-computed-hint">Utilisé pour calculer la quantité suggérée à commander.</p>
+            <label for="delai_livraison_jours">Délai de livraison — exception pour ce produit (jours)</label>
+            <input type="number" id="delai_livraison_jours" name="delai_livraison_jours" min="0" value={delaiLivraisonJours ?? ''} placeholder="ex : 45" />
+            <label class="field-checkbox">
+              <input type="checkbox" name="delai_livraison_override" checked={delaiLivraisonOverride} />
+              Utiliser cette valeur au lieu du délai du fournisseur
+            </label>
+            <p class="field-computed-hint">
+              Temps entre la commande passée et la marchandise réellement disponible en entrepôt (pas seulement
+              le transport). Par défaut, /admin/commande-fournisseur utilise le délai du fournisseur — cette case
+              doit être cochée pour qu'une valeur saisie ici prenne le dessus.
+              {delaiLivraisonJours != null && !delaiLivraisonOverride && (
+                <strong class="field-warn"> Une valeur est enregistrée mais n'est pas utilisée (case décochée).</strong>
+              )}
+            </p>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <div class="field">
+            <label for="commande_min_cartons">Minimum de commande (cartons)</label>
+            <input type="number" id="commande_min_cartons" name="commande_min_cartons" min="1" value={commandeMinCartons ?? ''} placeholder="ex : 10" />
+          </div>
+          <div class="field">
+            <label for="commande_multiple_cartons">Multiple de commande (cartons)</label>
+            <input type="number" id="commande_multiple_cartons" name="commande_multiple_cartons" min="1" value={commandeMultipleCartons ?? ''} placeholder="ex : 5" />
+            <p class="field-computed-hint">La quantité suggérée sur /admin/commande-fournisseur est arrondie à ces contraintes quand elles sont renseignées.</p>
           </div>
         </div>
 
@@ -533,6 +568,18 @@ if (Astro.request.method === 'POST') {
   font-size: var(--text-xs);
   color: var(--color-muted);
 }
+
+.field-checkbox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-ink);
+  cursor: pointer;
+}
+
+.field-warn { color: var(--color-primary); font-weight: 600; }
 
 label {
   font-size: var(--text-sm);

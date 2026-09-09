@@ -248,6 +248,154 @@ export function computeVitesseVente(
   return qtyOverWindow / effectiveHistoryWeeks(sellableSince);
 }
 
+/** A movement that changed a product's stock level, for the retroactive
+ *  reconstruction below. `delta` is signed: a sale is negative, a reception
+ *  positive. Only these two sources are tracked in this application (no
+ *  stock ledger exists) — a manual stock correction made outside either path
+ *  is invisible here and can make the reconstruction drift from reality;
+ *  see reconstructSellableDays for how that residual risk is surfaced. */
+export type StockMovement = { date: Date; delta: number };
+
+/** Reconstructs, from today's stock level and the sale/reception events in
+ *  [windowStart, now], how many days of the window the product was actually
+ *  in stock — so a stockout inside the lookback window stops silently
+ *  dragging the sales velocity down (§4 point 1 of the known limitations:
+ *  there is no stock-history table, so this walks backward from the current
+ *  level instead of forward from a recorded one).
+ *
+ *  This is an ESTIMATE, not a ledger read — treat it accordingly (see
+ *  computeAdjustedVitesse for the trustworthiness check applied before it's
+ *  allowed to override the raw velocity, and the confidence rubric for how
+ *  it's surfaced to the admin).
+ *
+ *  Walks the events from most-recent to oldest, undoing each one to recover
+ *  the stock level that prevailed just before it — that level is what was on
+ *  hand for the whole period between it and the next (more recent) event.
+ *  Any period whose reconstructed level is ≤ 0 is a stockout and excluded
+ *  from `sellableDays`.
+ *
+ *  What the caller feeds as `movements`, and how faithful each source is to
+ *  the real physical date:
+ *   - Receptions: `stock_receptions.received_at` is the real physical
+ *     arrival date — precise.
+ *   - Sales: this app has no separate "goods left the warehouse" timestamp
+ *     (stock is decremented on the livrée transition, but that transition
+ *     isn't itself dated) — `orders.created_at` is used as the best
+ *     available proxy for when a sale reduced physical stock. For an order
+ *     that sits a few days between confirmation and delivery, the real
+ *     stockout could be slightly later than what this reconstruction
+ *     assumes.
+ *   - A manual stock_quantity correction (outside a sale or a reception) is
+ *     not represented in `movements` at all and will bias the
+ *     reconstruction from that point backward. There is no way to detect
+ *     this case from the data available. */
+export function reconstructSellableDays(
+  currentStock: number,
+  movements: StockMovement[],
+  windowStart: Date,
+  now: Date = new Date(),
+): { sellableDays: number; stockoutDetected: boolean } {
+  const totalDays = Math.max(0, (now.getTime() - windowStart.getTime()) / 86_400_000);
+  if (totalDays === 0) return { sellableDays: 0, stockoutDetected: false };
+
+  const sorted = [...movements]
+    .filter(m => m.date.getTime() >= windowStart.getTime() && m.date.getTime() <= now.getTime())
+    .sort((a, b) => b.date.getTime() - a.date.getTime()); // most recent first
+
+  let running = currentStock;
+  let cursor = now.getTime();
+  let sellableMs = 0;
+  let stockoutDetected = false;
+
+  for (const m of sorted) {
+    const periodMs = cursor - m.date.getTime();
+    if (running > 0) sellableMs += periodMs; else stockoutDetected = true;
+    running -= m.delta; // undo the movement to get the level just before it
+    cursor = m.date.getTime();
+  }
+  // Remaining span from the oldest event back to windowStart, at the level
+  // that prevailed before the oldest event in the window.
+  const tailMs = cursor - windowStart.getTime();
+  if (tailMs > 0) {
+    if (running > 0) sellableMs += tailMs; else stockoutDetected = true;
+  }
+
+  return { sellableDays: sellableMs / 86_400_000, stockoutDetected };
+}
+
+export type VitesseAjustee = {
+  vitesse: number;
+  /** True when the reconstruction was judged trustworthy enough to replace
+   *  the raw (uncorrected) velocity. */
+  reconstructionApplied: boolean;
+  /** True when a stockout WAS detected but the correction it implied was
+   *  judged too extreme to trust (more likely a data gap — an untracked
+   *  manual stock movement — than a genuine near-permanent stockout) — the
+   *  raw velocity is used instead, and this flag tells the caller to
+   *  surface that as a limitation rather than silently downgrading to
+   *  "moyenne" as if the correction had simply been mild. */
+  reconstructionUncertain: boolean;
+};
+
+/** Decides whether reconstructSellableDays' correction is safe to apply, and
+ *  applies it — or falls back to the raw velocity, prudently, when it isn't.
+ *
+ *  Two guards, either of which discards the correction:
+ *   1. The reconstruction claims the product was sellable for less than 20%
+ *      of the window. That's a more likely sign of a missing/untracked
+ *      movement biasing the walk (see reconstructSellableDays' blind spot)
+ *      than of a product genuinely out of stock ~80%+ of the time while
+ *      still accumulating the sales it did.
+ *   2. The correction would multiply the raw velocity by more than 3× — a
+ *      swing that large is exactly the "correction excessive" a data gap
+ *      would produce, and should be looked at by a human, not applied
+ *      silently.
+ *  When either guard fires, the raw velocity — the one directly backed by
+ *  qtySold ÷ calendar weeks, no reconstruction involved — is used instead.
+ *  Never raises confidence: computeConfianceVentes caps at "moyenne" when a
+ *  stockout was detected at all, and "faible" when the correction itself
+ *  was discarded as untrustworthy. */
+export function computeAdjustedVitesse(
+  qtySold: number,
+  rawWeeks: number,
+  sellableDays: number,
+  stockoutDetected: boolean,
+): VitesseAjustee {
+  const vitesseBrute = rawWeeks > 0 ? qtySold / rawWeeks : 0;
+  if (!stockoutDetected) {
+    return { vitesse: vitesseBrute, reconstructionApplied: false, reconstructionUncertain: false };
+  }
+
+  const MIN_SELLABLE_FRACTION = 0.2;
+  const MAX_CORRECTION_RATIO = 3;
+  const windowDays = rawWeeks * 7;
+  const sellableFraction = windowDays > 0 ? sellableDays / windowDays : 0;
+  const sellableWeeks = sellableDays / 7;
+  const vitesseCorrigee = sellableWeeks >= 0.5 ? qtySold / sellableWeeks : null;
+
+  const trustworthy =
+    vitesseCorrigee != null &&
+    sellableFraction >= MIN_SELLABLE_FRACTION &&
+    (vitesseBrute <= 0 || vitesseCorrigee / vitesseBrute <= MAX_CORRECTION_RATIO);
+
+  if (trustworthy) {
+    return { vitesse: vitesseCorrigee!, reconstructionApplied: true, reconstructionUncertain: false };
+  }
+  return { vitesse: vitesseBrute, reconstructionApplied: false, reconstructionUncertain: true };
+}
+
+/** Flags a single order as disproportionate against the rest of the window —
+ *  a large exceptional order shouldn't silently pass as the new normal pace.
+ *  Purely a confidence signal (see computeConfianceVentes): the quantity
+ *  still counts in full, nothing is trimmed or excluded automatically. */
+export function detecteVenteExceptionnelle(orderQuantities: number[]): boolean {
+  if (orderQuantities.length < 2) return false;
+  const total = orderQuantities.reduce((s, q) => s + q, 0);
+  if (total <= 0) return false;
+  const max = Math.max(...orderQuantities);
+  return max / total > 0.6;
+}
+
 /** Estimated days of stock remaining at the current sales pace. Null when
  *  there's no sales velocity to extrapolate from (can't estimate a runway
  *  for a product that hasn't sold in the window — distinct from 0, which
@@ -309,7 +457,7 @@ export function computeCouvertureWeeks(
  *  far more costly than slightly over-ordering on a local supplier. */
 export const DELAI_LIVRAISON_DEFAUT_JOURS = 30;
 
-export type DelaiSource = 'produit' | 'fournisseur' | 'defaut';
+export type DelaiSource = 'produit_override' | 'fournisseur' | 'defaut';
 
 export type DelaiResolu = {
   jours: number;
@@ -319,23 +467,46 @@ export type DelaiResolu = {
 };
 
 /** Transit time for a product, most specific source first:
- *   1. the product's own override (a deliberate per-product exception)
+ *   1. the product's own override — ONLY when explicitly activated
+ *      (`delai_livraison_override = true`). A stored value with the flag
+ *      off is never used, however plausible it looks: most of the catalogue
+ *      was pre-filled with the old schema DEFAULT of 21 j and never
+ *      confirmed as a real exception (see delaiAVerifier).
  *   2. its supplier's delay, from the most recent reception
  *   3. DELAI_LIVRAISON_DEFAUT_JOURS
  *  The source travels with the number so the UI can flag lines still resting
- *  on the default, which are the ones needing a real delay entered. */
+ *  on the default, which are the ones needing a real delay entered.
+ *
+ *  This delay is meant to represent door-to-warehouse time — order placed to
+ *  goods available for sale — not merely transit or port arrival. That is a
+ *  labelling/data-entry discipline (see /admin/fournisseurs), not something
+ *  this function can enforce numerically. */
 export function resolveDelaiLivraison(
   produitDelaiJours: number | null | undefined,
+  produitOverride: boolean | null | undefined,
   fournisseurNom: string | null | undefined,
   fournisseurDelaiJours: number | null | undefined,
 ): DelaiResolu {
-  if (produitDelaiJours != null && produitDelaiJours >= 0) {
-    return { jours: produitDelaiJours, source: 'produit', fournisseur: null };
+  if (produitOverride && produitDelaiJours != null && produitDelaiJours >= 0) {
+    return { jours: produitDelaiJours, source: 'produit_override', fournisseur: null };
   }
   if (fournisseurDelaiJours != null && fournisseurDelaiJours >= 0) {
     return { jours: fournisseurDelaiJours, source: 'fournisseur', fournisseur: fournisseurNom ?? null };
   }
   return { jours: DELAI_LIVRAISON_DEFAUT_JOURS, source: 'defaut', fournisseur: null };
+}
+
+/** True when a product carries a stored `delai_livraison_jours` that is NOT
+ *  an active, confirmed override — most commonly a leftover from the old
+ *  schema DEFAULT (21) that was never actively confirmed or cleared. Never
+ *  fed into a calculation; purely a data-quality flag so these can be
+ *  reviewed and either confirmed (flip the override on) or cleared, instead
+ *  of being silently erased or silently trusted. */
+export function delaiAVerifier(
+  produitDelaiJours: number | null | undefined,
+  produitOverride: boolean | null | undefined,
+): boolean {
+  return produitDelaiJours != null && !produitOverride;
 }
 
 export type CycleSource = 'fournisseur' | 'delai';
@@ -480,8 +651,315 @@ export function estimatedArrivalWithMargin(
   return addDays(estimatedArrivalDate(delaiJours, from), joursSecurite ?? 0);
 }
 
+// ── Décision de réapprovisionnement v2 ──────────────────────────────────
+// Sépare explicitement DEUX questions distinctes que l'ancien
+// computeOrderQty confondait dans une seule formule :
+//   1. QUAND commander (classifyReorder, ci-dessous) ;
+//   2. COMBIEN commander, une fois la question 1 tranchée
+//      (stockAtReceipt + computeReorderQtyForTarget).
+// L'ancien moteur (computeOrderQty/computeWeeksCovered/ModeCommande/
+// resolveCycleCommande, plus haut) reste en place mais n'est plus appelé par
+// /admin/commande-fournisseur — personne d'autre ne l'utilisait (vérifié),
+// il n'est donc pas supprimé, seulement retiré du chemin appelé ici.
+
+/** Une entrée déjà commandée chez le fournisseur, encore active (shipments
+ *  au statut ≠ receptionne/annule). Un arrivage = UNE ligne de cette liste :
+ *  jamais fusionné avec un autre, jamais rattaché à la date d'un autre —
+ *  voir projectStock, qui applique chacun à sa propre date. */
+export type ArrivalEvent = {
+  shipmentId: string;
+  /** Quantité restant à recevoir sur CET arrivage (déjà nette d'une
+   *  éventuelle réception partielle). */
+  quantity: number;
+  /** null = date inconnue. Un arrivage sans date n'est JAMAIS supposé
+   *  arriver à temps : projectStock l'ignore pour le calendrier (mais sa
+   *  quantité reste visible ailleurs, pour ne pas la faire disparaître). */
+  eta: Date | null;
+  status: string;
+};
+
+function sameCalendarDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+/** Projette le stock disponible jour par jour à partir d'aujourd'hui,
+ *  jusqu'à `horizonJours`, en appliquant chaque arrivage à SA PROPRE date
+ *  (jamais regroupé sur le premier — chaque ArrivalEvent est traité
+ *  séparément). Un arrivage à date inconnue n'entre pas dans la projection :
+ *  l'ignorer silencieusement en le comptant "à temps" serait exactement le
+ *  biais que ce moteur doit éviter.
+ *
+ *  Convention : l'arrivage du jour J est crédité avant que la vente du jour
+ *  J ne soit retirée (le jour même de réception compte comme disponible),
+ *  et aucune vente n'est retirée au jour 0 (aujourd'hui n'est pas encore
+ *  écoulé au moment du calcul). */
+export function projectStock(
+  disponible: number,
+  venteQuotidienne: number,
+  arrivals: ArrivalEvent[],
+  horizonJours: number,
+  from: Date = new Date(),
+): { date: Date; stock: number }[] {
+  const dated = arrivals
+    .filter((a): a is ArrivalEvent & { eta: Date } => a.eta != null && a.quantity > 0)
+    .sort((a, b) => a.eta.getTime() - b.eta.getTime());
+
+  const points: { date: Date; stock: number }[] = [];
+  let stock = disponible;
+  let idx = 0;
+  for (let d = 0; d <= horizonJours; d++) {
+    const date = addDays(from, d);
+    while (idx < dated.length && sameCalendarDay(dated[idx].eta, date)) {
+      stock += dated[idx].quantity;
+      idx++;
+    }
+    if (d > 0) stock -= venteQuotidienne;
+    points.push({ date, stock });
+  }
+  return points;
+}
+
+export type ReorderPrimary =
+  | 'a_prevoir'
+  | 'commander_maintenant'
+  | 'rupture_avant_commande_normale'
+  | 'couvert_par_arrivage'
+  | 'donnees_insuffisantes';
+
+export type ReorderTrigger = {
+  primary: ReorderPrimary;
+  /** Vrai dès que la marge restante (après un délai normal) est inférieure
+   *  aux jours de sécurité voulus — se combine avec `primary`, ce n'est pas
+   *  un état exclusif : un produit peut être "commander_maintenant" ET
+   *  margeInsuffisante à la fois. */
+  margeInsuffisante: boolean;
+  /** Jours avant le déclenchement conseillé. Négatif = déjà en retard sur
+   *  cette date. Null si non calculable (pas de vitesse, ou couvert par un
+   *  arrivage sur tout l'horizon testé). */
+  joursAvantCommande: number | null;
+  dateCommandeConseillee: Date | null;
+};
+
+/** Point d'entrée unique pour la question "quand commander ?". Sans
+ *  arrivage (arrivals = []), se réduit exactement à la première
+ *  approximation : jours avant commande = disponible / vente_quotidienne −
+ *  délai − sécurité. Avec des arrivages, la même logique tourne sur la
+ *  projection datée plutôt que sur une simple division, pour qu'un arrivage
+ *  tardif ne masque jamais une rupture antérieure : le test de rupture
+ *  balaie la projection dans l'ordre chronologique et s'arrête à la
+ *  PREMIÈRE journée à risque, indépendamment de ce qui arrive ensuite.
+ *
+ *  venteQuotidienne doit déjà inclure le coefficient saisonnier — ce
+ *  paramètre n'a pas d'avis sur la saisonnalité, il prend le rythme qu'on
+ *  lui donne. */
+export function classifyReorder(
+  disponible: number,
+  venteQuotidienne: number | null | undefined,
+  delaiJours: number,
+  joursSecurite: number,
+  arrivals: ArrivalEvent[] = [],
+  horizonJours: number = 365,
+  from: Date = new Date(),
+): ReorderTrigger {
+  if (!venteQuotidienne || venteQuotidienne <= 0) {
+    return { primary: 'donnees_insuffisantes', margeInsuffisante: false, joursAvantCommande: null, dateCommandeConseillee: null };
+  }
+
+  const points = projectStock(disponible, venteQuotidienne, arrivals, horizonJours, from);
+  const dayIndex = (t: number) => Math.round((t - from.getTime()) / 86_400_000);
+
+  // 1. Rupture RÉELLE (stock ≤ 0, arrivages déjà en cours compris, aucune
+  //    nouvelle commande) — le cas le plus grave, vérifié en premier et
+  //    indépendamment de tout le reste : un arrivage plus tardif ne doit
+  //    jamais le masquer.
+  const rupture = points.find(p => p.stock <= 0);
+  if (rupture) {
+    const ruptureDay = dayIndex(rupture.date.getTime());
+    if (ruptureDay <= delaiJours) {
+      // Même une commande passée aujourd'hui arriverait après la rupture.
+      return {
+        primary: 'rupture_avant_commande_normale',
+        margeInsuffisante: true,
+        joursAvantCommande: ruptureDay - delaiJours - joursSecurite,
+        dateCommandeConseillee: from,
+      };
+    }
+  }
+
+  // 2. Réserve de sécurité : premier jour où le stock PROJETÉ (arrivages
+  //    compris) descend AU NIVEAU de la réserve voulue (vente × sécurité),
+  //    pas seulement le jour de rupture à zéro. Un arrivage qui repousse la
+  //    rupture très loin (J+60) peut très bien laisser la réserve elle-même
+  //    entamée bien plus tôt — un creux entre aujourd'hui et un arrivage,
+  //    ou entre deux arrivages successifs. Chercher le seuil de RUPTURE
+  //    plutôt que le seuil de SÉCURITÉ manquerait ce creux ; chercher
+  //    naïvement "le premier jour où le stock d'aujourd'hui est déjà sous
+  //    le seuil" (sans être passé par la rupture) se déclencherait à tort
+  //    dès J+0 si le stock du jour est mécaniquement bas juste avant un
+  //    arrivage proche — d'où le calcul en deux temps ci-dessus puis ici,
+  //    sur la MÊME projection, plutôt qu'une seule comparaison ponctuelle.
+  const securiteCartons = venteQuotidienne * joursSecurite;
+  const seuil = points.find(p => p.stock <= securiteCartons);
+  if (!seuil) {
+    // Ni rupture ni entame de la réserve dans l'horizon testé : couvert.
+    return { primary: 'couvert_par_arrivage', margeInsuffisante: false, joursAvantCommande: null, dateCommandeConseillee: null };
+  }
+
+  // Jours avant commande = jour où la réserve serait entamée − délai. Se
+  // réduit exactement à la formule simple quand il n'y a pas d'arrivage
+  // (seuilDay = (disponible − sécuritéCartons) / vente, donnant R − S,
+  // moins le délai = R − D − S).
+  const seuilDay = dayIndex(seuil.date.getTime());
+  const jac = seuilDay - delaiJours;
+  const primary: ReorderPrimary = jac <= 0 ? 'commander_maintenant' : 'a_prevoir';
+  return {
+    // Dès que le déclenchement lui-même est "maintenant", c'est précisément
+    // parce que la réserve de sécurité est déjà entamée (ou en passe de
+    // l'être avant qu'une commande normale n'arrive) — les deux ne sont plus
+    // deux constats séparés dans ce modèle, margeInsuffisante qualifie
+    // simplement commander_maintenant pour l'affichage ("réserve de sécurité
+    // insuffisante", pas une rupture certaine).
+    primary,
+    margeInsuffisante: primary === 'commander_maintenant',
+    joursAvantCommande: jac,
+    dateCommandeConseillee: addDays(from, Math.max(0, jac)),
+  };
+}
+
+/** Stock disponible projeté au jour où une commande passée AUJOURD'HUI
+ *  serait livrée (aujourd'hui + délai), arrivages déjà en cours compris
+ *  s'ils atterrissent avant cette date. C'est le "stock prévu à la
+ *  réception" que la taille de commande doit viser, pas le disponible
+ *  d'aujourd'hui — sinon deux arrivages qui se suivent de près feraient
+ *  chacun commander comme si l'autre n'existait pas. */
+export function stockAtReceipt(
+  disponible: number,
+  venteQuotidienne: number,
+  delaiJours: number,
+  arrivals: ArrivalEvent[],
+  from: Date = new Date(),
+): number {
+  const points = projectStock(disponible, venteQuotidienne, arrivals, Math.max(0, Math.round(delaiJours)), from);
+  return points[points.length - 1]?.stock ?? disponible;
+}
+
+/** Cartons à commander pour que le stock, une fois reçu, couvre à la fois
+ *  les ventes normales ET la réserve de sécurité — À PARTIR du stock prévu
+ *  à la réception (stockAtReceipt), jamais du disponible d'aujourd'hui, qui
+ *  aura bougé d'ici l'arrivée.
+ *
+ *  Convention (affichée dans les réglages avancés de la page) :
+ *    stock visé après réception = venteQuotidienne × (couvertureCibleJours + joursSecurite)
+ *  « couverture cible » couvre les ventes normales sur la période choisie ;
+ *  « sécurité » est une réserve ADDITIONNELLE au-dessus, pas une variante du
+ *  délai. Les deux se lisent en jours de ventes normales et s'additionnent
+ *  directement dans la cible — c'est le même joursSecurite (déjà combiné
+ *  fournisseur + additionnel, voir la page appelante) qui sert aussi au
+ *  déclenchement dans classifyReorder : ne JAMAIS l'additionner deux fois en
+ *  le passant en plus à ce paramètre ET en le rajoutant séparément ailleurs.
+ *
+ *  Exemple vérifié : 14 cartons/sem (2/j), disponible 40, arrivage ferme de
+ *  60 à J+7, délai 28 j, couverture cible 28 j, sécurité 7 j → stock prévu à
+ *  réception (J+28) = 44, cible = 2×(28+7) = 70, besoin = 70−44 = 26. */
+export function computeReorderQtyForTarget(
+  venteQuotidienne: number | null | undefined,
+  stockPrevuAReception: number,
+  couvertureCibleJours: number,
+  joursSecurite: number = 0,
+): number | null {
+  if (!venteQuotidienne || venteQuotidienne <= 0) return null;
+  const cible = venteQuotidienne * (couvertureCibleJours + joursSecurite);
+  const qty = Math.ceil(cible - stockPrevuAReception);
+  return qty > 0 ? qty : 0;
+}
+
+/** Arrondit une quantité calculée aux contraintes d'achat du fournisseur,
+ *  quand elles sont renseignées : multiple de commande d'abord, puis
+ *  minimum (en respectant à nouveau le multiple si le minimum ne tombe pas
+ *  dessus). Un besoin nul reste nul — le minimum ne force pas une commande
+ *  qui n'a pas lieu d'être. */
+export function applyMoqAndMultiple(
+  qty: number,
+  minCartons: number | null | undefined,
+  multipleCartons: number | null | undefined,
+): number {
+  if (qty <= 0) return 0;
+  let q = qty;
+  if (multipleCartons != null && multipleCartons > 0) {
+    q = Math.ceil(q / multipleCartons) * multipleCartons;
+  }
+  if (minCartons != null && minCartons > 0 && q < minCartons) {
+    q = multipleCartons != null && multipleCartons > 0
+      ? Math.ceil(minCartons / multipleCartons) * multipleCartons
+      : minCartons;
+  }
+  return q;
+}
+
+/** Un engagement client déjà non couvert par le physique — 30 cartons
+ *  réservés sur 20 en stock, par exemple. Signalé indépendamment de tout
+ *  historique de ventes : ce n'est pas une prévision, c'est un manque déjà
+ *  constaté aujourd'hui. Retourne le manque en cartons (toujours positif),
+ *  ou 0 si le disponible n'est pas négatif. */
+export function engagementNonCouvert(stockDisponible: number): number {
+  return stockDisponible < 0 ? -stockDisponible : 0;
+}
+
+/** Niveaux de confiance affichés pour la vitesse de vente calculée — voir
+ *  computeConfianceVentes. Ordonnés du plus au moins fiable pour permettre
+ *  un tri direct. */
+export const CONFIANCE_LEVELS = ['haute', 'moyenne', 'faible', 'insuffisante'] as const;
+export type ConfianceVentes = (typeof CONFIANCE_LEVELS)[number];
+
+export type ConfianceInput = {
+  hasReception: boolean;
+  historyWeeks: number;
+  /** Nombre de commandes distinctes ayant contribué à la quantité vendue
+   *  comptée — une seule vente sur 4 semaines n'a pas la même valeur
+   *  statistique que dix ventes régulières sur la même période. */
+  orderCount: number;
+  qtySold: number;
+  /** Vrai si une seule commande représente une part disproportionnée du
+   *  total vendu sur la fenêtre (voir detecteVenteExceptionnelle). */
+  outlierDetected: boolean;
+  /** Vrai si une période de rupture a été détectée dans la fenêtre
+   *  (voir reconstructSellableDays) — la vitesse en est mécaniquement
+   *  sous-estimée pour la partie non vendable de la fenêtre. */
+  stockoutDetected: boolean;
+  /** Vrai si une rupture a été détectée MAIS que la correction qu'elle
+   *  impliquait a été jugée trop extrême pour être appliquée (voir
+   *  computeAdjustedVitesse) — la vitesse brute est utilisée à la place.
+   *  Dégrade plus fort que stockoutDetected seul : ce n'est pas juste une
+   *  correction modérée, c'est un doute sur la donnée elle-même. */
+  reconstructionUncertain: boolean;
+  /** Vrai si la lecture des ventes en base a échoué — une vitesse à 0 issue
+   *  d'une erreur de lecture n'est PAS une vraie absence de vente. */
+  dataError: boolean;
+};
+
+/** Résumé compréhensible de la fiabilité d'une vitesse de vente calculée.
+ *  Ne détermine QUE l'affichage (badge, tri de la section "à vérifier") —
+ *  jamais un second moteur de calcul : la formule appliquée reste la même,
+ *  fiable ou non, voir le principe déjà en place sur cette page.
+ *
+ *  Ne renvoie jamais "haute" quand une reconstruction de rupture est
+ *  intervenue (appliquée ou écartée) : c'est toujours une estimation, jamais
+ *  une lecture directe — voir reconstructSellableDays. */
+export function computeConfianceVentes(input: ConfianceInput): ConfianceVentes {
+  if (input.dataError) return 'insuffisante';
+  if (!input.hasReception) return 'insuffisante';
+  if (input.historyWeeks < VITESSE_SHORT_HISTORY_WEEKS) return 'faible';
+  // Une seule vente sur une fenêtre par ailleurs correcte n'est pas une
+  // preuve de rythme — il faut au moins quelques commandes distinctes pour
+  // que la moyenne représente vraiment un comportement récurrent.
+  if (input.orderCount < 2 || input.qtySold < 3) return 'faible';
+  if (input.reconstructionUncertain) return 'faible';
+  if (input.stockoutDetected || input.outlierDetected) return 'moyenne';
+  return 'haute';
+}
+
 // ── Suivi des expéditions (transit) ─────────────────────────────────────
-export const SHIPMENT_STATUSES = ['commande', 'en_transit', 'arrive_port', 'dedouanement', 'receptionne'] as const;
+export const SHIPMENT_STATUSES = ['commande', 'en_transit', 'arrive_port', 'dedouanement', 'receptionne', 'annule'] as const;
 export type ShipmentStatus = (typeof SHIPMENT_STATUSES)[number];
 
 export const SHIPMENT_STATUS_LABEL: Record<ShipmentStatus, string> = {
@@ -490,6 +968,7 @@ export const SHIPMENT_STATUS_LABEL: Record<ShipmentStatus, string> = {
   arrive_port:  'Arrivé au port',
   dedouanement: 'Dédouanement',
   receptionne:  'Réceptionné',
+  annule:       'Annulé',
 };
 
 /** Statuses that still count as "on the water" — the active list, and the
