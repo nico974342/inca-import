@@ -4,10 +4,18 @@
 // dans la section "à vérifier manuellement" — seule la mise en avant (bordure ambrée,
 // case de validation) diffère selon `reviewMode`.
 //
-// Rendu pur : tout le calcul (classifyReorder, stockAtReceipt, disponible, PUMP…) est
-// fait par la page appelante — voir constants.ts. Les attributs data-* portent ce dont
-// le script de la page a besoin pour recalculer en direct (coefficient saisonnier),
-// en import ANT les mêmes fonctions plutôt qu'en les réimplémentant.
+// Rendu pur : tout le calcul (classifyReorder, computeReorderQtyWithBridge, disponible,
+// PUMP…) est fait par la page appelante — voir constants.ts. Les attributs data-* portent
+// ce dont le script de la page a besoin pour recalculer en direct (coefficient saisonnier),
+// en réimportant EXACTEMENT les mêmes fonctions plutôt qu'en les réimplémentant.
+//
+// Présentation compacte (refonte) : une ligne en grille (~84 px, plus si le nom ou les
+// alertes prennent deux lignes) — produit + échéance, stock dispo, arrivage restant, cartons
+// retenus, montant HT. Le détail complet (stock physique/réservé, ventes+période, confiance,
+// arrivages séparés, délai+origine, couverture+sécurité, calcul) reste dans un <details>
+// fermé par défaut, ouvert en cliquant le nom du produit — mais toute anomalie à corriger
+// (badge) reste visible même panneau fermé.
+import { classifyUrgencyState, type UrgencyState } from '../../lib/constants';
 
 export interface Props {
   p: {
@@ -44,6 +52,7 @@ export interface Props {
     manqueEngage: number;
     confiance: string;
     historyWeeks: number;
+    qtySold: number;
     reconstructionApplied: boolean;
     reconstructionUncertain: boolean;
     minCartons: number | null;
@@ -79,26 +88,34 @@ function fmtDate(d: Date | null): string | null {
 const qty = p.suggestedQty ?? 0;
 const cost = p.pump != null ? p.pump * qty : null;
 
-const STATE_TEXT: Record<string, string> = {
-  a_prevoir: p.trigger.dateCommandeConseillee ? `Commander avant le ${fmtDate(p.trigger.dateCommandeConseillee)}` : 'Commande à prévoir',
-  commander_maintenant: p.trigger.margeInsuffisante ? '⚠ marge de sécurité insuffisante — commander maintenant' : 'Commander maintenant',
-  rupture_avant_commande_normale: '⚠ rupture prévue avant qu’une commande normale n’arrive',
-  couvert_par_arrivage: 'Couvert par un arrivage en cours',
+// ── État d'urgence (présentation) — voir classifyUrgencyState dans
+//    constants.ts, réutilisé tel quel côté client au recalcul. ──
+const urgencyState = classifyUrgencyState(p.trigger.primary as any, p.manqueEngage, p.stockDisponible);
+
+const STATE_LABEL: Record<UrgencyState, string> = {
+  manque_engage: `Manque engagé : ${p.manqueEngage} carton${p.manqueEngage > 1 ? 's' : ''}`,
+  rupture_actuelle: 'Rupture actuelle',
+  rupture_avant_livraison: 'Rupture avant livraison',
+  commander_aujourdhui: 'Commander aujourd’hui',
+  a_prevoir: p.trigger.dateCommandeConseillee ? `Avant le ${fmtDate(p.trigger.dateCommandeConseillee)}` : 'À prévoir',
+  couvert_par_arrivage: 'Couvert',
   donnees_insuffisantes: 'Données insuffisantes',
 };
-const stateText = p.manqueEngage > 0
-  ? `⚠ manque déjà engagé : ${p.manqueEngage} carton${p.manqueEngage > 1 ? 's' : ''}`
-  : (STATE_TEXT[p.trigger.primary] ?? p.trigger.primary);
+const stateLabel = STATE_LABEL[urgencyState];
 
 // Sérialisé tel quel (eta en ISO) pour que le script client reconstruise les
-// mêmes ArrivalEvent que le serveur et appelle classifyReorder/stockAtReceipt
+// mêmes ArrivalEvent que le serveur et appelle classifyReorder/computeReorderQtyWithBridge
 // avec des dates réelles, pas juste des libellés déjà formatés.
 const arrivalsJson = JSON.stringify(p.arrivals.map((a, i) => ({
   shipmentId: `disp-${i}`, quantity: a.quantity, eta: a.eta, status: a.status,
 })));
+
+const transitText = p.transitQty > 0
+  ? `${p.transitQty} · ${p.nextArrivalLabel ?? 'date inconnue'}${p.transitLate ? ' (retard)' : ''}`
+  : '—';
 ---
 <div
-  class={`pr ${!p.reliable ? 'pr--review' : ''} ${p.urgent ? 'pr--urgent' : ''}`}
+  class={`pr pr--${urgencyState} ${!p.reliable ? 'pr--review' : ''}`}
   hidden={p.covered}
   data-role="product-row"
   data-id={p.id}
@@ -114,122 +131,126 @@ const arrivalsJson = JSON.stringify(p.arrivals.map((a, i) => ({
   data-stock={p.stockDisponible}
   data-has-sales={p.hasSales ? '1' : '0'}
   data-transit-qty={p.transitQty}
+  data-transit-eta={p.nextArrivalLabel ?? ''}
+  data-transit-late={p.transitLate ? '1' : '0'}
   data-covered={p.covered ? '1' : '0'}
   data-manque={p.manqueEngage}
   data-min={p.minCartons ?? ''}
   data-multiple={p.multipleCartons ?? ''}
   data-arrivals={arrivalsJson}
+  data-suggested={qty}
 >
-  <div class="pr-top">
-    <div class="pr-name-wrap">
-      <span class="pr-name">{p.name}</span>
-      {showSupplierTag && <span class="pr-supplier-tag">{p.supplier}</span>}
-      {reviewMode && (
-        <label class="pr-validate">
-          <input type="checkbox" data-role="review-validate" />
-          Valider cette ligne
-        </label>
+  <div class="pr-grid">
+    <div class="pr-main">
+      <button type="button" class="pr-name-btn" data-role="toggle-details" aria-expanded="false">
+        <span class="pr-name">{p.name}</span>
+        {showSupplierTag && <span class="pr-supplier-tag">{p.supplier}</span>}
+      </button>
+      <div class="pr-state-row">
+        <span class="pr-chip" data-role="state-chip" data-state={urgencyState}>{stateLabel}</span>
+        {!p.reliable && (
+          <span class="pr-icon-badge" title={`À vérifier : ${p.unreliableReason} — quantité calculée sur des données moins sûres`}>
+            ⚠ à vérifier
+          </span>
+        )}
+        {reviewMode && (
+          <label class="pr-validate">
+            <input type="checkbox" data-role="review-validate" />
+            Valider
+          </label>
+        )}
+      </div>
+      <p class="pr-secondary" data-role="vitesse-text">
+        {p.hasSales ? `ventes ${p.vitesseVente.toFixed(1)}/sem.` : 'pas de ventes enregistrées'}
+      </p>
+
+      {(p.manqueEngage > 0 || p.transitQty > 0 || p.aVerifierDelai || p.missingDelai || p.missingPump || p.minCartons != null || p.multipleCartons != null || p.reconstructionApplied || p.reconstructionUncertain || (showSupplierTag && (p.supplierMatchStatus === 'ambiguous' || p.supplierMatchStatus === 'unmatched'))) && (
+        <div class="pr-badges">
+          {showSupplierTag && p.supplierMatchStatus === 'ambiguous' && (
+            <span class="pr-badge pr-badge--warn" title="Plusieurs fournisseurs enregistrés correspondent à ce nom — à choisir manuellement sur /admin/fournisseurs, aucune fusion automatique">
+              ⚠ fournisseur ambigu
+            </span>
+          )}
+          {showSupplierTag && p.supplierMatchStatus === 'unmatched' && (
+            <span class="pr-badge pr-badge--warn" title="Aucun fournisseur enregistré ne correspond à ce nom — délai/sécurité/couverture par défaut">
+              ⚠ fournisseur non identifié
+            </span>
+          )}
+          {p.reconstructionApplied && (
+            <span class="pr-badge pr-badge--info" title="Une rupture a été reconstruite à partir des ventes et réceptions connues et la vitesse a été corrigée en conséquence — c'est une estimation, pas une mesure directe">
+              ~ vitesse ajustée (estimation)
+            </span>
+          )}
+          {p.reconstructionUncertain && (
+            <span class="pr-badge pr-badge--warn" title="Une rupture semble présente mais la correction qu'elle impliquerait est jugée trop importante pour être fiable — la vitesse brute est utilisée à la place">
+              ⚠ reconstruction peu fiable
+            </span>
+          )}
+          {p.aVerifierDelai && (
+            <span class="pr-badge pr-badge--warn" title="Un délai est enregistré sur la fiche produit mais n'a jamais été confirmé comme exception — il n'est pas utilisé">
+              délai à vérifier
+            </span>
+          )}
+          {p.reliable && !p.aVerifierDelai && p.missingDelai && (
+            <span class="pr-badge pr-badge--warn" title="Aucun délai réel connu pour ce fournisseur — calculé sur le délai par défaut. Réglez-le sur /admin/fournisseurs">
+              délai par défaut
+            </span>
+          )}
+          {p.missingPump && (
+            <span class="pr-badge pr-badge--warn" title="Aucun prix d'achat moyen connu pour ce produit — exclu du coût, jamais compté comme zéro">
+              prix manquant
+            </span>
+          )}
+          {(p.minCartons != null || p.multipleCartons != null) && (
+            <span class="pr-badge pr-badge--info" title="Quantité déjà arrondie à ces contraintes d'achat">
+              {p.minCartons != null && `min ${p.minCartons}`}
+              {p.minCartons != null && p.multipleCartons != null && ' · '}
+              {p.multipleCartons != null && `×${p.multipleCartons}`}
+            </span>
+          )}
+        </div>
       )}
     </div>
-    <div class="pr-qty-wrap">
+
+    <div class="pr-col pr-col-stock">
+      <span class="pr-col-label">Stock dispo</span>
+      <span class="pr-col-value" title={`Disponible ${p.stockDisponible} = physique ${p.stockPhysique} − réservé ${p.stockReserve}`}>{p.stockDisponible}</span>
+    </div>
+
+    <div class="pr-col pr-col-transit">
+      <span class="pr-col-label">Arrivage</span>
+      <span class="pr-col-value" data-role="transit-text">{transitText}</span>
+      {p.transitHasUnknownEta && <span class="pr-col-note">date inconnue</span>}
+    </div>
+
+    <div class="pr-col pr-col-qty">
       <input
         type="number"
-        class={`pr-qty ${!p.reliable ? 'pr-qty--warn' : ''}`}
+        class="pr-qty"
         min="0"
         step="1"
         value={qty}
         aria-label={`Quantité à commander pour ${p.name}`}
         data-role="qty-input"
       />
+      <span class="pr-proposed" data-role="proposed-text">Proposé : {qty}</span>
+      <button type="button" class="pr-revert" data-role="revert-btn" hidden>↺ proposition</button>
       <span class="pr-qty-warn" data-role="qty-warn" hidden>saisie invalide, ignorée</span>
     </div>
-  </div>
 
-  <p class="pr-state" data-role="state-text" data-state={p.trigger.primary}>{stateText}</p>
-
-  <div class="pr-sub">
-    <span
-      class="pr-stock"
-      title={`Disponible ${p.stockDisponible} = physique ${p.stockPhysique} − réservé ${p.stockReserve}`}
-    >
-      Stock dispo {p.stockDisponible}
-    </span>
-    <span class="pr-sep">·</span>
-    <span class="pr-vitesse" data-role="vitesse-text">
-      {p.hasSales ? `ventes ${p.vitesseVente.toFixed(1)}/sem.` : 'pas de ventes enregistrées'}
-    </span>
-    <span class={`pr-confiance pr-confiance--${p.confiance}`} title={`Fiabilité de la vitesse de vente, sur ${p.historyWeeks.toFixed(1)} sem. d'historique`}>
-      confiance {p.confiance}
-    </span>
-    <span class="pr-cost" data-role="cost-text" title="PUMP historique — peut différer du prix du prochain achat">{cost == null ? '—' : formatPrice(cost)}</span>
-  </div>
-
-  {(!p.reliable || p.manqueEngage > 0 || p.transitQty > 0 || p.aVerifierDelai || p.missingDelai || p.missingPump || p.minCartons != null || p.multipleCartons != null || p.reconstructionApplied || p.reconstructionUncertain || showSupplierTag && (p.supplierMatchStatus === 'ambiguous' || p.supplierMatchStatus === 'unmatched')) && (
-    <div class="pr-badges">
-      {showSupplierTag && p.supplierMatchStatus === 'ambiguous' && (
-        <span class="pr-badge pr-badge--warn" title="Plusieurs fournisseurs enregistrés correspondent à ce nom (casse/espaces) — à choisir manuellement sur /admin/fournisseurs, aucune fusion automatique">
-          ⚠ fournisseur ambigu — délai/sécurité/couverture par défaut
-        </span>
-      )}
-      {showSupplierTag && p.supplierMatchStatus === 'unmatched' && (
-        <span class="pr-badge pr-badge--warn" title="Aucun fournisseur enregistré ne correspond à ce nom — à créer ou rapprocher sur /admin/fournisseurs">
-          ⚠ fournisseur non identifié — délai/sécurité/couverture par défaut
-        </span>
-      )}
-      {!p.reliable && (
-        <span class="pr-badge pr-badge--warn" title="Calculée avec la même formule validée, mais sur des données moins sûres">
-          ⚠ {p.unreliableReason} — quantité peu fiable
-        </span>
-      )}
-      {p.reconstructionApplied && (
-        <span class="pr-badge pr-badge--info" title="Une rupture a été reconstruite à partir des ventes et réceptions connues (pas d'historique de stock direct) et la vitesse a été corrigée en conséquence — c'est une estimation, pas une mesure directe">
-          ~ vitesse ajustée pour rupture reconstruite (estimation)
-        </span>
-      )}
-      {p.reconstructionUncertain && (
-        <span class="pr-badge pr-badge--warn" title="Une rupture semble présente dans les données mais la correction qu'elle impliquerait est jugée trop importante pour être fiable (plus probablement un mouvement de stock non tracé) — la vitesse brute est utilisée à la place">
-          ⚠ reconstruction de rupture peu fiable — vitesse brute utilisée
-        </span>
-      )}
-      {p.transitQty > 0 && (
-        <a
-          href="/admin/transit"
-          class="pr-badge pr-badge--info"
-          title="Déjà commandé ou en transit — déduit de la quantité affichée (voir le détail ci-dessous pour chaque arrivage)"
-        >
-          🚢 {p.transitQty} carton{p.transitQty > 1 ? 's' : ''} déjà en route
-          {p.nextArrivalLabel ? ` · prochain ~${p.nextArrivalLabel}` : ' · date inconnue'}
-          {p.transitLate ? ' · en retard' : ''}
-        </a>
-      )}
-      {p.aVerifierDelai && (
-        <span class="pr-badge pr-badge--warn" title="Un délai est enregistré sur la fiche produit mais n'a jamais été confirmé comme exception — il n'est pas utilisé">
-          délai produit à vérifier
-        </span>
-      )}
-      {p.reliable && !p.aVerifierDelai && p.missingDelai && (
-        <span class="pr-badge pr-badge--warn" title="Aucun délai réel connu pour ce fournisseur — calculé sur le délai par défaut. Réglez-le sur /admin/fournisseurs">
-          ⚠ délai fournisseur non renseigné
-        </span>
-      )}
-      {p.missingPump && (
-        <span class="pr-badge pr-badge--warn" title="Aucun prix d'achat moyen connu pour ce produit — exclu du coût">
-          ⚠ prix d'achat manquant
-        </span>
-      )}
-      {(p.minCartons != null || p.multipleCartons != null) && (
-        <span class="pr-badge pr-badge--info" title="Quantité déjà arrondie à ces contraintes d'achat">
-          {p.minCartons != null && `min ${p.minCartons}`}
-          {p.minCartons != null && p.multipleCartons != null && ' · '}
-          {p.multipleCartons != null && `multiple de ${p.multipleCartons}`}
-        </span>
-      )}
+    <div class="pr-col pr-col-cost">
+      <span class="pr-col-label">Montant</span>
+      <span class="pr-col-value" data-role="cost-text" title="PUMP historique — peut différer du prix du prochain achat">{cost == null ? '—' : formatPrice(cost)}</span>
     </div>
-  )}
+  </div>
 
-  <details class="pr-details">
-    <summary>Détail du calcul</summary>
+  <details class="pr-details" data-role="details-panel">
+    <summary class="pr-details-summary">Détail</summary>
     <dl class="pr-detail-grid">
+      <div><dt>Stock physique</dt><dd>{p.stockPhysique} cartons</dd></div>
+      <div><dt>Réservé</dt><dd>{p.stockReserve} cartons</dd></div>
+      <div><dt>Ventes sur la période</dt><dd>{p.qtySold} unités sur {p.historyWeeks.toFixed(1)} sem.</dd></div>
+      <div><dt>Confiance</dt><dd class={`pr-confiance pr-confiance--${p.confiance}`}>{p.confiance}</dd></div>
       <div><dt>Délai utilisé</dt><dd>{p.delai.jours} j · {p.delai.source === 'produit_override' ? 'exception produit' : p.delai.source === 'fournisseur' ? `fournisseur (${p.delai.fournisseur ?? p.supplier})` : 'défaut (non confirmé)'}</dd></div>
       <div><dt>Sécurité</dt><dd>{p.joursSecurite} j (réserve additionnelle)</dd></div>
       <div><dt>Couverture cible après réception</dt><dd data-role="couverture-text">{p.couverture.jours} j — {COUVERTURE_SOURCE_LABEL[p.couverture.source] ?? p.couverture.source}</dd></div>
@@ -252,27 +273,100 @@ const arrivalsJson = JSON.stringify(p.arrivals.map((a, i) => ({
 </div>
 
 <style>
-.pr { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--color-border); }
+.pr {
+  border-bottom: 1px solid var(--color-border);
+}
 .pr:last-child { border-bottom: none; }
 .pr--review { background: oklch(0.985 0.012 60); }
-.pr--urgent { background: oklch(0.98 0.015 25); }
+.pr--rupture_actuelle,
+.pr--manque_engage { background: oklch(0.985 0.012 25); }
 
-.pr-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
-.pr-name-wrap { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; flex-wrap: wrap; }
+.pr-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 84px 140px 118px 108px;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 84px;
+  padding: 10px var(--space-4);
+}
+
+.pr-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.pr-name-btn {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.pr-name-btn:hover .pr-name { text-decoration: underline; }
+.pr-name-btn:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: 2px; }
 .pr-name { font-size: var(--text-base); font-weight: 600; color: var(--color-ink); }
 .pr-supplier-tag { font-size: var(--text-xs); color: var(--color-muted); white-space: nowrap; }
+
+.pr-state-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pr-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+.pr-chip[data-state="manque_engage"],
+.pr-chip[data-state="rupture_actuelle"] { color: oklch(0.30 0.16 25); background: oklch(0.92 0.08 25); }
+.pr-chip[data-state="rupture_avant_livraison"] { color: oklch(0.40 0.15 35); background: oklch(0.93 0.08 45); }
+.pr-chip[data-state="commander_aujourdhui"] { color: oklch(0.42 0.14 60); background: oklch(0.94 0.08 65); }
+.pr-chip[data-state="a_prevoir"] { color: oklch(0.42 0.10 240); background: oklch(0.94 0.03 240); }
+.pr-chip[data-state="couvert_par_arrivage"] { color: oklch(0.42 0.11 150); background: oklch(0.94 0.05 150); }
+.pr-chip[data-state="donnees_insuffisantes"] { color: var(--color-muted); background: var(--color-surface-2); }
+
+.pr-icon-badge {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: oklch(0.46 0.16 55);
+  cursor: help;
+  white-space: nowrap;
+}
+
 .pr-validate {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: var(--text-xs); font-weight: 600; color: var(--color-primary-deep);
   cursor: pointer; white-space: nowrap;
 }
 
-.pr-qty-wrap { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; }
+.pr-secondary { margin: 0; font-size: var(--text-xs); color: var(--color-muted); }
+
+.pr-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 1px; }
+.pr-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+  white-space: nowrap;
+}
+.pr-badge--warn { color: oklch(0.34 0.14 45); background: oklch(0.93 0.09 60); border-color: oklch(0.72 0.14 55); }
+.pr-badge--info { color: oklch(0.40 0.10 220); background: oklch(0.94 0.04 220); border-color: oklch(0.78 0.08 220); }
+
+.pr-col { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; min-width: 0; }
+.pr-col-label { font-size: 0.6875rem; color: var(--color-muted); }
+.pr-col-value { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-ink); font-weight: 600; text-align: right; }
+.pr-col-stock .pr-col-value[title] { cursor: help; }
+.pr-col-note { font-size: 0.625rem; color: oklch(0.46 0.16 55); }
+.pr-col-transit { text-align: right; }
+
+.pr-col-qty { align-items: stretch; }
 .pr-qty {
-  width: 90px;
-  padding: 0.4rem 0.55rem;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
   font-family: var(--font-mono);
-  font-size: 1.05rem;
+  font-size: 1rem;
   font-weight: 700;
   text-align: right;
   color: var(--color-ink);
@@ -282,67 +376,40 @@ const arrivalsJson = JSON.stringify(p.arrivals.map((a, i) => ({
   outline: none;
 }
 .pr-qty:focus { border-color: var(--color-primary); }
-.pr-qty--warn { border-color: oklch(0.68 0.15 55); background: oklch(0.97 0.05 60); }
-.pr-qty--warn:focus { border-color: oklch(0.55 0.15 55); }
-.pr-qty-warn { margin-top: 2px; font-size: 0.6875rem; color: oklch(0.50 0.19 25); font-weight: 600; }
-
-.pr-state { margin: 6px 0 0; font-size: var(--text-sm); font-weight: 700; color: var(--color-ink); }
-.pr-state[data-state="rupture_avant_commande_normale"],
-.pr-state.is-urgent { color: oklch(0.46 0.18 25); }
-.pr-state[data-state="couvert_par_arrivage"],
-.pr-state[data-state="donnees_insuffisantes"] { color: var(--color-muted); font-weight: 500; }
-
-.pr-sub {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 5px;
-  margin-top: 3px;
-  font-size: var(--text-xs);
-  color: var(--color-muted);
-}
-.pr-stock, .pr-vitesse { cursor: default; }
-.pr-stock[title] { cursor: help; }
-.pr-sep { opacity: 0.45; }
-.pr-cost { margin-left: auto; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-ink); white-space: nowrap; cursor: help; }
-
-.pr-confiance {
-  padding: 0 6px;
-  border-radius: var(--radius-sm);
+.pr-qty[data-modified="1"] { border-color: var(--color-primary); background: oklch(0.97 0.02 45.9); }
+.pr-qty[data-excluded="1"] { border-color: var(--color-border-strong); background: var(--color-surface-2); color: var(--color-muted); }
+.pr-proposed { font-size: 0.6875rem; color: var(--color-muted); text-align: right; }
+.pr-revert {
+  align-self: flex-end;
+  margin-top: 1px;
+  padding: 0;
   font-size: 0.6875rem;
   font-weight: 600;
-  cursor: help;
+  color: var(--color-primary-deep);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
 }
-.pr-confiance--haute { color: oklch(0.42 0.13 150); background: oklch(0.94 0.05 150); }
-.pr-confiance--moyenne { color: oklch(0.42 0.14 60); background: oklch(0.95 0.05 60); }
-.pr-confiance--faible, .pr-confiance--insuffisante { color: oklch(0.46 0.18 25); background: oklch(0.96 0.04 25); }
+.pr-qty-warn { font-size: 0.625rem; color: oklch(0.50 0.19 25); font-weight: 600; text-align: right; }
 
-.pr-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.pr-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  border-radius: var(--radius-sm);
-  border: 1px solid;
-  text-decoration: none;
-  white-space: nowrap;
-}
-.pr-badge[hidden] { display: none; }
-.pr-badge--warn { color: oklch(0.34 0.14 45); background: oklch(0.93 0.09 60); border-color: oklch(0.72 0.14 55); }
-.pr-badge--danger { color: oklch(0.40 0.16 25); background: oklch(0.95 0.05 25); border-color: oklch(0.78 0.12 25); }
-.pr-badge--info { color: oklch(0.40 0.10 220); background: oklch(0.94 0.04 220); border-color: oklch(0.78 0.08 220); }
-.pr-badge--info:hover { text-decoration: underline; }
+.pr-col-cost { justify-content: center; }
 
-.pr-details { margin-top: 8px; }
-.pr-details summary {
-  font-size: var(--text-xs); font-weight: 600; color: var(--color-muted); cursor: pointer; user-select: none;
+.pr-confiance { display: inline; }
+.pr-confiance--haute { color: oklch(0.42 0.13 150); }
+.pr-confiance--moyenne { color: oklch(0.42 0.14 60); }
+.pr-confiance--faible, .pr-confiance--insuffisante { color: oklch(0.46 0.18 25); }
+
+.pr-details { padding: 0 var(--space-4) 10px; }
+.pr-details-summary {
+  display: none; /* ouverture pilotée par pr-name-btn ; conservé pour le clavier/lecteur d'écran natif */
 }
+.pr-details[open] .pr-details-summary { display: block; }
 .pr-detail-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 6px var(--space-4);
-  margin: 6px 0 0;
+  margin: 0;
   padding: var(--space-2) var(--space-3);
   background: var(--color-surface);
   border-radius: var(--radius-sm);
@@ -352,4 +419,19 @@ const arrivalsJson = JSON.stringify(p.arrivals.map((a, i) => ({
 .pr-detail-grid dd { margin: 0; font-weight: 600; color: var(--color-ink); }
 .pr-detail-full { grid-column: 1 / -1; }
 .pr-arrival-list { margin: 2px 0 0; padding-left: 1.1em; font-weight: 500; }
+
+@media (max-width: 760px) {
+  .pr-grid {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    min-height: 0;
+    padding: var(--space-3) var(--space-4);
+  }
+  .pr-col { flex-direction: row; align-items: baseline; justify-content: space-between; }
+  .pr-col-label { order: 0; }
+  .pr-col-value { order: 1; }
+  .pr-col-qty { flex-direction: column; align-items: stretch; }
+  .pr-qty { text-align: right; font-size: 1.1rem; padding: 0.5rem 0.6rem; }
+  .pr-proposed, .pr-revert { text-align: right; }
+}
 </style>

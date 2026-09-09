@@ -66,3 +66,35 @@ export const POST: APIRoute = async ({ request, cookies }) => {
 
   return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 };
+
+// « Revenir à la proposition » : la ligne n'est plus une retenue manuelle,
+// son brouillon serveur ne doit plus la réappliquer au prochain chargement —
+// sinon la valeur manuelle reviendrait silencieusement après rechargement
+// malgré le clic sur « revenir à la proposition ».
+export const DELETE: APIRoute = async ({ request, cookies }) => {
+  const supabase = createAuthClient(request, cookies);
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user || !isAdmin(user)) return new Response('Non autorisé', { status: 401 });
+
+  let body: { product_id?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return new Response('JSON invalide', { status: 400 });
+  }
+  const productId = body.product_id;
+  if (!productId) return new Response('Paramètres invalides', { status: 400 });
+
+  const { error } = await supabaseAdmin
+    .from('commande_fournisseur_drafts')
+    .delete()
+    .eq('admin_email', user.email ?? '')
+    .eq('product_id', productId);
+
+  if (error) {
+    console.error('[commande-fournisseur/draft] suppression échouée:', error.message);
+    return new Response('Échec de la suppression', { status: 500 });
+  }
+
+  return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+};

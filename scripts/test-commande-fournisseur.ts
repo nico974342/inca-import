@@ -11,6 +11,7 @@ import {
   applyMoqAndMultiple, engagementNonCouvert, projectStock, computeAdjustedVitesse,
   resolveCouvertureCible, COUVERTURE_CIBLE_DEFAUT_JOURS,
   normalizeSupplierName, matchSupplierName,
+  classifyUrgencyState,
   addDays,
   type ArrivalEvent,
 } from '../src/lib/constants.ts';
@@ -352,6 +353,28 @@ console.log('\nRapprochement fournisseur — normalizeSupplierName / matchSuppli
   assert(ambiguous.status === 'ambiguous' && ambiguous.supplierId === null,
     'deux fournisseurs partageant la même clé normalisée → ambiguous, aucun id retenu', JSON.stringify(ambiguous));
   assert(ambiguous.candidateIds.length === 2, 'les deux candidats sont rapportés pour arbitrage manuel', JSON.stringify(ambiguous));
+}
+
+// ── Refonte visuelle : classifyUrgencyState — présentation seule, ne doit
+//    jamais changer la logique de classifyReorder, seulement l'affiner ──
+console.log('\nclassifyUrgencyState — distinction rupture actuelle / avant livraison (présentation)');
+{
+  assert(classifyUrgencyState('rupture_avant_commande_normale', 0, 0) === 'rupture_actuelle',
+    'stock disponible à 0 → rupture_actuelle');
+  assert(classifyUrgencyState('rupture_avant_commande_normale', 0, -5) === 'rupture_actuelle',
+    'stock disponible négatif (déjà engagé au-delà du physique) → rupture_actuelle');
+  assert(classifyUrgencyState('rupture_avant_commande_normale', 0, 8) === 'rupture_avant_livraison',
+    'stock disponible positif mais rupture prévue avant livraison normale → rupture_avant_livraison');
+  assert(classifyUrgencyState('commander_maintenant', 0, 20) === 'commander_aujourdhui',
+    'commander_maintenant → commander_aujourdhui');
+  assert(classifyUrgencyState('a_prevoir', 0, 20) === 'a_prevoir', 'a_prevoir inchangé');
+  assert(classifyUrgencyState('couvert_par_arrivage', 0, 20) === 'couvert_par_arrivage', 'couvert_par_arrivage inchangé');
+  assert(classifyUrgencyState('donnees_insuffisantes' as any, 0, 20) === 'donnees_insuffisantes', 'donnees_insuffisantes inchangé');
+  // manqueEngage prime sur tout le reste, y compris une rupture actuelle.
+  assert(classifyUrgencyState('rupture_avant_commande_normale', 10, 0) === 'manque_engage',
+    'manque déjà engagé prioritaire même en cas de rupture actuelle simultanée');
+  assert(classifyUrgencyState('couvert_par_arrivage', 3, 50) === 'manque_engage',
+    'manque déjà engagé prioritaire même si par ailleurs couvert par un arrivage');
 }
 
 console.log(`\n${pass} succès, ${fail} échec${fail === 1 ? '' : 's'}.`);

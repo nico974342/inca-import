@@ -843,6 +843,39 @@ export type ReorderTrigger = {
   dateCommandeConseillee: Date | null;
 };
 
+// ── Refonte visuelle /admin/commande-fournisseur : classification de
+//    PRÉSENTATION uniquement — aucune des valeurs ci-dessous ne change le
+//    résultat de classifyReorder ni de computeReorderQtyWithBridge. Elle se
+//    contente de distinguer, pour l'affichage, une rupture DÉJÀ effective
+//    ('rupture_actuelle', stock disponible ≤ 0 maintenant) d'une rupture qui
+//    ne surviendra qu'AVANT la prochaine commande normale mais qui n'a pas
+//    encore eu lieu ('rupture_avant_livraison') — 'rupture_avant_commande_
+//    normale' de l'engine couvre les deux, l'un et l'autre n'appelant pas la
+//    même réaction opérationnelle. ──
+export type UrgencyState =
+  | 'manque_engage'
+  | 'rupture_actuelle'
+  | 'rupture_avant_livraison'
+  | 'commander_aujourdhui'
+  | 'a_prevoir'
+  | 'couvert_par_arrivage'
+  | 'donnees_insuffisantes';
+
+export function classifyUrgencyState(
+  triggerPrimary: ReorderPrimary,
+  manqueEngage: number,
+  stockDisponible: number,
+): UrgencyState {
+  if (manqueEngage > 0) return 'manque_engage';
+  if (triggerPrimary === 'rupture_avant_commande_normale') {
+    return stockDisponible <= 0 ? 'rupture_actuelle' : 'rupture_avant_livraison';
+  }
+  if (triggerPrimary === 'commander_maintenant') return 'commander_aujourdhui';
+  if (triggerPrimary === 'a_prevoir') return 'a_prevoir';
+  if (triggerPrimary === 'couvert_par_arrivage') return 'couvert_par_arrivage';
+  return 'donnees_insuffisantes';
+}
+
 /** Point d'entrée unique pour la question "quand commander ?". Sans
  *  arrivage (arrivals = []), se réduit exactement à la première
  *  approximation : jours avant commande = disponible / vente_quotidienne −

@@ -11,7 +11,7 @@ import {
   DELAI_LIVRAISON_DEFAUT_JOURS, resolveDelaiLivraison, delaiAVerifier,
   COUVERTURE_CIBLE_DEFAUT_JOURS, resolveCouvertureCible,
   matchSupplierName, type SupplierMatchStatus,
-  classifyReorder, computeReorderQtyWithBridge, applyMoqAndMultiple,
+  classifyReorder, computeReorderQtyWithBridge, applyMoqAndMultiple, classifyUrgencyState,
   engagementNonCouvert,
   type ArrivalEvent, type ConfianceVentes,
 } from '../../lib/constants';
@@ -342,11 +342,17 @@ const rows = allProducts.map(p => {
 
   const covered = trigger.primary === 'couvert_par_arrivage' || (suggestedQty != null && suggestedQty <= 0 && manqueEngage === 0);
 
+  // ── Refonte visuelle : classification de présentation uniquement, voir
+  //    classifyUrgencyState dans constants.ts. Ne change aucune valeur du
+  //    moteur — sert au tri, aux compteurs d'en-tête et au sélecteur de vue
+  //    "Urgences". ──
+  const urgencyState = classifyUrgencyState(trigger.primary, manqueEngage, stockDisponible);
+
   return {
     id: p.id, name: p.name, category: p.category,
     vitesseVente, historyWeeks, shortHistory, hasReception, hasSales, reliable, unreliableReason, urgent,
     confiance, stockoutDetected, reconstructionApplied, reconstructionUncertain, outlierDetected, orderCount, qtySold,
-    suggestedQty, covered,
+    suggestedQty, covered, urgencyState,
     delai, aVerifierDelai, joursSecurite, couverture,
     couvertureFournisseurJours: supplierRow?.couverture ?? null,
     trigger, manqueEngage,
@@ -391,6 +397,10 @@ function lineCost(r: Row): number {
   return r.pump != null ? r.pump * (r.suggestedQty ?? 0) : 0;
 }
 
+// États comptant comme "urgent" pour le sélecteur de vue croisé "Urgences"
+// et le compteur d'en-tête — ne recouvre pas les statuts neutres/couverts.
+const URGENT_STATES = new Set(['manque_engage', 'rupture_actuelle', 'rupture_avant_livraison', 'commander_aujourdhui']);
+
 const supplierNamesOrder = [...new Set(orderRows.map(r => r.supplier))];
 const supplierGroups = supplierNamesOrder.map(name => {
   const items = orderRows.filter(r => r.supplier === name).sort(urgencyCompare);
@@ -398,12 +408,13 @@ const supplierGroups = supplierNamesOrder.map(name => {
   const cartons = visible.reduce((s, r) => s + (r.suggestedQty ?? 0), 0);
   const cost = visible.reduce((s, r) => s + lineCost(r), 0);
   const missingPumpCount = visible.filter(r => r.missingPump).length;
+  const urgentCount = visible.filter(r => URGENT_STATES.has(r.urgencyState)).length;
   const groupUrgency = items.length ? Math.min(...items.map(urgencyRank)) : 5;
   // Un seul et même fournisseur (suppliers.name est UNIQUE) ne peut porter
   // qu'un seul supplierId au sein d'un groupe déjà regroupé par nom affiché.
   const supplierId = items.find(r => r.supplierId)?.supplierId ?? null;
   const unresolved = items.some(r => r.supplierMatchStatus === 'ambiguous' || r.supplierMatchStatus === 'unmatched');
-  return { name, supplierId, unresolved, items, visibleCount: visible.length, cartons, cost, missingPumpCount, groupUrgency };
+  return { name, supplierId, unresolved, items, visibleCount: visible.length, cartons, cost, missingPumpCount, urgentCount, groupUrgency };
 }).sort((a, b) => a.groupUrgency - b.groupUrgency || b.cartons - a.cartons || a.name.localeCompare(b.name, 'fr'));
 
 const activeSupplierGroups = supplierGroups.filter(g => g.visibleCount > 0);
@@ -412,6 +423,13 @@ const totalCartons = activeSupplierGroups.reduce((s, g) => s + g.cartons, 0);
 const totalCost = activeSupplierGroups.reduce((s, g) => s + g.cost, 0);
 const totalMissingPump = activeSupplierGroups.reduce((s, g) => s + g.missingPumpCount, 0);
 const supplierCount = activeSupplierGroups.length;
+const urgentTotal = activeSupplierGroups.reduce((s, g) => s + g.urgentCount, 0);
+
+const urgencyCounts: Record<string, number> = {};
+for (const r of orderRows) {
+  if (r.covered) continue;
+  urgencyCounts[r.urgencyState] = (urgencyCounts[r.urgencyState] ?? 0) + 1;
+}
 
 const hiddenCoveredCount = rows.filter(r => r.covered).length;
 const reviewVisibleCount = reviewRows.filter(r => !r.covered).length;
@@ -425,19 +443,20 @@ const summaryCost = totalMissingPump > 0
   : `Total ${formatPrice(totalCost)} HT`;
 
 // Prochaine échéance, tous fournisseurs confondus — l'info d'accueil de la
-// page : "Commander avant le…".
+// page. Distingue explicitement "aujourd'hui" ("Commander aujourd'hui") de
+// toute autre date ("Commander avant le …") — la formulation groupée
+// "Commander avant le aujourd'hui" n'est jamais grammaticalement correcte.
 const nextDeadline = orderRows
   .filter(r => !r.covered && r.trigger.dateCommandeConseillee != null)
   .sort((a, b) => (a.trigger.joursAvantCommande ?? 0) - (b.trigger.joursAvantCommande ?? 0))[0] ?? null;
-const nextDeadlineLabel = nextDeadline?.trigger.dateCommandeConseillee
-  ? (nextDeadline.trigger.joursAvantCommande != null && nextDeadline.trigger.joursAvantCommande <= 0
-      ? 'aujourd’hui'
-      : fmtDate(nextDeadline.trigger.dateCommandeConseillee))
+const nextDeadlineIsToday = nextDeadline?.trigger.joursAvantCommande != null && nextDeadline.trigger.joursAvantCommande <= 0;
+const nextDeadlineLabel = !nextDeadlineIsToday && nextDeadline?.trigger.dateCommandeConseillee
+  ? fmtDate(nextDeadline.trigger.dateCommandeConseillee)
   : null;
 
 const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
 ---
-<AdminLayout title="Commandes fournisseur" activeNav="commande-fournisseur">
+<AdminLayout title="Commandes fournisseurs" activeNav="commande-fournisseur">
   {suppliersTableMissing && (
     <div class="alert alert--error" role="alert">
       La table <code>suppliers</code> n'existe pas encore — tous les produits utilisent
@@ -479,12 +498,23 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
     </div>
   )}
 
-  <div class="headline-row">
-    <p class="headline">
-      {nextDeadlineLabel
-        ? <>Commander avant le <strong>{nextDeadlineLabel}</strong> — {nextDeadline!.name}</>
-        : 'Rien à commander pour l’instant'}
+  <div class="cf-header">
+    <h1 class="cf-title">Commandes fournisseurs</h1>
+    <p class="cf-headline">
+      {nextDeadlineIsToday
+        ? <>Commander aujourd’hui — {nextDeadline!.name}</>
+        : nextDeadlineLabel
+          ? <>Commander avant le <strong>{nextDeadlineLabel}</strong> — {nextDeadline!.name}</>
+          : 'Rien à commander pour l’instant'}
     </p>
+    {urgentTotal > 0 && (
+      <p class="cf-priority-line">
+        {urgencyCounts.manque_engage ? <span class="cf-priority cf-priority--red">{urgencyCounts.manque_engage} manque engagé</span> : null}
+        {urgencyCounts.rupture_actuelle ? <span class="cf-priority cf-priority--red">{urgencyCounts.rupture_actuelle} rupture actuelle</span> : null}
+        {urgencyCounts.rupture_avant_livraison ? <span class="cf-priority cf-priority--red">{urgencyCounts.rupture_avant_livraison} rupture avant livraison</span> : null}
+        {urgencyCounts.commander_aujourdhui ? <span class="cf-priority cf-priority--amber">{urgencyCounts.commander_aujourdhui} à commander aujourd’hui</span> : null}
+      </p>
+    )}
     <p class="summary-line" id="cfSummary">
       <span id="cfSupplierCount">{supplierCount}</span> fournisseur{supplierCount === 1 ? '' : 's'} à commander
       · <span id="cfTotalCartons">{totalCartons}</span> carton{totalCartons === 1 ? '' : 's'}
@@ -497,6 +527,43 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
       <span class="copy-hint" id="cfCopyAllHint" hidden>✓ copié</span>
     </div>
   </div>
+
+  <nav class="supplier-switcher" aria-label="Choix du fournisseur">
+    <select class="supplier-switcher-select" id="cfViewSelect" aria-label="Choisir une vue">
+      <option value="tous">Tous les fournisseurs</option>
+      {urgentTotal > 0 && <option value="urgences">Urgences ({urgentTotal})</option>}
+      {activeSupplierGroups.map(g => (
+        <option value={g.name}>
+          {g.name} — {g.cartons} carton{g.cartons === 1 ? '' : 's'}{g.urgentCount > 0 ? ` · ${g.urgentCount} urgent${g.urgentCount > 1 ? 's' : ''}` : ''}
+        </option>
+      ))}
+    </select>
+    <ul class="supplier-switcher-list" id="cfViewList" role="tablist">
+      <li>
+        <button type="button" class="switcher-item is-active" data-view="tous" role="tab" aria-selected="true">
+          <span class="switcher-name">Tous les fournisseurs</span>
+          <span class="switcher-meta">{totalCartons} cartons</span>
+        </button>
+      </li>
+      {urgentTotal > 0 && (
+        <li>
+          <button type="button" class="switcher-item switcher-item--urgences" data-view="urgences" role="tab" aria-selected="false">
+            <span class="switcher-name">Urgences</span>
+            <span class="switcher-badge">{urgentTotal}</span>
+          </button>
+        </li>
+      )}
+      {activeSupplierGroups.map(g => (
+        <li>
+          <button type="button" class={`switcher-item ${g.name === UNGROUPED_LABEL ? 'switcher-item--ungrouped' : ''}`} data-view={g.name} role="tab" aria-selected="false">
+            <span class="switcher-name">{g.name}</span>
+            <span class="switcher-meta">{g.cartons} carton{g.cartons === 1 ? '' : 's'}{g.cost > 0 ? ` · ${formatPrice(g.cost)}` : ''}</span>
+            {g.urgentCount > 0 && <span class="switcher-badge">{g.urgentCount}</span>}
+          </button>
+        </li>
+      ))}
+    </ul>
+  </nav>
 
   <form method="get" class="advanced">
     <details open={simulateCouverture || securiteExtraJours > 0}>
@@ -585,7 +652,7 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
           </div>
           <div class="supplier-actions">
             <button type="button" class="btn btn-ghost btn-copy-supplier" data-supplier={g.name}>Copier la commande</button>
-            <button type="button" class="btn btn-primary btn-mark-ordered" data-supplier={g.name}>Marquer comme commandé</button>
+            <button type="button" class="btn btn-primary btn-prepare-order" data-supplier={g.name}>Préparer la commande</button>
           </div>
         </div>
         <div class="supplier-rows">
@@ -605,7 +672,7 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
       <p class="review-intro">
         Historique trop court, pas encore reçu, jamais vendu, ou lecture des ventes indisponible — la quantité
         affichée (quand elle existe) utilise la même formule, mais sur des données moins sûres. Cochez
-        « Valider cette ligne » pour l'intégrer réellement à la commande de son fournisseur.
+        « Valider » pour l'intégrer réellement à la commande de son fournisseur.
       </p>
       <div class="review-rows">
         {reviewRows.map(p => <CommandeFournisseurRow p={p} showSupplierTag reviewMode />)}
@@ -618,6 +685,19 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
     data-couverture-simulation={couvertureSimulationJours}
     hidden
   ></div>
+
+  <dialog id="cfPrepareDialog" class="cf-dialog">
+    <h2 class="cf-dialog-title" id="cfDialogTitle">Préparer la commande</h2>
+    <div class="cf-dialog-freshness" id="cfDialogFreshness" role="status"></div>
+    <div class="cf-dialog-body" id="cfDialogBody"></div>
+    <p class="cf-dialog-issues" id="cfDialogIssues" hidden></p>
+    <div class="cf-dialog-totals" id="cfDialogTotals"></div>
+    <div class="cf-dialog-actions">
+      <button type="button" class="btn btn-ghost" id="cfDialogCancel">Annuler</button>
+      <button type="button" class="btn btn-ghost" id="cfDialogCopy">Copier</button>
+      <button type="button" class="btn btn-primary" id="cfDialogConfirm" disabled>Marquer comme commandé</button>
+    </div>
+  </dialog>
 </AdminLayout>
 
 <script>
@@ -627,7 +707,7 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
   //    dupliqué à la main qui pouvait diverger du premier rendu. ──
   import {
     classifyReorder, computeReorderQtyWithBridge, applyMoqAndMultiple, resolveCouvertureCible,
-    type ArrivalEvent,
+    classifyUrgencyState, type ArrivalEvent,
   } from '../../lib/constants';
 
   const root = document;
@@ -646,6 +726,15 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
     simulation: 'simulation globale',
     fournisseur: 'réglage fournisseur',
     defaut: 'défaut global',
+  };
+  const STATE_LABEL: Record<string, string> = {
+    manque_engage: 'Manque engagé',
+    rupture_actuelle: 'Rupture actuelle',
+    rupture_avant_livraison: 'Rupture avant livraison',
+    commander_aujourdhui: 'Commander aujourd’hui',
+    a_prevoir: 'À prévoir',
+    couvert_par_arrivage: 'Couvert',
+    donnees_insuffisantes: 'Données insuffisantes',
   };
 
   const qtyInputOf = (row: HTMLElement) => row.querySelector<HTMLInputElement>('[data-role="qty-input"]');
@@ -666,6 +755,7 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
   };
 
   let showCovered = false;
+  let currentView = 'tous';
 
   function parseArrivals(row: HTMLElement): ArrivalEvent[] {
     const raw = row.dataset.arrivals;
@@ -674,6 +764,23 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
       const parsed = JSON.parse(raw) as { shipmentId: string; quantity: number; eta: string | null; status: string }[];
       return parsed.map(a => ({ ...a, eta: a.eta ? new Date(a.eta) : null }));
     } catch { return []; }
+  }
+
+  // ── "Proposé : X" + distinction modifié/exclu + bouton de retour — voir
+  //    demande "Quantités et budget réunis". Zéro = exclusion explicite de la
+  //    commande, jamais confondu avec "non modifié". ──
+  function updateQtyPresentation(row: HTMLElement) {
+    const input = qtyInputOf(row);
+    const suggested = Number(row.dataset.suggested) || 0;
+    const current = qtyOf(row);
+    const revertBtn = row.querySelector<HTMLButtonElement>('[data-role="revert-btn"]');
+    const isEdited = row.dataset.edited === '1';
+    const differs = current !== suggested;
+    if (input) {
+      input.dataset.modified = isEdited && differs && current !== 0 ? '1' : '0';
+      input.dataset.excluded = isEdited && differs && current === 0 ? '1' : '0';
+    }
+    if (revertBtn) revertBtn.hidden = !(isEdited && differs);
   }
 
   function recomputeRow(row: HTMLElement, coef: number) {
@@ -704,6 +811,7 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
       suggested = 0;
     }
     const qty = suggested ?? 0;
+    row.dataset.suggested = String(qty);
 
     if (row.dataset.edited !== '1') {
       const input = qtyInputOf(row);
@@ -714,22 +822,21 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
     const covered = trigger.primary === 'couvert_par_arrivage' || (suggested != null && suggested <= 0 && manqueEngage === 0);
     row.dataset.covered = covered ? '1' : '0';
 
-    // ── Étiquette d'état + date — recalculées ici pour ne jamais rester
-    //    figées quand le coefficient change (bug corrigé : les dates
-    //    d'alerte restaient anciennes). ──
-    const stateEl = row.querySelector<HTMLElement>('[data-role="state-text"]');
-    if (stateEl) {
-      const fmt = (d: Date) => d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
-      let text = '';
-      if (manqueEngage > 0) text = `⚠ manque déjà engagé : ${manqueEngage} carton${manqueEngage > 1 ? 's' : ''}`;
-      else if (trigger.primary === 'rupture_avant_commande_normale') text = '⚠ rupture prévue avant qu’une commande normale n’arrive';
-      else if (trigger.primary === 'commander_maintenant') text = trigger.margeInsuffisante ? '⚠ marge de sécurité insuffisante — commander maintenant' : 'Commander maintenant';
-      else if (trigger.primary === 'a_prevoir') text = `Commander avant le ${trigger.dateCommandeConseillee ? fmt(trigger.dateCommandeConseillee) : '—'}`;
-      else if (trigger.primary === 'couvert_par_arrivage') text = 'Couvert par un arrivage en cours';
-      else text = 'Données insuffisantes';
-      stateEl.textContent = text;
-      stateEl.dataset.state = trigger.primary;
-      stateEl.classList.toggle('is-urgent', trigger.primary === 'rupture_avant_commande_normale' || manqueEngage > 0);
+    // ── Étiquette d'état + classe visuelle — recalculées ici pour ne jamais
+    //    rester figées quand le coefficient change. ──
+    const urgencyState = classifyUrgencyState(trigger.primary, manqueEngage, stock);
+    row.dataset.urgency = urgencyState;
+    row.className = `pr pr--${urgencyState}${row.classList.contains('pr--review') ? ' pr--review' : ''}`;
+    const chipEl = row.querySelector<HTMLElement>('[data-role="state-chip"]');
+    if (chipEl) {
+      let label = STATE_LABEL[urgencyState] ?? urgencyState;
+      if (urgencyState === 'manque_engage') label = `Manque engagé : ${manqueEngage} carton${manqueEngage > 1 ? 's' : ''}`;
+      else if (urgencyState === 'a_prevoir') {
+        const fmt = (d: Date) => d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+        label = trigger.dateCommandeConseillee ? `Avant le ${fmt(trigger.dateCommandeConseillee)}` : 'À prévoir';
+      }
+      chipEl.textContent = label;
+      chipEl.dataset.state = urgencyState;
     }
 
     // ── Panneau "Détail du calcul" : mêmes valeurs recalculées, pour ne
@@ -747,20 +854,36 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
     const pump = pumpOf(row);
     const costText = row.querySelector<HTMLElement>('[data-role="cost-text"]');
     if (costText) costText.textContent = pump == null ? '—' : eur.format(pump * qty);
+    const proposedText = row.querySelector<HTMLElement>('[data-role="proposed-text"]');
+    if (proposedText) proposedText.textContent = `Proposé : ${qty}`;
+
+    updateQtyPresentation(row);
 
     return { qty };
   }
 
+  // ── Vue courante (sélecteur fournisseur) : 'tous' | 'urgences' | nom exact
+  //    d'un fournisseur — ne retire jamais une ligne du DOM, seulement son
+  //    attribut hidden, donc aucune quantité saisie n'est perdue en changeant
+  //    de vue. ──
   function applyVisibility() {
     let hiddenCovered = 0;
     for (const row of productRows) {
       // Une ligne modifiée à la main avec une quantité réelle ne disparaît
       // jamais derrière le filtre "couvert", même si la formule la
-      // considère couverte — bug corrigé (point 5 de la demande).
+      // considère couverte — bug corrigé (point 5 de la demande d'origine).
       const manuallyKept = row.dataset.edited === '1' && qtyOf(row) > 0;
       const covered = row.dataset.covered === '1' && !manuallyKept;
-      row.hidden = covered && !showCovered;
       if (covered) hiddenCovered++;
+      const coveredHidden = covered && !showCovered;
+
+      const rowSupplier = row.dataset.supplier ?? '';
+      const isUrgent = ['manque_engage', 'rupture_actuelle', 'rupture_avant_livraison', 'commander_aujourdhui'].includes(row.dataset.urgency ?? '');
+      const viewHidden = currentView === 'urgences'
+        ? !isUrgent
+        : currentView !== 'tous' && rowSupplier !== currentView;
+
+      row.hidden = coveredHidden || viewHidden;
     }
     if (hiddenCountEl) hiddenCountEl.textContent = String(hiddenCovered);
     if (showCoveredBtn) showCoveredBtn.hidden = hiddenCovered === 0;
@@ -777,19 +900,29 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
   }
 
   function recalcTotals() {
+    // ── Le total d'en-tête, l'export "toutes les commandes" et le
+    //    récapitulatif portent TOUJOURS sur l'ensemble des fournisseurs
+    //    actifs, jamais seulement sur la vue actuellement affichée — changer
+    //    de vue ne doit pas faire varier ces chiffres. ──
     let supplierCount = 0, totalCartons = 0, totalCost = 0, totalMissingPump = 0;
 
     for (const block of Array.from(document.querySelectorAll<HTMLElement>('[data-role="supplier-block"]'))) {
-      const visibleRows = Array.from(block.querySelectorAll<HTMLElement>('[data-role="product-row"]')).filter(r => !r.hidden);
+      const rowsInBlock = Array.from(block.querySelectorAll<HTMLElement>('[data-role="product-row"]'));
+      // "Actif" = non couvert (indépendamment du filtre de vue courant) :
+      // on relit dataset.covered directement plutôt que .hidden.
+      const activeRows = rowsInBlock.filter(r => {
+        const manuallyKept = r.dataset.edited === '1' && qtyOf(r) > 0;
+        return !(r.dataset.covered === '1' && !manuallyKept);
+      });
       let cartons = 0, cost = 0, missingPump = 0;
-      for (const row of visibleRows) {
+      for (const row of activeRows) {
         const qty = qtyOf(row), pump = pumpOf(row);
         cartons += qty;
         if (pump != null) cost += pump * qty; else missingPump++;
       }
       // Un fournisseur dont toutes les quantités retenues sont à zéro (mises
       // à 0 à la main) ne compte plus comme "à commander" — bug corrigé.
-      const blockActive = !block.hidden && cartons > 0;
+      const blockActive = activeRows.length > 0 && cartons > 0;
       if (blockActive) supplierCount++;
 
       const cartonsEl = block.querySelector<HTMLElement>('[data-role="supplier-cartons"]');
@@ -838,12 +971,38 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
     recalcTotals();
   });
 
+  // ── Sélecteur de vue (liste compacte desktop / <select> mobile — même
+  //    état, deux widgets synchronisés). ──
+  function setView(view: string) {
+    currentView = view;
+    const list = document.getElementById('cfViewList');
+    if (list) {
+      for (const btn of Array.from(list.querySelectorAll<HTMLButtonElement>('.switcher-item'))) {
+        const active = btn.dataset.view === view;
+        btn.classList.toggle('is-active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      }
+    }
+    const select = document.getElementById('cfViewSelect') as HTMLSelectElement | null;
+    if (select && select.value !== view) select.value = view;
+    applyVisibility();
+    recalcTotals();
+  }
+  document.getElementById('cfViewList')?.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.switcher-item');
+    if (btn?.dataset.view) setView(btn.dataset.view);
+  });
+  document.getElementById('cfViewSelect')?.addEventListener('change', (e) => {
+    setView((e.target as HTMLSelectElement).value);
+  });
+
   root.addEventListener('input', (e) => {
     const t = e.target as HTMLElement;
     if (t?.dataset?.role === 'qty-input') {
       const row = t.closest<HTMLElement>('[data-role="product-row"]')!;
       row.dataset.edited = '1';
       qtyOf(row); // met à jour l'avertissement de saisie invalide
+      updateQtyPresentation(row);
       applyVisibility();
       recalcTotals();
     }
@@ -876,7 +1035,7 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
             </div>
             <div class="supplier-actions">
               <button type="button" class="btn btn-ghost btn-copy-supplier" data-supplier="${supplierName}">Copier la commande</button>
-              <button type="button" class="btn btn-primary btn-mark-ordered" data-supplier="${supplierName}">Marquer comme commandé</button>
+              <button type="button" class="btn btn-primary btn-prepare-order" data-supplier="${supplierName}">Préparer la commande</button>
             </div>
           </div>
           <div class="supplier-rows"></div>
@@ -889,6 +1048,43 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
     }
     applyVisibility();
     recalcTotals();
+  });
+
+  // ── Ouverture/fermeture du détail au clic sur le nom du produit (clavier :
+  //    <button> natif, Entrée/Espace fonctionnent). L'anomalie (badges) reste
+  //    visible même le panneau fermé — elle n'est jamais À L'INTÉRIEUR du
+  //    <details>. ──
+  root.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-role="toggle-details"]');
+    if (!btn) return;
+    const row = btn.closest<HTMLElement>('[data-role="product-row"]');
+    const details = row?.querySelector<HTMLDetailsElement>('[data-role="details-panel"]');
+    if (!details) return;
+    details.open = !details.open;
+    btn.setAttribute('aria-expanded', details.open ? 'true' : 'false');
+  });
+
+  // ── "Revenir à la proposition" : annule la retenue manuelle — y compris
+  //    côté brouillon serveur (sinon la valeur manuelle reviendrait au
+  //    prochain rechargement malgré ce clic). ──
+  root.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-role="revert-btn"]');
+    if (!btn) return;
+    const row = btn.closest<HTMLElement>('[data-role="product-row"]');
+    if (!row) return;
+    row.dataset.edited = '0';
+    recomputeRow(row, coefPct());
+    applyVisibility();
+    recalcTotals();
+    saveLocalCache(currentEditedValues());
+    const productId = row.dataset.id ?? '';
+    const pending = pendingSaves.get(productId);
+    if (pending) { clearTimeout(pending); pendingSaves.delete(productId); }
+    fetch('/api/admin/commande-fournisseur/draft', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ product_id: productId }),
+    }).catch(() => { /* le brouillon serveur restera stale jusqu'au prochain succès ; sans conséquence tant qu'aucune autre retenue ne s'appuie dessus */ });
   });
 
   // ── Copier / marquer comme commandé ──
@@ -913,10 +1109,19 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
     }
   }
 
-  function buildBlockExport(supplierName: string, visibleRows: HTMLElement[]): string {
+  function activeRowsOf(block: HTMLElement): HTMLElement[] {
+    // "Actif" = non couvert, indépendamment de la vue affichée à l'écran —
+    // la copie et le récapitulatif ne dépendent jamais du filtre en cours.
+    return Array.from(block.querySelectorAll<HTMLElement>('[data-role="product-row"]')).filter(row => {
+      const manuallyKept = row.dataset.edited === '1' && qtyOf(row) > 0;
+      return !(row.dataset.covered === '1' && !manuallyKept);
+    });
+  }
+
+  function buildBlockExport(supplierName: string, rowsForExport: HTMLElement[]): string {
     const lines = [supplierName, ''];
     let cartons = 0, units = 0, cost = 0, missingPump = 0;
-    for (const row of visibleRows) {
+    for (const row of rowsForExport) {
       const qty = qtyOf(row);
       if (qty <= 0) continue;
       const upc = upcOf(row), pump = pumpOf(row);
@@ -931,8 +1136,8 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
     lines.push(missingPump > 0
       ? `Coût HT connu : ${eur.format(cost)} · coût incomplet, ${missingPump} référence${missingPump > 1 ? 's' : ''} sans prix`
       : `Coût HT connu : ${eur.format(cost)}`);
-    // Cette copie ne marque RIEN comme commandé — voir le bouton "Marquer
-    // comme commandé" à côté, action distincte et explicite.
+    // Cette copie ne marque RIEN comme commandé — voir "Préparer la
+    // commande" à côté, action distincte et explicite.
     return lines.join('\n');
   }
 
@@ -946,73 +1151,186 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
     }, 1800);
   }
 
+  // ── Marquer comme commandé : effectue réellement l'enregistrement — code
+  //    partagé entre le bouton du récapitulatif et un éventuel appel direct.
+  //    Idempotence : clé générée UNE FOIS par bloc fournisseur (pas à chaque
+  //    clic) — un double-clic ou une requête réseau rejouée porte la même
+  //    clé, et le serveur (index unique partiel sur shipments.idempotency_key)
+  //    renvoie l'expédition déjà créée au lieu d'en insérer une seconde. ──
+  async function markOrdered(block: HTMLElement, btn: HTMLButtonElement): Promise<boolean> {
+    if (btn.disabled) return false;
+    const supplierName = block.dataset.supplier ?? '';
+    const supplierId = block.dataset.supplierId || null;
+    if (!block.dataset.idempotencyKey) block.dataset.idempotencyKey = crypto.randomUUID();
+    const rowsForOrder = activeRowsOf(block);
+    const items = rowsForOrder.map(row => ({
+      product_id: row.dataset.id ?? '',
+      quantity: qtyOf(row),
+      unit_cost_ht: pumpOf(row),
+    })).filter(it => it.product_id && it.quantity > 0);
+    if (items.length === 0) return false;
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = 'Enregistrement…';
+    try {
+      const res = await fetch('/api/admin/commande-fournisseur/marquer-commande', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ supplier_name: supplierName, supplier_id: supplierId, items, idempotency_key: block.dataset.idempotencyKey }),
+      });
+      if (res.ok) {
+        btn.textContent = '✓ Commande enregistrée';
+        return true;
+      }
+      btn.disabled = false;
+      btn.textContent = original;
+      alert('Échec de l’enregistrement — réessayez, ou passez par /admin/transit directement.');
+      return false;
+    } catch {
+      btn.disabled = false;
+      btn.textContent = original;
+      alert('Erreur réseau — réessayez.');
+      return false;
+    }
+  }
+
   function wireSupplierBlockButtons(block: HTMLElement) {
     block.querySelector<HTMLButtonElement>('.btn-copy-supplier')?.addEventListener('click', async () => {
       const supplierName = block.dataset.supplier ?? '';
-      const visibleRows = Array.from(block.querySelectorAll<HTMLElement>('[data-role="product-row"]')).filter(r => !r.hidden);
-      const ok = await copyText(buildBlockExport(supplierName, visibleRows));
+      const ok = await copyText(buildBlockExport(supplierName, activeRowsOf(block)));
       if (ok) flashCopied(block.querySelector('.btn-copy-supplier')!);
     });
 
-    const markBtn = block.querySelector<HTMLButtonElement>('.btn-mark-ordered');
-    // Une clé par bouton, générée UNE FOIS (pas à chaque clic) : un
-    // double-clic ou une requête réseau rejouée porte la même clé, et le
-    // serveur (index unique partiel sur shipments.idempotency_key) renvoie
-    // l'expédition déjà créée au lieu d'en insérer une seconde.
-    if (markBtn && !markBtn.dataset.idempotencyKey) {
-      markBtn.dataset.idempotencyKey = crypto.randomUUID();
-    }
-
-    markBtn?.addEventListener('click', async (e) => {
-      const btn = e.currentTarget as HTMLButtonElement;
-      if (btn.disabled) return; // filet en plus de la désactivation synchrone ci-dessous
-      const supplierName = block.dataset.supplier ?? '';
-      const supplierId = block.dataset.supplierId || null;
-      const visibleRows = Array.from(block.querySelectorAll<HTMLElement>('[data-role="product-row"]')).filter(r => !r.hidden);
-      const items = visibleRows.map(row => ({
-        product_id: row.dataset.id ?? '',
-        quantity: qtyOf(row),
-        unit_cost_ht: pumpOf(row),
-      })).filter(it => it.product_id && it.quantity > 0);
-      if (items.length === 0) return;
-      btn.disabled = true; // synchrone, avant tout await : un second clic pendant la frappe ne fait rien
-      const original = btn.textContent;
-      btn.textContent = 'Enregistrement…';
-      try {
-        const res = await fetch('/api/admin/commande-fournisseur/marquer-commande', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ supplier_name: supplierName, supplier_id: supplierId, items, idempotency_key: btn.dataset.idempotencyKey }),
-        });
-        if (res.ok) {
-          btn.textContent = '✓ Commande enregistrée';
-          setTimeout(() => { window.location.href = '/admin/transit'; }, 900);
-        } else {
-          btn.disabled = false;
-          btn.textContent = original;
-          alert('Échec de l’enregistrement — réessayez, ou passez par /admin/transit directement.');
-        }
-      } catch {
-        btn.disabled = false;
-        btn.textContent = original;
-        alert('Erreur réseau — réessayez.');
-      }
+    block.querySelector<HTMLButtonElement>('.btn-prepare-order')?.addEventListener('click', () => {
+      openPrepareDialog(block);
     });
   }
 
   document.querySelectorAll<HTMLElement>('[data-role="supplier-block"]').forEach(wireSupplierBlockButtons);
 
   document.getElementById('cfCopyAll')?.addEventListener('click', async () => {
-    const blocks = Array.from(document.querySelectorAll<HTMLElement>('[data-role="supplier-block"]')).filter(b => !b.hidden);
-    const parts = blocks.map(block => {
-      const supplierName = block.dataset.supplier ?? '';
-      const visibleRows = Array.from(block.querySelectorAll<HTMLElement>('[data-role="product-row"]')).filter(r => !r.hidden);
-      return buildBlockExport(supplierName, visibleRows);
-    });
+    const blocks = Array.from(document.querySelectorAll<HTMLElement>('[data-role="supplier-block"]'))
+      .filter(b => activeRowsOf(b).some(r => qtyOf(r) > 0));
+    const parts = blocks.map(block => buildBlockExport(block.dataset.supplier ?? '', activeRowsOf(block)));
     const btn = document.getElementById('cfCopyAll') as HTMLElement;
     const hint = document.getElementById('cfCopyAllHint');
     const ok = await copyText(parts.join('\n\n───\n\n'));
     if (ok) flashCopied(btn, hint);
+  });
+
+  // ── Récapitulatif "Préparer la commande" — voir demande "Action
+  //    principale claire". Avant de laisser confirmer, revérifie stock,
+  //    prix et arrivages en cours contre l'état réellement en base : la page
+  //    peut être restée ouverte longtemps, un autre poste a pu enregistrer
+  //    une réception ou un arrivage entre-temps. ──
+  const dialogEl = document.getElementById('cfPrepareDialog') as HTMLDialogElement | null;
+  let dialogBlock: HTMLElement | null = null;
+
+  function openPrepareDialog(block: HTMLElement) {
+    if (!dialogEl) return;
+    dialogBlock = block;
+    const supplierName = block.dataset.supplier ?? '';
+    const titleEl = document.getElementById('cfDialogTitle');
+    if (titleEl) titleEl.textContent = `Préparer la commande — ${supplierName}`;
+
+    const rowsForOrder = activeRowsOf(block).filter(r => qtyOf(r) > 0);
+    const bodyEl = document.getElementById('cfDialogBody');
+    const totalsEl = document.getElementById('cfDialogTotals');
+    const issuesEl = document.getElementById('cfDialogIssues');
+    const confirmBtn = document.getElementById('cfDialogConfirm') as HTMLButtonElement | null;
+    const freshnessEl = document.getElementById('cfDialogFreshness');
+
+    let cartons = 0, cost = 0, missingPump = 0;
+    const issues = new Set<string>();
+    const delais = new Set<number>();
+    const lineHtml: string[] = [];
+    for (const row of rowsForOrder) {
+      const qty = qtyOf(row);
+      const pump = pumpOf(row);
+      cartons += qty;
+      if (pump != null) cost += pump * qty; else { missingPump++; issues.add('Au moins une référence sans prix d’achat — exclue du coût'); }
+      delais.add(Number(row.dataset.delaiJours) || 0);
+      if (row.dataset.urgency === 'rupture_actuelle' || row.dataset.urgency === 'manque_engage') issues.add('Au moins une référence déjà en rupture ou avec un manque engagé');
+      if (row.querySelector('[data-role="qty-input"]')?.getAttribute('data-modified') === '1' || row.querySelector('[data-role="qty-input"]')?.getAttribute('data-excluded') === '1') {
+        issues.add('Au moins une quantité a été modifiée à la main par rapport à la proposition');
+      }
+      if (row.querySelectorAll('.pr-badge').length > 0) {
+        row.querySelectorAll('.pr-badge').forEach(b => issues.add(b.textContent?.trim() ?? ''));
+      }
+      lineHtml.push(
+        `<div class="cf-dialog-line"><span class="cf-dialog-line-name">${row.dataset.name ?? ''}</span>` +
+        `<span class="cf-dialog-line-qty">${qty} carton${qty > 1 ? 's' : ''}</span>` +
+        `<span class="cf-dialog-line-cost">${pump != null ? eur.format(pump * qty) : '—'}</span></div>`
+      );
+    }
+    if (bodyEl) bodyEl.innerHTML = lineHtml.join('') || '<p class="cf-dialog-empty">Aucune ligne retenue.</p>';
+    const delaiText = delais.size === 1 ? `Délai : ${[...delais][0]} j` : `Délais : ${[...delais].sort((a, b) => a - b).join('–')} j`;
+    if (totalsEl) {
+      totalsEl.innerHTML = `<strong>${num.format(cartons)} carton${cartons === 1 ? '' : 's'}</strong> · ` +
+        (missingPump > 0 ? `Total connu ${eur.format(cost)} HT · coût incomplet` : `${eur.format(cost)} HT`) +
+        ` · ${delaiText}`;
+    }
+    if (issuesEl) {
+      if (issues.size > 0) {
+        issuesEl.hidden = false;
+        issuesEl.innerHTML = `<strong>À vérifier :</strong> ${[...issues].filter(Boolean).join(' · ')}`;
+      } else {
+        issuesEl.hidden = true;
+      }
+    }
+
+    if (confirmBtn) confirmBtn.disabled = true;
+    if (freshnessEl) { freshnessEl.textContent = 'Vérification des données à jour…'; freshnessEl.className = 'cf-dialog-freshness'; }
+
+    const ids = rowsForOrder.map(r => r.dataset.id).filter(Boolean) as string[];
+    if (ids.length === 0) {
+      if (freshnessEl) freshnessEl.textContent = 'Aucune ligne à vérifier.';
+      if (confirmBtn) confirmBtn.disabled = true;
+    } else {
+      fetch(`/api/admin/commande-fournisseur/refresh-check?ids=${encodeURIComponent(ids.join(','))}`)
+        .then(res => (res.ok ? res.json() : Promise.reject(new Error('http'))))
+        .then((data: { products?: Record<string, { stockDisponible: number; pump: number | null; transitQty: number }> }) => {
+          let stale = false;
+          for (const row of rowsForOrder) {
+            const fresh = data.products?.[row.dataset.id ?? ''];
+            if (!fresh) continue;
+            if (Number(row.dataset.stock) !== fresh.stockDisponible) stale = true;
+            if (pumpOf(row) !== fresh.pump) stale = true;
+            if (Number(row.dataset.transitQty) !== fresh.transitQty) stale = true;
+          }
+          if (stale) {
+            if (freshnessEl) {
+              freshnessEl.textContent = '⚠ Des données ont changé depuis le chargement de la page (stock, prix ou arrivage) — rechargez la page avant de confirmer.';
+              freshnessEl.classList.add('is-stale');
+            }
+            if (confirmBtn) confirmBtn.disabled = true;
+          } else {
+            if (freshnessEl) freshnessEl.textContent = '✓ Données à jour.';
+            if (confirmBtn) confirmBtn.disabled = false;
+          }
+        })
+        .catch(() => {
+          if (freshnessEl) freshnessEl.textContent = 'Vérification indisponible — contrôlez manuellement avant de confirmer.';
+          if (confirmBtn) confirmBtn.disabled = false;
+        });
+    }
+
+    dialogEl.showModal();
+  }
+
+  document.getElementById('cfDialogCancel')?.addEventListener('click', () => dialogEl?.close());
+  document.getElementById('cfDialogCopy')?.addEventListener('click', async () => {
+    if (!dialogBlock) return;
+    const supplierName = dialogBlock.dataset.supplier ?? '';
+    const ok = await copyText(buildBlockExport(supplierName, activeRowsOf(dialogBlock).filter(r => qtyOf(r) > 0)));
+    const btn = document.getElementById('cfDialogCopy');
+    if (ok && btn) flashCopied(btn);
+  });
+  document.getElementById('cfDialogConfirm')?.addEventListener('click', async (e) => {
+    if (!dialogBlock) return;
+    const btn = e.currentTarget as HTMLButtonElement;
+    const ok = await markOrdered(dialogBlock, btn);
+    if (ok) setTimeout(() => { window.location.href = '/admin/transit'; }, 900);
   });
 
   // ── Brouillon : les quantités retenues à la main sont sauvegardées côté
@@ -1061,6 +1379,7 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
       for (const r of rows) values[r.product_id] = r.quantity;
       applyDraftValues(values);
       saveLocalCache({ ...loadLocalCache(), ...values });
+      for (const row of productRows) updateQtyPresentation(row);
       applyVisibility();
       recalcTotals();
     })
@@ -1106,13 +1425,80 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
 .alert--error { color: oklch(0.46 0.18 25); background: oklch(0.97 0.03 25); border-color: oklch(0.88 0.07 25); }
 .alert--warn  { color: oklch(0.42 0.14 60); background: oklch(0.96 0.05 60); border-color: oklch(0.87 0.09 60); }
 
-.headline-row { margin-bottom: var(--space-4); }
-.headline { font-size: 1.4rem; font-weight: 800; color: var(--color-ink); margin: 0 0 4px; }
-.headline strong { color: var(--color-primary-deep); }
-.summary-row, .headline-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.cf-header { margin-bottom: var(--space-4); }
+.cf-title { font-size: var(--text-xl); font-weight: 800; color: var(--color-ink); margin: 0 0 4px; }
+.cf-headline { font-size: 1.15rem; font-weight: 700; color: var(--color-ink); margin: 0 0 4px; }
+.cf-headline strong { color: var(--color-primary-deep); }
+.cf-priority-line { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 6px; }
+.cf-priority {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+.cf-priority--red   { color: oklch(0.30 0.16 25); background: oklch(0.92 0.08 25); }
+.cf-priority--amber { color: oklch(0.42 0.14 60); background: oklch(0.94 0.08 65); }
 .summary-line { font-size: var(--text-base); font-weight: 600; color: var(--color-muted); margin: 0; }
 .summary-actions { display: flex; align-items: center; gap: var(--space-3); margin-top: 6px; }
 .copy-hint { font-size: var(--text-xs); font-weight: 600; color: oklch(0.48 0.13 150); }
+
+.supplier-switcher { margin-bottom: var(--space-4); }
+.supplier-switcher-select {
+  display: none;
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+.supplier-switcher-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.switcher-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-ink);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+}
+.switcher-item:hover { background: var(--color-surface-2); }
+.switcher-item.is-active { background: var(--color-primary); border-color: var(--color-primary); color: white; }
+.switcher-item.is-active .switcher-meta { color: white; opacity: 0.85; }
+.switcher-item--urgences { border-color: oklch(0.72 0.14 55); }
+.switcher-item--ungrouped { font-style: italic; }
+.switcher-name { white-space: nowrap; }
+.switcher-meta { font-weight: 500; color: var(--color-muted); white-space: nowrap; }
+.switcher-badge {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: oklch(0.92 0.08 25);
+  color: oklch(0.30 0.16 25);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-align: center;
+}
+.switcher-item.is-active .switcher-badge { background: white; }
+
+@media (max-width: 640px) {
+  .supplier-switcher-select { display: block; }
+  .supplier-switcher-list { display: none; }
+}
 
 .advanced { margin-bottom: var(--space-5); }
 .advanced summary {
@@ -1248,8 +1634,79 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
 .empty-title { font-weight: 600; color: var(--color-ink); margin-bottom: var(--space-2); }
 .empty-body { color: var(--color-muted); }
 
+.cf-dialog {
+  width: min(640px, 92vw);
+  max-height: 85vh;
+  padding: var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-ink);
+}
+.cf-dialog::backdrop { background: oklch(0.15 0.01 45.9 / 0.5); }
+.cf-dialog-title { font-size: var(--text-lg); font-weight: 700; margin: 0 0 var(--space-3); }
+.cf-dialog-freshness {
+  padding: 6px 10px;
+  margin-bottom: var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  background: var(--color-surface);
+  border-radius: var(--radius-sm);
+}
+.cf-dialog-freshness.is-stale { color: oklch(0.46 0.18 25); background: oklch(0.97 0.03 25); }
+.cf-dialog-body {
+  max-height: 40vh;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-3);
+}
+.cf-dialog-line {
+  display: grid;
+  grid-template-columns: 1fr 90px 100px;
+  gap: var(--space-2);
+  padding: 6px var(--space-3);
+  font-size: var(--text-sm);
+  border-bottom: 1px solid var(--color-border);
+}
+.cf-dialog-line:last-child { border-bottom: none; }
+.cf-dialog-line-qty, .cf-dialog-line-cost { text-align: right; font-family: var(--font-mono); }
+.cf-dialog-empty { padding: var(--space-3); color: var(--color-muted); font-size: var(--text-sm); }
+.cf-dialog-issues {
+  font-size: var(--text-xs);
+  color: oklch(0.42 0.14 60);
+  background: oklch(0.96 0.05 60);
+  border: 1px solid oklch(0.87 0.09 60);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  margin: 0 0 var(--space-3);
+}
+.cf-dialog-totals { font-size: var(--text-sm); margin-bottom: var(--space-4); }
+.cf-dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  border: 1px solid transparent;
+  cursor: pointer;
+  background: none;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: var(--color-primary); color: white; border-color: var(--color-primary); }
+.btn-primary:hover:not(:disabled) { background: var(--color-primary-deep); border-color: var(--color-primary-deep); }
+.btn-ghost { background: transparent; color: var(--color-ink); border-color: var(--color-border); }
+.btn-ghost:hover { background: var(--color-surface); }
+
 @media (max-width: 640px) {
-  .summary-row, .headline-row { flex-direction: column; align-items: flex-start; }
+  .cf-priority-line, .summary-line, .cf-headline { font-size: var(--text-sm); }
   .supplier-head { flex-direction: column; align-items: flex-start; }
+  .supplier-actions { width: 100%; }
+  .supplier-actions .btn { flex: 1; }
 }
 </style>
