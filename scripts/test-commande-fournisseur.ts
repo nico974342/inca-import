@@ -7,6 +7,7 @@
 
 import {
   resolveDelaiLivraison, classifyReorder, stockAtReceipt, computeReorderQtyForTarget,
+  computeReorderQtyWithBridge,
   applyMoqAndMultiple, engagementNonCouvert, projectStock, computeAdjustedVitesse,
   addDays,
   type ArrivalEvent,
@@ -149,6 +150,59 @@ console.log('\nScénario 4bis — réserve de sécurité entamée entre aujourd�
   const receipt = stockAtReceipt(disponible, vq, delai, arrivals);
   assert(approx(receipt, 10, 0.01), `stock prévu à réception (J+5, avant l’arrivage J+8) = 10, pas 110 (obtenu: ${receipt})`,
     '20 - 5x2 = 10 ; le gros arrivage de J+8 n’est pas encore là');
+
+  // Dimensionnement complet : ni 60 (cible pleine à J+5, ignore l’arrivage
+  // qui suit de 3 jours), ni 0 (soustraction globale des 100, ignore le
+  // creux de sécurité avant qu’ils n’arrivent) — seulement de quoi tenir la
+  // réserve jusqu’à J+8, l’arrivage faisant le reste.
+  const qty = computeReorderQtyWithBridge(disponible, vq, delai, /* couverture */ 30, securite, arrivals);
+  assert(qty === 6, `dimensionnement = 6, ni 60 ni 0 (obtenu: ${qty})`,
+    'stock juste avant l’arrivage de J+8 (après consommation du jour) = 4 ; réserve visée 10 ; besoin 10-4=6');
+}
+
+// ── Scénario 4ter : table complète — le dimensionnement traite TOUS les
+//    arrivages sur la période de couverture, pas seulement le cas où l'un
+//    d'eux suffit seul à couvrir la cible. Mêmes données que 4bis (20
+//    dispo, 2/j, délai 5j, couverture 30j → jusqu'à J+35, sécurité 5j = 10
+//    cartons), arrivages différents. ──
+console.log('\nScénario 4ter — le dimensionnement couvre tous les arrivages de la période, pas juste le premier assez gros');
+{
+  const disponible = 20, vq = 2, delai = 5, couverture = 30, securite = 5;
+
+  const cas: [string, ArrivalEvent[], number, string][] = [
+    ['100 à J+8', [
+      { shipmentId: 'a', quantity: 100, eta: addDays(new Date(), 8), status: 'commande' },
+    ], 6, 'creux avant J+8 (4) → 10-4=6 ; l’arrivage seul couvre largement le reste de la fenêtre'],
+
+    ['30 à J+8 (trop petit pour couvrir seul)', [
+      { shipmentId: 'a', quantity: 30, eta: addDays(new Date(), 8), status: 'commande' },
+    ], 30, '30 ne suffit pas à tenir jusqu’à J+35 : le creux le plus bas de la fenêtre tombe en fin de période (J+35), pas juste avant J+8'],
+
+    ['30 à J+8 puis 20 à J+20', [
+      { shipmentId: 'a', quantity: 30, eta: addDays(new Date(), 8), status: 'commande' },
+      { shipmentId: 'b', quantity: 20, eta: addDays(new Date(), 20), status: 'commande' },
+    ], 10, 'deux arrivages partiels combinés : le creux le plus bas tombe à la toute fin de la fenêtre (J+35), après les deux'],
+
+    ['100 à J+36 (hors de la fenêtre de couverture)', [
+      { shipmentId: 'a', quantity: 100, eta: addDays(new Date(), 36), status: 'commande' },
+    ], 60, 'un arrivage après J+35 ne compte pas pour CETTE commande — se réduit à la formule simple (cible − stock à réception)'],
+  ];
+
+  for (const [label, arrivals, expected, detail] of cas) {
+    const got = computeReorderQtyWithBridge(disponible, vq, delai, couverture, securite, arrivals);
+    assert(got === expected, `${label} → ${expected} (obtenu: ${got})`, detail);
+  }
+
+  // Arrivages simultanés : deux lignes le même jour doivent se cumuler
+  // exactement comme une seule ligne de la somme des deux.
+  const separes = computeReorderQtyWithBridge(disponible, vq, delai, couverture, securite, [
+    { shipmentId: 'a', quantity: 20, eta: addDays(new Date(), 8), status: 'commande' },
+    { shipmentId: 'b', quantity: 15, eta: addDays(new Date(), 8), status: 'commande' },
+  ]);
+  const groupes = computeReorderQtyWithBridge(disponible, vq, delai, couverture, securite, [
+    { shipmentId: 'c', quantity: 35, eta: addDays(new Date(), 8), status: 'commande' },
+  ]);
+  assert(separes === groupes, `arrivages simultanés cumulés correctement (20+15=${separes} == 35=${groupes})`);
 }
 
 // ── Scénario 5 : marge insuffisante ≠ rupture avant livraison ──

@@ -699,22 +699,32 @@ export function projectStock(
   arrivals: ArrivalEvent[],
   horizonJours: number,
   from: Date = new Date(),
-): { date: Date; stock: number }[] {
+): { date: Date; stock: number; preArrivalStock: number }[] {
   const dated = arrivals
     .filter((a): a is ArrivalEvent & { eta: Date } => a.eta != null && a.quantity > 0)
     .sort((a, b) => a.eta.getTime() - b.eta.getTime());
 
-  const points: { date: Date; stock: number }[] = [];
+  const points: { date: Date; stock: number; preArrivalStock: number }[] = [];
   let stock = disponible;
   let idx = 0;
   for (let d = 0; d <= horizonJours; d++) {
     const date = addDays(from, d);
+    // La consommation du jour est retirée AVANT qu'un arrivage du même jour
+    // ne soit crédité — hypothèse prudente : la réserve doit tenir jusqu'à
+    // l'instant même de la livraison, pas seulement jusqu'à la veille (un
+    // camion qui arrive en fin de journée ne rattrape pas les ventes du
+    // matin). preArrivalStock expose ce creux ; il est identique à `stock`
+    // les jours sans arrivage, et n'affecte donc AUCUNE valeur déjà validée
+    // ailleurs (rupture, seuil de sécurité, stockAtReceipt...) qui ne lit
+    // que `stock` — la somme algébrique du jour est la même quel que soit
+    // l'ordre des deux opérations, seul le point intermédiaire change.
+    if (d > 0) stock -= venteQuotidienne;
+    const preArrivalStock = stock;
     while (idx < dated.length && sameCalendarDay(dated[idx].eta, date)) {
       stock += dated[idx].quantity;
       idx++;
     }
-    if (d > 0) stock -= venteQuotidienne;
-    points.push({ date, stock });
+    points.push({ date, stock, preArrivalStock });
   }
   return points;
 }
@@ -870,6 +880,55 @@ export function computeReorderQtyForTarget(
   if (!venteQuotidienne || venteQuotidienne <= 0) return null;
   const cible = venteQuotidienne * (couvertureCibleJours + joursSecurite);
   const qty = Math.ceil(cible - stockPrevuAReception);
+  return qty > 0 ? qty : 0;
+}
+
+/** Dimensionne la commande en tenant compte de TOUS les arrivages déjà
+ *  engagés pendant la période de couverture — pas seulement du cas où l'un
+ *  d'eux suffit, à lui seul, à couvrir la cible entière.
+ *
+ *  Règle : projette le stock SANS cette nouvelle commande (arrivages déjà
+ *  en cours à leur date), cherche le stock minimum atteint entre la
+ *  réception de cette commande (J+délai) et la fin de sa couverture cible
+ *  (J+délai+couvertureCibleJours) — creux juste avant chaque arrivage
+ *  compris (preArrivalStock, voir projectStock) — puis commande de quoi
+ *  ramener CE minimum au niveau de la réserve de sécurité :
+ *    Qty = max(0, arrondi_sup(sécurité − stock_minimum_projeté)).
+ *
+ *  Un manque déjà présent AVANT cette réception (J < délai) n'entre jamais
+ *  dans ce calcul : c'est une alerte distincte (engagementNonCouvert /
+ *  classifyReorder), que cette commande, qui n'arrivera qu'à J+délai, ne
+ *  peut pas résoudre rétroactivement.
+ *
+ *  Se réduit exactement à la cible simple (vente × (couverture+sécurité) −
+ *  stock à réception) quand aucun arrivage ne survient dans la fenêtre : la
+ *  projection décline alors sans interruption, et son minimum tombe
+ *  mécaniquement au dernier jour de la fenêtre — même résultat que l'ancien
+ *  calcul ponctuel, sans qu'il faille le traiter comme un cas à part. */
+export function computeReorderQtyWithBridge(
+  disponible: number,
+  venteQuotidienne: number | null | undefined,
+  delaiJours: number,
+  couvertureCibleJours: number,
+  joursSecurite: number,
+  arrivals: ArrivalEvent[],
+  from: Date = new Date(),
+): number | null {
+  if (!venteQuotidienne || venteQuotidienne <= 0) return null;
+
+  const D = Math.max(0, Math.round(delaiJours));
+  const windowEnd = D + Math.max(0, Math.round(couvertureCibleJours));
+  const securiteCartons = venteQuotidienne * joursSecurite;
+
+  const points = projectStock(disponible, venteQuotidienne, arrivals, windowEnd, from);
+
+  let minStock = Infinity;
+  for (let i = D; i <= windowEnd && i < points.length; i++) {
+    minStock = Math.min(minStock, points[i].preArrivalStock);
+  }
+  if (minStock === Infinity) minStock = disponible;
+
+  const qty = Math.ceil(Math.max(0, securiteCartons - minStock));
   return qty > 0 ? qty : 0;
 }
 

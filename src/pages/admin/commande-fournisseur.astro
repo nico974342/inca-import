@@ -9,7 +9,7 @@ import {
   reconstructSellableDays, computeAdjustedVitesse, detecteVenteExceptionnelle, computeConfianceVentes,
   SHIPMENT_ACTIVE_STATUSES, computeShipmentProgress,
   DELAI_LIVRAISON_DEFAUT_JOURS, resolveDelaiLivraison, delaiAVerifier,
-  classifyReorder, stockAtReceipt, computeReorderQtyForTarget, applyMoqAndMultiple,
+  classifyReorder, computeReorderQtyWithBridge, applyMoqAndMultiple,
   engagementNonCouvert,
   type ArrivalEvent, type ConfianceVentes,
 } from '../../lib/constants';
@@ -255,8 +255,7 @@ const rows = allProducts.map(p => {
 
   let suggestedQty: number | null = null;
   if (hasSales && (trigger.primary === 'a_prevoir' || trigger.primary === 'commander_maintenant' || trigger.primary === 'rupture_avant_commande_normale')) {
-    const receiptStock = stockAtReceipt(stockDisponible, venteQuotidienne, delai.jours, arrivals, now);
-    const rawQty = computeReorderQtyForTarget(venteQuotidienne, receiptStock, couvertureCibleJours, joursSecurite);
+    const rawQty = computeReorderQtyWithBridge(stockDisponible, venteQuotidienne, delai.jours, couvertureCibleJours, joursSecurite, arrivals, now);
     suggestedQty = rawQty == null ? null : applyMoqAndMultiple(rawQty, (p as any).commande_min_cartons, (p as any).commande_multiple_cartons);
   } else if (hasSales) {
     suggestedQty = 0; // couvert_par_arrivage : rien à commander maintenant
@@ -530,7 +529,7 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
   //    serveur — pas de client Supabase importé), donc plus de "miroir"
   //    dupliqué à la main qui pouvait diverger du premier rendu. ──
   import {
-    classifyReorder, stockAtReceipt, computeReorderQtyForTarget, applyMoqAndMultiple,
+    classifyReorder, computeReorderQtyWithBridge, applyMoqAndMultiple,
     type ArrivalEvent,
   } from '../../lib/constants';
 
@@ -593,8 +592,7 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
 
     let suggested: number | null = null;
     if (hasSales && (trigger.primary === 'a_prevoir' || trigger.primary === 'commander_maintenant' || trigger.primary === 'rupture_avant_commande_normale')) {
-      const receiptStock = stockAtReceipt(stock, venteQuotidienne, delaiJours, arrivals, now);
-      const raw = computeReorderQtyForTarget(venteQuotidienne, receiptStock, couvertureCibleJours, securiteJours);
+      const raw = computeReorderQtyWithBridge(stock, venteQuotidienne, delaiJours, couvertureCibleJours, securiteJours, arrivals, now);
       suggested = raw == null ? null : applyMoqAndMultiple(raw, minCartons, multipleCartons);
     } else if (hasSales) {
       suggested = 0;
