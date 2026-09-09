@@ -9,6 +9,7 @@ import {
   reconstructSellableDays, computeAdjustedVitesse, detecteVenteExceptionnelle, computeConfianceVentes,
   SHIPMENT_ACTIVE_STATUSES, computeShipmentProgress,
   DELAI_LIVRAISON_DEFAUT_JOURS, resolveDelaiLivraison, delaiAVerifier,
+  COUVERTURE_CIBLE_DEFAUT_JOURS, resolveCouvertureCible,
   classifyReorder, computeReorderQtyWithBridge, applyMoqAndMultiple,
   engagementNonCouvert,
   type ArrivalEvent, type ConfianceVentes,
@@ -19,14 +20,16 @@ if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'];
 
-// ── Couverture cible après réception : paramètre EXPLICITE et distinct du
-//    délai fournisseur (voir computeReorderQtyForTarget). Réglable via
-//    l'URL, comme l'étaient le mode/horizon dans l'ancienne version — pas de
-//    fréquence de commande imposée, seulement un objectif de stock une fois
-//    la marchandise arrivée. ──
-const COUVERTURE_CIBLE_DEFAUT_JOURS = 30;
+// ── Couverture cible après réception : réglée PAR FOURNISSEUR sur
+//    /admin/fournisseurs (voir resolveCouvertureCible) — chaque produit
+//    utilise la valeur de son propre fournisseur, pas un réglage unique pour
+//    toute la page. Le réglage global ci-dessous n'est qu'une simulation
+//    facultative (désactivée par défaut) : quand elle est active, elle
+//    remplace la valeur de TOUS les fournisseurs pour explorer une
+//    hypothèse — elle n'écrase jamais leurs réglages enregistrés. ──
+const simulateCouverture = Astro.url.searchParams.get('simulate_couverture') === '1';
 const couvertureParam = Number(Astro.url.searchParams.get('couverture'));
-const couvertureCibleJours = Number.isFinite(couvertureParam) && couvertureParam > 0
+const couvertureSimulationJours = Number.isFinite(couvertureParam) && couvertureParam > 0
   ? couvertureParam
   : COUVERTURE_CIBLE_DEFAUT_JOURS;
 
@@ -117,14 +120,17 @@ if (productIds.length > 0) {
   }
 }
 
-// ── Délais + sécurité par fournisseur. Le cycle_commande_jours n'est plus
-//    consulté ici : la couverture cible (ci-dessus) le remplace, pour ne
-//    plus imposer une cadence de commande calquée sur le fournisseur — voir
-//    la demande explicite de ne pas forcer une fréquence égale au délai. ──
+// ── Délais + sécurité + couverture cible par fournisseur. Le
+//    cycle_commande_jours n'est plus consulté ici : la couverture cible le
+//    remplace, pour ne plus imposer une cadence de commande calquée sur le
+//    fournisseur — voir la demande explicite de ne pas forcer une fréquence
+//    égale au délai. ──
 let delaiBySupplier = new Map<string, number | null>();
 let securiteBySupplier = new Map<string, number | null>();
+let couvertureBySupplier = new Map<string, number | null>();
 let suppliersTableMissing = false;
 let securiteColumnMissing = false;
+let couvertureColumnMissing = false;
 {
   const probe = await supabaseAdmin.from('suppliers').select('id').limit(1);
   if (probe.error?.code === 'PGRST205' || probe.error?.code === '42P01') {
@@ -132,12 +138,16 @@ let securiteColumnMissing = false;
   } else {
     const probeSecurite = await supabaseAdmin.from('suppliers').select('jours_securite').limit(1);
     securiteColumnMissing = probeSecurite.error?.code === '42703';
+    const probeCouverture = await supabaseAdmin.from('suppliers').select('couverture_cible_jours').limit(1);
+    couvertureColumnMissing = probeCouverture.error?.code === '42703';
     const cols = ['name', 'delai_livraison_jours'];
     if (!securiteColumnMissing) cols.push('jours_securite');
+    if (!couvertureColumnMissing) cols.push('couverture_cible_jours');
     const res = await supabaseAdmin.from('suppliers').select(cols.join(', '));
     for (const s of (res.data ?? []) as any[]) {
       delaiBySupplier.set(s.name, s.delai_livraison_jours);
       securiteBySupplier.set(s.name, securiteColumnMissing ? null : s.jours_securite);
+      couvertureBySupplier.set(s.name, couvertureColumnMissing ? null : s.couverture_cible_jours);
     }
   }
 }
@@ -230,6 +240,11 @@ const rows = allProducts.map(p => {
   );
   const aVerifierDelai = delaiAVerifier((p as any).delai_livraison_jours, (p as any).delai_livraison_override);
   const joursSecurite = ((supplierName ? securiteBySupplier.get(supplierName) : null) ?? 0) + securiteExtraJours;
+  const couverture = resolveCouvertureCible(
+    supplierName ? couvertureBySupplier.get(supplierName) ?? null : null,
+    simulateCouverture,
+    couvertureSimulationJours,
+  );
 
   const dispo = availability.get(p.id);
   const stockPhysique = p.stock_quantity ?? 0;
@@ -255,7 +270,7 @@ const rows = allProducts.map(p => {
 
   let suggestedQty: number | null = null;
   if (hasSales && (trigger.primary === 'a_prevoir' || trigger.primary === 'commander_maintenant' || trigger.primary === 'rupture_avant_commande_normale')) {
-    const rawQty = computeReorderQtyWithBridge(stockDisponible, venteQuotidienne, delai.jours, couvertureCibleJours, joursSecurite, arrivals, now);
+    const rawQty = computeReorderQtyWithBridge(stockDisponible, venteQuotidienne, delai.jours, couverture.jours, joursSecurite, arrivals, now);
     suggestedQty = rawQty == null ? null : applyMoqAndMultiple(rawQty, (p as any).commande_min_cartons, (p as any).commande_multiple_cartons);
   } else if (hasSales) {
     suggestedQty = 0; // couvert_par_arrivage : rien à commander maintenant
@@ -295,7 +310,8 @@ const rows = allProducts.map(p => {
     vitesseVente, historyWeeks, shortHistory, hasReception, hasSales, reliable, unreliableReason, urgent,
     confiance, stockoutDetected, reconstructionApplied, reconstructionUncertain, outlierDetected, orderCount, qtySold,
     suggestedQty, covered,
-    delai, aVerifierDelai, joursSecurite, couvertureCibleJours,
+    delai, aVerifierDelai, joursSecurite, couverture,
+    couvertureFournisseurJours: supplierName ? couvertureBySupplier.get(supplierName) ?? null : null,
     trigger, manqueEngage,
     transitQty, transitHasUnknownEta, transitLate,
     nextArrivalLabel: nextArrivalEta ? fmtDate(nextArrivalEta) : null,
@@ -394,6 +410,14 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
       renseignez-le dans <a href="/admin/fournisseurs">Fournisseurs</a>.
     </div>
   )}
+  {!suppliersTableMissing && couvertureColumnMissing && (
+    <div class="alert alert--warn" role="status">
+      La colonne <code>couverture_cible_jours</code> n'existe pas encore — tous les fournisseurs utilisent
+      {' '}{COUVERTURE_CIBLE_DEFAUT_JOURS} jours par défaut. Lancez
+      <code>supabase/migrations/suppliers_couverture_cible.sql</code> puis réglez-la par fournisseur dans
+      <a href="/admin/fournisseurs">Fournisseurs</a>.
+    </div>
+  )}
   {productsErr && (
     <div class="alert alert--error" role="alert">Erreur de lecture du catalogue : {productsErr.message}</div>
   )}
@@ -432,11 +456,25 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
   </div>
 
   <form method="get" class="advanced">
-    <details open={couvertureCibleJours !== COUVERTURE_CIBLE_DEFAUT_JOURS || securiteExtraJours > 0}>
+    <details open={simulateCouverture || securiteExtraJours > 0}>
       <summary>Réglages avancés</summary>
       <div class="advanced-body">
-        <label class="advanced-label" for="cfCouverture">Couverture cible après réception (jours)</label>
-        <input type="number" id="cfCouverture" name="couverture" class="advanced-input" value={couvertureCibleJours} min="1" step="1" onchange="this.form.submit()" />
+        <label class="advanced-checkbox">
+          <input type="checkbox" id="cfSimulateCouverture" name="simulate_couverture" value="1" checked={simulateCouverture} onchange="this.form.submit()" />
+          Simuler une couverture identique pour tous les fournisseurs
+        </label>
+        <input
+          type="number"
+          id="cfCouverture"
+          name="couverture"
+          class="advanced-input"
+          value={couvertureSimulationJours}
+          min="1"
+          step="1"
+          onchange="this.form.submit()"
+          aria-label="Couverture simulée (jours)"
+          title={simulateCouverture ? 'Remplace la couverture de tous les fournisseurs' : 'Réglez ce nombre puis cochez la case ci-dessus pour l’activer'}
+        />
 
         <label class="advanced-label" for="cfSecuriteExtra">Sécurité additionnelle (jours)</label>
         <input type="number" id="cfSecuriteExtra" name="securite_extra" class="advanced-input" value={securiteExtraJours} min="0" step="1" onchange="this.form.submit()" />
@@ -454,10 +492,14 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
           que pour décider combien.
         </p>
         <p class="advanced-note">
-          La couverture cible et la sécurité additionnelle recalculent la page (rechargement). Le coefficient
-          saisonnier ajuste la vitesse de vente instantanément dans le navigateur. Le délai et la sécurité de
-          base se règlent par fournisseur sur <a href="/admin/fournisseurs">/admin/fournisseurs</a>, les
-          exceptions de délai et les contraintes d'achat (minimum, multiple) par produit sur sa fiche.
+          Chaque produit utilise par défaut la couverture cible réglée pour son fournisseur sur
+          <a href="/admin/fournisseurs">/admin/fournisseurs</a> — visible avec son origine dans le détail de
+          chaque ligne. La case « simuler » ci-dessus n'écrase jamais ces réglages : elle remplace
+          temporairement la valeur affichée pour explorer une hypothèse (ex. tester 90 j partout), le temps de
+          cette page. La sécurité additionnelle et la simulation recalculent la page (rechargement). Le
+          coefficient saisonnier ajuste la vitesse de vente instantanément dans le navigateur. Le délai et la
+          sécurité de base se règlent aussi par fournisseur, les exceptions de délai et les contraintes d'achat
+          (minimum, multiple) par produit sur sa fiche.
         </p>
       </div>
     </details>
@@ -520,7 +562,12 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
       </div>
     </details>
   )}
-  <div id="cfConfig" data-couverture-cible={couvertureCibleJours} hidden></div>
+  <div
+    id="cfConfig"
+    data-simulate-couverture={simulateCouverture ? '1' : '0'}
+    data-couverture-simulation={couvertureSimulationJours}
+    hidden
+  ></div>
 </AdminLayout>
 
 <script>
@@ -529,7 +576,7 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
   //    serveur — pas de client Supabase importé), donc plus de "miroir"
   //    dupliqué à la main qui pouvait diverger du premier rendu. ──
   import {
-    classifyReorder, computeReorderQtyWithBridge, applyMoqAndMultiple,
+    classifyReorder, computeReorderQtyWithBridge, applyMoqAndMultiple, resolveCouvertureCible,
     type ArrivalEvent,
   } from '../../lib/constants';
 
@@ -539,10 +586,17 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
   const showCoveredBtn = document.getElementById('cfShowCovered');
   const showCoveredLabel = document.getElementById('cfShowCoveredLabel');
   const hiddenCountEl = document.getElementById('cfHiddenCount');
-  const couvertureCibleJours = Number(document.getElementById('cfConfig')?.dataset.couvertureCible) || 30;
+  const cfConfig = document.getElementById('cfConfig');
+  const simulateCouverture = cfConfig?.dataset.simulateCouverture === '1';
+  const couvertureSimulationJours = Number(cfConfig?.dataset.couvertureSimulation) || 30;
 
   const eur = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' });
   const num = new Intl.NumberFormat('fr-FR');
+  const COUVERTURE_SOURCE_LABEL: Record<string, string> = {
+    simulation: 'simulation globale',
+    fournisseur: 'réglage fournisseur',
+    defaut: 'défaut global',
+  };
 
   const qtyInputOf = (row: HTMLElement) => row.querySelector<HTMLInputElement>('[data-role="qty-input"]');
   const pumpOf = (row: HTMLElement) => (row.dataset.pump === '' ? null : Number(row.dataset.pump));
@@ -581,6 +635,8 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
     const minCartons = row.dataset.min === '' ? null : Number(row.dataset.min);
     const multipleCartons = row.dataset.multiple === '' ? null : Number(row.dataset.multiple);
     const arrivals = parseArrivals(row);
+    const couvertureFournisseurJours = row.dataset.couvertureFournisseur === '' ? null : Number(row.dataset.couvertureFournisseur);
+    const couverture = resolveCouvertureCible(couvertureFournisseurJours, simulateCouverture, couvertureSimulationJours);
 
     const vAdj = vitesseBase * (coef / 100);
     const venteQuotidienne = vAdj / 7;
@@ -592,7 +648,7 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
 
     let suggested: number | null = null;
     if (hasSales && (trigger.primary === 'a_prevoir' || trigger.primary === 'commander_maintenant' || trigger.primary === 'rupture_avant_commande_normale')) {
-      const raw = computeReorderQtyWithBridge(stock, venteQuotidienne, delaiJours, couvertureCibleJours, securiteJours, arrivals, now);
+      const raw = computeReorderQtyWithBridge(stock, venteQuotidienne, delaiJours, couverture.jours, securiteJours, arrivals, now);
       suggested = raw == null ? null : applyMoqAndMultiple(raw, minCartons, multipleCartons);
     } else if (hasSales) {
       suggested = 0;
@@ -629,9 +685,11 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
     // ── Panneau "Détail du calcul" : mêmes valeurs recalculées, pour ne
     //    jamais rester figées après un changement de coefficient. ──
     const cibleText = row.querySelector<HTMLElement>('[data-role="cible-text"]');
-    if (cibleText) cibleText.textContent = `${Math.round(venteQuotidienne * (couvertureCibleJours + securiteJours))} cartons`;
+    if (cibleText) cibleText.textContent = `${Math.round(venteQuotidienne * (couverture.jours + securiteJours))} cartons`;
     const jacText = row.querySelector<HTMLElement>('[data-role="jac-text"]');
     if (jacText) jacText.textContent = trigger.joursAvantCommande != null ? String(Math.round(trigger.joursAvantCommande)) : '—';
+    const couvertureText = row.querySelector<HTMLElement>('[data-role="couverture-text"]');
+    if (couvertureText) couvertureText.textContent = `${couverture.jours} j — ${COUVERTURE_SOURCE_LABEL[couverture.source]}`;
 
     const vitesseText = row.querySelector<HTMLElement>('[data-role="vitesse-text"]');
     if (vitesseText) vitesseText.textContent = hasSales ? `ventes ${vAdj.toFixed(1)}/sem.` : 'pas de ventes enregistrées';
@@ -1029,6 +1087,16 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
   border-radius: var(--radius-md);
 }
 .advanced-label { font-size: var(--text-xs); font-weight: 600; color: var(--color-muted); }
+.advanced-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-ink);
+  cursor: pointer;
+  user-select: none;
+}
 .advanced-input {
   width: 84px;
   padding: 0.4rem 0.6rem;

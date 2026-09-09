@@ -9,6 +9,7 @@ import {
   resolveDelaiLivraison, classifyReorder, stockAtReceipt, computeReorderQtyForTarget,
   computeReorderQtyWithBridge,
   applyMoqAndMultiple, engagementNonCouvert, projectStock, computeAdjustedVitesse,
+  resolveCouvertureCible, COUVERTURE_CIBLE_DEFAUT_JOURS,
   addDays,
   type ArrivalEvent,
 } from '../src/lib/constants.ts';
@@ -248,6 +249,56 @@ console.log('\nContrôles complémentaires');
 
   assert(engagementNonCouvert(20 - 30) === 10, '20 physiques / 30 réservés → manque de 10 cartons signalé');
   assert(engagementNonCouvert(5) === 0, 'disponible positif → aucun manque signalé');
+}
+
+// ── Couverture cible par fournisseur : résolution (priorité et repli) ──
+console.log('\nCouverture cible par fournisseur — résolution');
+{
+  const rFournisseur = resolveCouvertureCible(60, false, 30);
+  assert(rFournisseur.jours === 60 && rFournisseur.source === 'fournisseur', 'valeur fournisseur utilisée telle quelle', JSON.stringify(rFournisseur));
+
+  const rDefaut = resolveCouvertureCible(null, false, 30);
+  assert(rDefaut.jours === COUVERTURE_CIBLE_DEFAUT_JOURS && rDefaut.source === 'defaut', 'repli sur le défaut global quand le fournisseur n’a rien réglé', JSON.stringify(rDefaut));
+
+  const rZero = resolveCouvertureCible(0, false, 30); // 0 traité comme "non réglé" (contrainte DB : > 0)
+  assert(rZero.jours === COUVERTURE_CIBLE_DEFAUT_JOURS && rZero.source === 'defaut', '0 traité comme non réglé, pas comme une vraie valeur', JSON.stringify(rZero));
+
+  const rSimuleEcraseFournisseur = resolveCouvertureCible(60, true, 90);
+  assert(rSimuleEcraseFournisseur.jours === 90 && rSimuleEcraseFournisseur.source === 'simulation', 'simulation active l’emporte même sur un réglage fournisseur existant', JSON.stringify(rSimuleEcraseFournisseur));
+
+  const rSimuleSansFournisseur = resolveCouvertureCible(null, true, 90);
+  assert(rSimuleSansFournisseur.jours === 90 && rSimuleSansFournisseur.source === 'simulation', 'simulation active même sans réglage fournisseur', JSON.stringify(rSimuleSansFournisseur));
+}
+
+// ── Deux fournisseurs à couverture différente, utilisés simultanément ──
+console.log('\nDeux fournisseurs (30 j et 60 j) utilisés simultanément, y compris après changement de coefficient');
+{
+  const disponible = 20, delai = 5, securite = 0;
+  const couvertureA = resolveCouvertureCible(30, false, 30).jours; // fournisseur A : 30 j
+  const couvertureB = resolveCouvertureCible(60, false, 30).jours; // fournisseur B : 60 j
+  assert(couvertureA === 30 && couvertureB === 60, 'les deux fournisseurs résolvent chacun leur propre couverture (30 vs 60)');
+
+  // Coefficient 100 % (vente de base).
+  const venteBase = 2;
+  const qtyA1 = computeReorderQtyWithBridge(disponible, venteBase, delai, couvertureA, securite, []);
+  const qtyB1 = computeReorderQtyWithBridge(disponible, venteBase, delai, couvertureB, securite, []);
+  assert(qtyA1 === 50, `fournisseur A (30 j) → 50 cartons (obtenu: ${qtyA1})`, 'vente 2/j × (5+30) − 20 = 50');
+  assert(qtyB1 === 110, `fournisseur B (60 j) → 110 cartons (obtenu: ${qtyB1})`, 'vente 2/j × (5+60) − 20 = 110');
+  assert(qtyA1 !== qtyB1, 'les deux quantités diffèrent réellement (pas de valeur partagée par erreur)');
+
+  // Après "rechargement" : la résolution ne dépend d'aucun état — un second
+  // appel indépendant redonne exactement les mêmes couvertures.
+  assert(resolveCouvertureCible(30, false, 30).jours === 30 && resolveCouvertureCible(60, false, 30).jours === 60,
+    'couvertures stables après un second appel ("rechargement")');
+
+  // Changement de coefficient (150 %) : la vitesse change, la couverture de
+  // chaque fournisseur reste la sienne — pas de fuite entre les deux lignes.
+  const venteCoef150 = venteBase * 1.5;
+  const qtyA2 = computeReorderQtyWithBridge(disponible, venteCoef150, delai, couvertureA, securite, []);
+  const qtyB2 = computeReorderQtyWithBridge(disponible, venteCoef150, delai, couvertureB, securite, []);
+  assert(qtyA2 === 85, `fournisseur A (30 j) après coefficient 150 % → 85 cartons (obtenu: ${qtyA2})`, 'vente 3/j × 35 − 20 = 85');
+  assert(qtyB2 === 175, `fournisseur B (60 j) après coefficient 150 % → 175 cartons (obtenu: ${qtyB2})`, 'vente 3/j × 65 − 20 = 175');
+  assert(qtyA2 !== qtyB2 && qtyA1 !== qtyA2 && qtyB1 !== qtyB2, 'le coefficient change les deux quantités sans faire converger A et B');
 }
 
 console.log(`\n${pass} succès, ${fail} échec${fail === 1 ? '' : 's'}.`);

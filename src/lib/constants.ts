@@ -509,6 +509,43 @@ export function delaiAVerifier(
   return produitDelaiJours != null && !produitOverride;
 }
 
+/** Fallback target coverage when neither the supplier nor a global
+ *  simulation supplies one. Distinct from DELAI_LIVRAISON_DEFAUT_JOURS: this
+ *  is a stock objective (normal-sales days to hold after receipt), not a
+ *  transit time — see computeReorderQtyWithBridge. */
+export const COUVERTURE_CIBLE_DEFAUT_JOURS = 30;
+
+export type CouvertureSource = 'simulation' | 'fournisseur' | 'defaut';
+
+export type CouvertureResolue = {
+  jours: number;
+  source: CouvertureSource;
+};
+
+/** Target coverage (days of normal sales to hold once the new order lands),
+ *  most specific source first:
+ *   1. the optional global simulation — an explicit, opt-in "what if every
+ *      supplier used N days" override, OFF by default. When active it wins
+ *      for every product, deliberately: it exists to test a hypothesis, not
+ *      to quietly coexist with per-supplier settings.
+ *   2. the supplier's own couverture_cible_jours (set on /admin/fournisseurs)
+ *   3. COUVERTURE_CIBLE_DEFAUT_JOURS, when neither is set
+ *  The source travels with the number so the UI can show exactly which of
+ *  the three produced the value in use (e.g. "60 j — réglage fournisseur"). */
+export function resolveCouvertureCible(
+  fournisseurCouvertureJours: number | null | undefined,
+  simulationActive: boolean,
+  simulationJours: number,
+): CouvertureResolue {
+  if (simulationActive) {
+    return { jours: simulationJours, source: 'simulation' };
+  }
+  if (fournisseurCouvertureJours != null && fournisseurCouvertureJours > 0) {
+    return { jours: fournisseurCouvertureJours, source: 'fournisseur' };
+  }
+  return { jours: COUVERTURE_CIBLE_DEFAUT_JOURS, source: 'defaut' };
+}
+
 export type CycleSource = 'fournisseur' | 'delai';
 
 export type CycleResolu = {

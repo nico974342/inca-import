@@ -36,7 +36,8 @@ export interface Props {
     delai: { jours: number; source: string; fournisseur: string | null };
     aVerifierDelai: boolean;
     joursSecurite: number;
-    couvertureCibleJours: number;
+    couverture: { jours: number; source: string };
+    couvertureFournisseurJours: number | null;
     trigger: { primary: string; margeInsuffisante: boolean; joursAvantCommande: number | null; dateCommandeConseillee: Date | null };
     manqueEngage: number;
     confiance: string;
@@ -56,6 +57,12 @@ export interface Props {
 }
 
 const { p, showSupplierTag = false, reviewMode = false } = Astro.props;
+
+const COUVERTURE_SOURCE_LABEL: Record<string, string> = {
+  simulation: 'simulation globale',
+  fournisseur: 'réglage fournisseur',
+  defaut: 'défaut global',
+};
 
 function formatPrice(n: number | null): string {
   if (n == null) return '—';
@@ -100,6 +107,7 @@ const arrivalsJson = JSON.stringify(p.arrivals.map((a, i) => ({
   data-vitesse={p.vitesseVente}
   data-delai-jours={p.delai.jours}
   data-securite-jours={p.joursSecurite}
+  data-couverture-fournisseur={p.couvertureFournisseurJours ?? ''}
   data-stock={p.stockDisponible}
   data-has-sales={p.hasSales ? '1' : '0'}
   data-transit-qty={p.transitQty}
@@ -211,8 +219,8 @@ const arrivalsJson = JSON.stringify(p.arrivals.map((a, i) => ({
     <dl class="pr-detail-grid">
       <div><dt>Délai utilisé</dt><dd>{p.delai.jours} j · {p.delai.source === 'produit_override' ? 'exception produit' : p.delai.source === 'fournisseur' ? `fournisseur (${p.delai.fournisseur ?? p.supplier})` : 'défaut (non confirmé)'}</dd></div>
       <div><dt>Sécurité</dt><dd>{p.joursSecurite} j (réserve additionnelle)</dd></div>
-      <div><dt>Couverture cible après réception</dt><dd>{p.couvertureCibleJours} j (ventes normales)</dd></div>
-      <div><dt>Stock visé après réception</dt><dd data-role="cible-text">{Math.round((p.vitesseVente / 7) * (p.couvertureCibleJours + p.joursSecurite))} cartons</dd></div>
+      <div><dt>Couverture cible après réception</dt><dd data-role="couverture-text">{p.couverture.jours} j — {COUVERTURE_SOURCE_LABEL[p.couverture.source] ?? p.couverture.source}</dd></div>
+      <div><dt>Stock visé après réception</dt><dd data-role="cible-text">{Math.round((p.vitesseVente / 7) * (p.couverture.jours + p.joursSecurite))} cartons</dd></div>
       <div><dt>Jours avant commande</dt><dd data-role="jac-text">{p.trigger.joursAvantCommande != null ? Math.round(p.trigger.joursAvantCommande) : '—'}</dd></div>
       {p.arrivals.length > 0 && (
         <div class="pr-detail-full">
