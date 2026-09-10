@@ -55,7 +55,7 @@ if (Astro.request.method === 'POST') {
 
 const { data: productsRaw } = await supabaseAdmin
   .from('products')
-  .select('id, name, category, unit, price_ht, in_stock')
+  .select('id, name, category, unit, price_ht, in_stock, units_per_carton')
   .order('category', { ascending: true })
   .order('name', { ascending: true });
 
@@ -77,12 +77,26 @@ const products = (productsRaw ?? []).map(p => ({
   categoryLabel: CAT_LABEL[p.category] ?? p.category,
   unit: p.unit ?? 'carton',
   basePrice: p.price_ht != null ? Number(p.price_ht) : null,
+  unitsPerCarton: (p as any).units_per_carton != null && (p as any).units_per_carton > 0 ? Number((p as any).units_per_carton) : null,
   override: overrideByProduct.get(p.id) ?? null,
   inStock: p.in_stock !== false,
 }));
 
 const overrideCount = products.filter(p => p.override != null).length;
 const saved = !!Astro.url.searchParams.get('saved');
+
+/** "0,90 €" — même format que les prix carton de cette page. */
+function formatEuro(n: number): string {
+  return `${n.toFixed(2).replace('.', ',')} €`;
+}
+
+/** Équivalent unitaire = prix carton ÷ conditionnement. Conditionnement
+ *  absent ou nul → null (jamais une valeur fausse, jamais un 0 masqué en
+ *  division). */
+function unitPrice(priceHt: number | null, unitsPerCarton: number | null): number | null {
+  if (priceHt == null || !unitsPerCarton || unitsPerCarton <= 0) return null;
+  return priceHt / unitsPerCarton;
+}
 ---
 <AdminLayout title={`Tarifs — ${group.name}`} activeNav="tarifs">
   <a href="/admin/tarifs" class="back-link">← Retour aux groupes tarifaires</a>
@@ -124,7 +138,12 @@ const saved = !!Astro.url.searchParams.get('saved');
             <tr class={`product-row${!p.inStock ? ' row--oos' : ''}`} data-search={p.name.toLowerCase()}>
               <td class="td-strong">{p.name}{!p.inStock && <span class="oos-tag">indisponible</span>}</td>
               <td class="td-muted">{p.categoryLabel}</td>
-              <td class="th-num td-muted">{p.basePrice != null ? `${p.basePrice.toFixed(2).replace('.', ',')} €` : '—'}</td>
+              <td class="th-num td-muted">
+                {p.basePrice != null ? formatEuro(p.basePrice) : '—'}
+                {unitPrice(p.basePrice, p.unitsPerCarton) != null && (
+                  <span class="unit-price">({formatEuro(unitPrice(p.basePrice, p.unitsPerCarton)!)}/unité)</span>
+                )}
+              </td>
               <td class="th-num">
                 {viewerIsAdmin ? (
                   <>
@@ -137,13 +156,28 @@ const saved = !!Astro.url.searchParams.get('saved');
                       placeholder={p.basePrice != null ? p.basePrice.toFixed(2) : '0.00'}
                       value={p.override != null ? p.override.toFixed(2) : ''}
                       aria-label={`Prix pour ${p.name} dans ce groupe`}
+                      data-role="price-input"
+                      data-upc={p.unitsPerCarton ?? ''}
+                      data-base-price={p.basePrice ?? ''}
                     />
                     <span class="unit">€</span>
+                    <div class="unit-price" data-role="unit-price-live">
+                      {(() => {
+                        const effective = p.override ?? p.basePrice;
+                        const up = unitPrice(effective, p.unitsPerCarton);
+                        return up != null ? `(${formatEuro(up)}/unité)` : '';
+                      })()}
+                    </div>
                   </>
                 ) : (
-                  <span class="price-readonly">
-                    {p.override != null ? `${p.override.toFixed(2).replace('.', ',')} €` : '—'}
-                  </span>
+                  <>
+                    <span class="price-readonly">
+                      {p.override != null ? formatEuro(p.override) : '—'}
+                    </span>
+                    {unitPrice(p.override, p.unitsPerCarton) != null && (
+                      <span class="unit-price">({formatEuro(unitPrice(p.override, p.unitsPerCarton)!)}/unité)</span>
+                    )}
+                  </>
                 )}
               </td>
             </tr>
@@ -175,6 +209,29 @@ const saved = !!Astro.url.searchParams.get('saved');
       if (show) visible++;
     });
     noResults.hidden = visible > 0;
+  });
+
+  // ── Équivalent unitaire recalculé en direct pendant la saisie du prix
+  //    carton (admin uniquement — ces champs n'existent pas côté lecture
+  //    seule). Champ vide = retombe sur le prix de base, même convention que
+  //    l'enregistrement lui-même ("Laissez un champ vide pour retomber sur
+  //    le prix catalogue"). Conditionnement absent → rien affiché, jamais un
+  //    calcul faux. Ne touche jamais la valeur du champ de saisie. ──
+  function formatEuro(n: number): string {
+    return `${n.toFixed(2).replace('.', ',')} €`;
+  }
+  document.querySelectorAll<HTMLInputElement>('[data-role="price-input"]').forEach(input => {
+    const liveEl = input.closest('td')?.querySelector<HTMLElement>('[data-role="unit-price-live"]');
+    if (!liveEl) return;
+    const upc = input.dataset.upc ? Number(input.dataset.upc) : null;
+    const basePrice = input.dataset.basePrice ? Number(input.dataset.basePrice) : null;
+    input.addEventListener('input', () => {
+      const raw = input.value.trim();
+      const typed = raw === '' ? null : Number(raw.replace(',', '.'));
+      const effective = typed != null && Number.isFinite(typed) ? typed : basePrice;
+      const up = effective != null && upc && upc > 0 ? effective / upc : null;
+      liveEl.textContent = up != null ? `(${formatEuro(up)}/unité)` : '';
+    });
   });
 </script>
 
@@ -311,6 +368,13 @@ const saved = !!Astro.url.searchParams.get('saved');
 }
 .price-input:focus { border-color: var(--color-primary); }
 .unit { margin-left: var(--space-2); font-size: var(--text-xs); color: var(--color-muted); }
+.unit-price {
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  white-space: nowrap;
+}
 
 .no-results {
   padding: var(--space-6);
