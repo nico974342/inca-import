@@ -97,6 +97,10 @@ const ERR_MSG: Record<string, string> = {
     sur sa fiche.
   </p>
 
+  <div class="toolbar">
+    <a href="/admin/catalogue-pdf" class="btn btn-secondary">Générer le catalogue</a>
+  </div>
+
   {tableMissing ? (
     <div class="alert alert--error" role="alert">
       Les tables <code>price_groups</code> / <code>price_group_items</code> n'existent pas encore.
@@ -195,6 +199,31 @@ const ERR_MSG: Record<string, string> = {
   line-height: 1.6;
 }
 .intro a { color: var(--color-primary-deep); }
+
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--space-5);
+}
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 0.8125rem 1.625rem;
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  font-weight: 500;
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-decoration: none;
+  min-height: 44px;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+.btn-secondary:hover { background: var(--color-surface); }
 
 .alert {
   padding: var(--space-3) var(--space-4);

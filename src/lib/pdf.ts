@@ -1,6 +1,269 @@
 import PDFDocument from 'pdfkit';
 import { COMPANY, COMPANY_ADDRESS_LINE, DEFAULT_TVA_RATE } from './constants';
 
+// ── Catalogue produits (PDF imprimable) ─────────────────────────────────────
+// Document commercial séparé des bons de commande/livraison ci-dessus, mais
+// même bibliothèque (PDFKit) et mêmes couleurs de marque, pour rester
+// cohérent. AUCUNE donnée de coût ou de marge n'y transite jamais — ce module
+// ne reçoit que des prix de vente déjà résolus par l'appelant (voir
+// lib/clients.ts, resolveGroupPrice) et des images déjà téléchargées
+// (lib/catalogueImages.ts) ; il ne lit ni ne calcule rien d'autre.
+
+export interface CatalogueProductInput {
+  id: string;
+  name: string;
+  category: string;
+  categoryLabel: string;
+  unit: string | null;
+  unitsPerCarton: number | null;
+  /** Prix carton déjà résolu (groupe tarifaire, sinon prix de base) — jamais
+   *  recalculé ici. Null seulement si le catalogue produit n'a aucun prix HT
+   *  enregistré du tout (cas résiduel, affiché "—"). */
+  cartonPriceHt: number | null;
+  /** Image déjà téléchargée ET normalisée en JPEG/PNG (PDFKit ne lit pas le
+   *  WebP) — null = pas d'image ou téléchargement/format en échec, jamais
+   *  bloquant : voir drawPlaceholder. */
+  imageBuffer: Buffer | null;
+}
+
+export interface CataloguePdfData {
+  /** "Stations INCANA" / "Autres clients" / "Prix de base" */
+  groupLabel: string;
+  /** "10 septembre 2026" — même chaîne réutilisée dans le pied de page légal. */
+  editionDateLabel: string;
+  /** Déjà filtrés (catégories, disponibilité) et triés (catégorie puis nom)
+   *  par l'appelant — ce module se contente de les disposer. */
+  products: CatalogueProductInput[];
+}
+
+const CAT_PRIMARY = '#C96334';
+const CAT_INK     = '#1E1A16';
+const CAT_MUTED   = '#706B65';
+const CAT_SURFACE = '#F6F3EF';
+const CAT_BORDER  = '#E7E2DC';
+
+function euro(n: number): string {
+  return `${n.toFixed(2).replace('.', ',')} €`;
+}
+
+/** Tronque `text` pour tenir sur `maxLines` lignes à `width`, avec « … » —
+ *  jamais un troisième mot coupé au ras du cadre. Police/taille doivent déjà
+ *  être posées sur `doc` avant l'appel (heightOfString en dépend). */
+function fitLines(doc: PDFKit.PDFDocument, text: string, width: number, maxLines: number): string {
+  const lineH = doc.currentLineHeight();
+  const maxH = lineH * maxLines + 0.5;
+  if (doc.heightOfString(text, { width }) <= maxH) return text;
+
+  let lo = 0, hi = text.length, best = text.slice(0, 1) + '…';
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const candidate = text.slice(0, mid).trimEnd() + '…';
+    if (doc.heightOfString(candidate, { width }) <= maxH) { best = candidate; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  return best;
+}
+
+function drawCatalogueCover(doc: PDFKit.PDFDocument, groupLabel: string, editionDateLabel: string): void {
+  const centerOpts = { width: 495, align: 'center' as const };
+
+  doc.fontSize(36).font('Helvetica-Bold').fillColor(CAT_PRIMARY).text('Inca Import', 50, 176, centerOpts);
+  const ruleW = 70;
+  doc.moveTo(297.5 - ruleW / 2, 224).lineTo(297.5 + ruleW / 2, 224).lineWidth(2.5).strokeColor(CAT_PRIMARY).stroke();
+  doc.fontSize(10).font('Helvetica').fillColor(CAT_MUTED).text('Grossiste B2B · La Réunion', 50, 238, centerOpts);
+
+  doc.fontSize(24).font('Helvetica-Bold').fillColor(CAT_INK)
+    .text('CATALOGUE PRODUITS', 50, 330, { ...centerOpts, characterSpacing: 0.6 });
+
+  const badgeText = `Grille tarifaire — ${groupLabel}`;
+  doc.fontSize(11).font('Helvetica-Bold');
+  const badgeW = doc.widthOfString(badgeText) + 36;
+  const badgeX = 297.5 - badgeW / 2;
+  doc.roundedRect(badgeX, 372, badgeW, 28, 14).lineWidth(1).strokeColor(CAT_PRIMARY).fillAndStroke('#FFF6F0', CAT_PRIMARY);
+  doc.fillColor(CAT_PRIMARY).text(badgeText, badgeX, 380, { width: badgeW, align: 'center', lineBreak: false });
+
+  doc.fontSize(9.5).font('Helvetica').fillColor(CAT_MUTED)
+    .text(`Édition du ${editionDateLabel}`, 50, 418, centerOpts);
+
+  // ── Coordonnées complètes, bas de page de garde ──
+  const coordY = 680;
+  doc.moveTo(297.5 - 30, coordY - 24).lineTo(297.5 + 30, coordY - 24).lineWidth(0.5).strokeColor(CAT_BORDER).stroke();
+  doc.fontSize(11).font('Helvetica-Bold').fillColor(CAT_INK).text(COMPANY.name, 50, coordY, centerOpts);
+  doc.fontSize(9).font('Helvetica').fillColor(CAT_MUTED)
+    .text(COMPANY_ADDRESS_LINE, 50, coordY + 16, centerOpts)
+    .text(`SIRET ${COMPANY.siret}`, 50, coordY + 30, centerOpts)
+    .text(`${COMPANY.phoneDisplay}  ·  ${COMPANY.contactEmail}`, 50, coordY + 44, centerOpts)
+    .text(COMPANY.siteUrl.replace(/^https?:\/\//, ''), 50, coordY + 58, centerOpts);
+}
+
+/** En-tête léger répété sur chaque page produit — assez discret pour ne pas
+ *  peser sur la mise en page ("pas un listing administratif"), assez présent
+ *  pour qu'une page imprimée seule reste identifiable. Renvoie le Y de
+ *  départ du contenu. */
+function drawCatalogueRunningHeader(doc: PDFKit.PDFDocument, groupLabel: string): number {
+  doc.fontSize(13).font('Helvetica-Bold').fillColor(CAT_PRIMARY).text('Inca Import', 50, 38, { lineBreak: false });
+  doc.fontSize(8).font('Helvetica').fillColor(CAT_MUTED)
+    .text(`Catalogue produits · ${groupLabel}`, 250, 42, { width: 295, align: 'right', lineBreak: false });
+  doc.moveTo(50, 58).lineTo(545, 58).lineWidth(0.5).strokeColor(CAT_BORDER).stroke();
+  return 74;
+}
+
+function drawCatalogueCategoryHeader(doc: PDFKit.PDFDocument, label: string, y: number): number {
+  doc.fontSize(11).font('Helvetica-Bold').fillColor(CAT_PRIMARY)
+    .text(label.toUpperCase(), 50, y, { characterSpacing: 0.5, lineBreak: false });
+  doc.moveTo(50, y + 16).lineTo(545, y + 16).lineWidth(1).strokeColor(CAT_PRIMARY).stroke();
+  return y + 26;
+}
+
+function drawCataloguePlaceholder(doc: PDFKit.PDFDocument, x: number, y: number, w: number, h: number): void {
+  doc.fontSize(7).font('Helvetica-Oblique').fillColor(CAT_MUTED)
+    .text('Photo à venir', x, y + h / 2 - 4, { width: w, align: 'center', lineBreak: false });
+}
+
+function drawCatalogueCard(
+  doc: PDFKit.PDFDocument,
+  p: CatalogueProductInput,
+  x: number, y: number, w: number, photoH: number,
+): void {
+  // Photo (ou placeholder) — fond clair uniforme, jamais un cadre vide.
+  doc.rect(x, y, w, photoH).fillColor(CAT_SURFACE).fill();
+  doc.rect(x, y, w, photoH).lineWidth(0.5).strokeColor(CAT_BORDER).stroke();
+  let imageDrawn = false;
+  if (p.imageBuffer) {
+    try {
+      doc.image(p.imageBuffer, x + 4, y + 4, { fit: [w - 8, photoH - 8], align: 'center', valign: 'center' });
+      imageDrawn = true;
+    } catch {
+      imageDrawn = false;
+    }
+  }
+  if (!imageDrawn) drawCataloguePlaceholder(doc, x, y, w, photoH);
+
+  let ty = y + photoH + 5;
+
+  doc.fontSize(8).font('Helvetica-Bold').fillColor(CAT_INK);
+  const name = fitLines(doc, p.name, w, 2);
+  const nameLineH = doc.currentLineHeight();
+  doc.text(name, x, ty, { width: w, lineGap: 0 });
+  ty += nameLineH * 2 + 3;
+
+  doc.fontSize(7).font('Helvetica').fillColor(CAT_MUTED);
+  const condText = p.unitsPerCarton != null ? `${p.unitsPerCarton} u/carton` : (p.unit ?? 'carton');
+  doc.text(condText, x, ty, { width: w, lineBreak: false });
+  ty += doc.currentLineHeight() + 4;
+
+  const unitPrice = p.cartonPriceHt != null && p.unitsPerCarton ? p.cartonPriceHt / p.unitsPerCarton : null;
+  doc.fontSize(9).font('Helvetica-Bold').fillColor(CAT_PRIMARY)
+    .text(p.cartonPriceHt != null ? euro(p.cartonPriceHt) : '—', x, ty, { continued: unitPrice != null, lineBreak: false });
+  if (unitPrice != null) {
+    doc.fontSize(7).font('Helvetica').fillColor(CAT_MUTED).text(`  (${euro(unitPrice)}/u)`, { lineBreak: false });
+  }
+}
+
+function drawCatalogueTermsPage(doc: PDFKit.PDFDocument, editionDateLabel: string): void {
+  doc.fontSize(18).font('Helvetica-Bold').fillColor(CAT_PRIMARY).text('CONDITIONS COMMERCIALES', 50, 60);
+  doc.moveTo(50, 90).lineTo(545, 90).lineWidth(1).strokeColor(CAT_PRIMARY).stroke();
+
+  let y = 116;
+  const section = (title: string, body: string) => {
+    doc.fontSize(11).font('Helvetica-Bold').fillColor(CAT_INK).text(title, 50, y, { lineBreak: false });
+    y += 18;
+    doc.fontSize(9.5).font('Helvetica').fillColor(CAT_MUTED).text(body, 50, y, { width: 495, lineGap: 3 });
+    y += doc.heightOfString(body, { width: 495, lineGap: 3 }) + 28;
+  };
+
+  section('Livraison', 'Livraison sous 48h, partout à La Réunion — du littoral aux hauts, sans exception.');
+  section('Commande', `Commandez en ligne à tout moment sur ${COMPANY.siteUrl.replace(/^https?:\/\//, '')}, ou directement auprès de votre interlocuteur commercial Inca Import.`);
+  section('Contact', `${COMPANY.phoneDisplay}  ·  ${COMPANY.contactEmail}`);
+
+  doc.fontSize(8).font('Helvetica-Oblique').fillColor(CAT_MUTED)
+    .text(
+      `Prix HT, hors taxes applicables. Tarifs valables au ${editionDateLabel}, susceptibles de modification.`,
+      50, 700, { width: 495, align: 'center' },
+    );
+}
+
+function finalizeCataloguePages(doc: PDFKit.PDFDocument): void {
+  const totalPages = doc.bufferedPageRange().count;
+  for (let i = 0; i < totalPages; i++) {
+    doc.switchToPage(i);
+    if (i === 0) continue; // page de garde : coordonnées déjà au centre, pas de pied de page redondant
+    doc.fontSize(7).font('Helvetica').fillColor(CAT_MUTED)
+      .text(FOOTER_L1, 50, 772, { width: 495, align: 'center', lineBreak: false })
+      .text(`Page ${i + 1} / ${totalPages}`, 50, 783, { width: 495, align: 'center', lineBreak: false });
+  }
+  doc.flushPages();
+}
+
+export function generateCataloguePDF(data: CataloguePdfData): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      margin: 50, size: 'A4', bufferPages: true,
+      info: {
+        Title: `Catalogue produits — ${data.groupLabel}`,
+        Author: COMPANY.name,
+        Subject: 'Catalogue produits',
+        // Jamais de coût/marge ici, ni nulle part ailleurs dans ce document —
+        // seuls des prix de vente déjà résolus entrent dans ce module.
+      },
+    });
+    const chunks: Buffer[] = [];
+    doc.on('data', (c: Buffer) => chunks.push(c));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    drawCatalogueCover(doc, data.groupLabel, data.editionDateLabel);
+
+    doc.addPage();
+    let y = drawCatalogueRunningHeader(doc, data.groupLabel);
+
+    const COLS = 3;
+    const GUTTER = 16;
+    const CARD_W = (495 - GUTTER * (COLS - 1)) / COLS;
+    const PHOTO_H = 65;
+    const ROW_GAP = 10;
+    const PAGE_BOTTOM = 745;
+
+    // Hauteur de carte dérivée des polices réellement utilisées, jamais
+    // devinée à la main — sinon un écart de line-height ferait chevaucher
+    // deux rangées sans qu'aucun test ne le révèle avant l'impression.
+    doc.fontSize(8).font('Helvetica-Bold');
+    const nameBlockH = doc.currentLineHeight() * 2;
+    doc.fontSize(7).font('Helvetica');
+    const condLineH = doc.currentLineHeight();
+    doc.fontSize(9).font('Helvetica-Bold');
+    const priceLineH = doc.currentLineHeight();
+    const CARD_H = PHOTO_H + 5 + nameBlockH + 3 + condLineH + 4 + priceLineH + 6;
+
+    let col = 0;
+    let currentCategory: string | null = null;
+
+    for (const p of data.products) {
+      if (p.category !== currentCategory) {
+        if (col !== 0) { y += CARD_H + ROW_GAP; col = 0; }
+        if (y + 30 > PAGE_BOTTOM) { doc.addPage(); y = drawCatalogueRunningHeader(doc, data.groupLabel); }
+        y = drawCatalogueCategoryHeader(doc, p.categoryLabel, y);
+        currentCategory = p.category;
+      }
+      if (col === 0 && y + CARD_H > PAGE_BOTTOM) {
+        doc.addPage();
+        y = drawCatalogueRunningHeader(doc, data.groupLabel);
+        y = drawCatalogueCategoryHeader(doc, p.categoryLabel, y);
+      }
+      const x = 50 + col * (CARD_W + GUTTER);
+      drawCatalogueCard(doc, p, x, y, CARD_W, PHOTO_H);
+      col++;
+      if (col === COLS) { col = 0; y += CARD_H + ROW_GAP; }
+    }
+
+    doc.addPage();
+    drawCatalogueTermsPage(doc, data.editionDateLabel);
+
+    finalizeCataloguePages(doc);
+    doc.end();
+  });
+}
+
 export interface PdfOrderItem {
   product_name: string;
   quantity: number;

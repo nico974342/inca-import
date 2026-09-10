@@ -273,11 +273,10 @@ const DELETE_ERROR_MSG: Record<string, string> = {
       {DELETE_ERROR_MSG[deleteError] ?? DELETE_ERROR_MSG.erreur}
     </div>
   )}
-  {canManage && (
-    <div class="toolbar">
-      <a href="/admin/produits/new" class="btn btn-primary">+ Nouveau produit</a>
-    </div>
-  )}
+  <div class="toolbar">
+    <a href="/admin/catalogue-pdf" class="btn btn-secondary">Générer le catalogue</a>
+    {canManage && <a href="/admin/produits/new" class="btn btn-primary">+ Nouveau produit</a>}
+  </div>
 
   <div class="filter-bar">
     <a href={catUrl('')} class={`filter-tab ${!filterCat ? 'filter-tab--active' : ''}`}>
@@ -699,8 +698,29 @@ const DELETE_ERROR_MSG: Record<string, string> = {
 .toolbar {
   display: flex;
   justify-content: flex-end;
+  gap: var(--space-3);
   margin-bottom: var(--space-5);
 }
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 0.8125rem 1.625rem;
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  font-weight: 500;
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  min-height: 44px;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+.btn-secondary:hover { background: var(--color-surface); }
 
 .filter-bar {
   display: flex;

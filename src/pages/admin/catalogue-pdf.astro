@@ -1,0 +1,147 @@
+---
+import AdminLayout from '../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../lib/supabase';
+
+// Middleware protège déjà /admin/* derrière isStaff (voir src/middleware.ts) —
+// même convention que /admin/tarifs, pas de re-check ici.
+
+const CATEGORIES = ['boissons', 'snacks', 'chips', 'confiseries', 'divers'];
+const CAT_LABEL: Record<string, string> = {
+  boissons: 'Boissons', snacks: 'Snacks', chips: 'Chips', confiseries: 'Confiseries', divers: 'Divers',
+};
+
+const { data: groups } = await supabaseAdmin
+  .from('price_groups')
+  .select('id, name')
+  .order('created_at', { ascending: true });
+
+const preselectedGroup = Astro.url.searchParams.get('groupe') ?? 'base';
+---
+<AdminLayout title="Catalogue produits">
+  <p class="intro">
+    Génère un catalogue PDF prêt à imprimer ou à envoyer, avec les prix de la grille tarifaire choisie.
+    Les prix affichés viennent toujours de la résolution de grille existante — jamais recalculés.
+  </p>
+
+  <form method="get" action="/api/admin/catalogue-pdf" target="_blank" class="catalogue-form" id="catalogueForm">
+    <div class="field">
+      <label class="field-label" for="pdf-groupe">Grille tarifaire</label>
+      <select id="pdf-groupe" name="groupe">
+        <option value="base" selected={preselectedGroup === 'base'}>Prix de base (catalogue)</option>
+        {(groups ?? []).map(g => (
+          <option value={g.id} selected={preselectedGroup === g.id}>{g.name}</option>
+        ))}
+      </select>
+    </div>
+
+    <fieldset class="field">
+      <legend class="field-label">Catégories à inclure</legend>
+      <div class="checkbox-grid">
+        {CATEGORIES.map(c => (
+          <label class="checkbox-row">
+            <input type="checkbox" name="cat" value={c} checked />
+            {CAT_LABEL[c]}
+          </label>
+        ))}
+      </div>
+    </fieldset>
+
+    <label class="checkbox-row checkbox-row--solo">
+      <input type="checkbox" name="hide_unavailable" value="1" checked />
+      Masquer les produits indisponibles
+    </label>
+
+    <button type="submit" class="btn btn-primary">Générer le PDF</button>
+    <p class="form-note" id="catalogueFormNote" role="alert"></p>
+  </form>
+</AdminLayout>
+
+<script>
+  // Empêche seulement le cas ambigu (aucune catégorie cochée) — l'API
+  // retomberait de toute façon sur "toutes" mais autant éviter la confusion
+  // d'un formulaire qui semble n'avoir rien sélectionné.
+  const form = document.getElementById('catalogueForm') as HTMLFormElement | null;
+  const note = document.getElementById('catalogueFormNote');
+  form?.addEventListener('submit', (e) => {
+    const checked = form.querySelectorAll('input[name="cat"]:checked');
+    if (checked.length === 0) {
+      e.preventDefault();
+      if (note) note.textContent = 'Cochez au moins une catégorie.';
+    } else if (note) {
+      note.textContent = '';
+    }
+  });
+</script>
+
+<style>
+.intro {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  margin-bottom: var(--space-5);
+  max-width: 70ch;
+  line-height: 1.6;
+}
+
+.catalogue-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-width: 480px;
+  padding: var(--space-5);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+.field-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.field select {
+  padding: 0.5rem 0.75rem;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  min-height: 40px;
+}
+
+.checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-2);
+}
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  cursor: pointer;
+}
+.checkbox-row--solo {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+.checkbox-row input { width: 16px; height: 16px; cursor: pointer; }
+
+.form-note {
+  font-size: var(--text-xs);
+  color: oklch(0.46 0.18 25);
+  min-height: 1em;
+  margin: 0;
+}
+</style>

@@ -109,6 +109,7 @@ function unitPrice(priceHt: number | null, unitsPerCarton: number | null): numbe
       </h2>
       <p class="group-sub">{overrideCount} produit{overrideCount !== 1 ? 's' : ''} en écart sur {products.length}</p>
     </div>
+    <a href={`/admin/catalogue-pdf?groupe=${group.id}`} class="btn-secondary">Générer le catalogue</a>
   </div>
 
   {saved && <div class="alert alert--ok" role="status">Prix enregistrés.</div>}
@@ -255,6 +256,26 @@ function unitPrice(priceHt: number | null, unitsPerCarton: number | null): numbe
   gap: var(--space-4);
   margin-bottom: var(--space-4);
 }
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 0.8125rem 1.625rem;
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  font-weight: 500;
+  color: var(--color-ink);
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  min-height: 44px;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+.btn-secondary:hover { background: var(--color-surface); }
 .group-title {
   font-family: var(--font-display);
   font-size: 1.375rem;
