@@ -10,12 +10,13 @@ import { COMPANY, COMPANY_ADDRESS_LINE, DEFAULT_TVA_RATE } from './constants';
 // redimensionnées (lib/catalogueImages.ts) ; il ne lit ni ne calcule rien
 // d'autre.
 //
-// Deuxième direction graphique (remplace la version "fiche produit" à
-// couverture/conditions commerciales) : prix unitaire dominant, grandes
-// photos, en-tête minimal (logo + "catalogue professionnel 2026"), aucune
-// donnée administrative ou commerciale. Gabarit fixe et déterministe — aucun
-// appel IA à la génération, reproduit à l'identique une maquette de
-// référence à partir des données du moment.
+// Troisième direction graphique : couverture commerciale (logo + titre +
+// mosaïque de photos, sans donnée administrative) puis grille STRICTE de 9
+// fiches par page (3×3) — chaque emplacement a une hauteur fixe calculée une
+// fois pour la page entière, jamais mesurée fiche par fiche, pour que les
+// prix et conditionnements restent alignés sur toute la rangée quelle que
+// soit la longueur du nom. Gabarit fixe et déterministe — aucun appel IA à
+// la génération.
 
 export interface CatalogueProductInput {
   id: string;
@@ -44,7 +45,7 @@ export interface CataloguePdfData {
   groupLabel: string;
   /** Déjà filtrés (catégories, disponibilité) et triés (catégorie puis nom)
    *  par l'appelant — ce module se contente de les disposer, dans cet ordre,
-   *  en grille continue. */
+   *  en grille continue de 9 par page. */
   products: CatalogueProductInput[];
 }
 
@@ -59,109 +60,234 @@ export interface CatalogueGenerationIssue {
 
 const CAT_PRIMARY = '#C96334';
 const CAT_INK     = '#1E1A16';
-const CAT_MUTED   = '#6B6560';
+const CAT_MUTED   = '#5C5650';
 const CAT_BORDER  = '#E2DDD6';
 
 const CAT_PAGE_W  = 595;
-const CAT_LEFT    = 45;
-const CAT_RIGHT   = 550;
-const CAT_WIDTH   = CAT_RIGHT - CAT_LEFT; // 505
-const CAT_BOTTOM  = 790;
+const CAT_LEFT    = 35;
+const CAT_RIGHT   = 560;
+const CAT_WIDTH   = CAT_RIGHT - CAT_LEFT; // 525
+const CAT_BOTTOM  = 795;
+const CONTENT_TOP = 58;
+const ROW_H       = (CAT_BOTTOM - CONTENT_TOP) / 3;
+
+const COLS   = 3;
+const GUTTER = 16;
+const COL_W  = (CAT_WIDTH - GUTTER * (COLS - 1)) / COLS;
+const PHOTO_H = 141; // ~49.7 mm - dans la fourchette 45-50 mm demandee
+
+// Proportions reelles du fichier logo (745x418px) - preservees a chaque
+// usage, seule la hauteur cible change entre l'en-tete courant et la
+// couverture.
+const LOGO_ASPECT = 745 / 418;
 
 function euro(n: number): string {
-  // Même règle d'arrondi que le reste du site (admin/tarifs/[id].astro,
-  // formatEuro) — volontairement `toFixed`, pas un arrondi décimal maison :
-  // la cohérence avec le prix affiché ailleurs prime sur une règle
-  // "idéale" différente.
+  // Meme regle d'arrondi que le reste du site (admin/tarifs/[id].astro,
+  // formatEuro) - volontairement `toFixed`, pas un arrondi decimal maison :
+  // la coherence avec le prix affiche ailleurs prime sur une regle
+  // "ideale" differente.
   return `${n.toFixed(2).replace('.', ',')} €`;
 }
 
-/** Empêche la coupure entre un nombre et son unité ("500" / "ml") lors du
- *  retour à la ligne — espace insécable, jamais un retrait du nom. */
+/** Empeche la coupure entre un nombre et son unite ("500" / "ml") lors du
+ *  retour a la ligne - espace insecable, jamais un retrait du nom. */
 function keepUnitsTogether(text: string): string {
   return text.replace(/(\d+(?:[.,]\d+)?)\s+(ml|cl|dl|l|g|kg|mg)\b/gi, '$1 $2');
 }
 
-function chunk3<T>(arr: T[]): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += 3) out.push(arr.slice(i, i + 3));
-  return out;
+/** Retire un suffixe de conditionnement manifestement redondant ("*24",
+ *  "*20"...) - le carton est deja indique sous le prix. Purement cosmetique :
+ *  jamais applique au nom enregistre en base, seulement a l'affichage, et
+ *  seulement quand l'asterisque est un token separe (jamais "5*32", qui fait
+ *  partie du nom lui-meme et distingue une reference differente). */
+function stripRedundantPackSuffix(name: string): string {
+  return name.replace(/ \*\d+$/, '').trim();
 }
 
-/** En-tête minimal répété sur chaque page : le vrai logo (ressource
- *  embarquée, voir lib/incaLogoBase64.ts) et, seul texte, "catalogue
- *  professionnel 2026" — aucune date, grille, coordonnée ou titre de
- *  catégorie. Renvoie le Y de départ du contenu. */
-function drawCatalogueHeader(doc: PDFKit.PDFDocument, logoBuffer: Buffer | null): number {
+/** Tronque `text` pour tenir sur `maxLines` lignes a `width`, avec « ... ».
+ *  La grille etant a hauteur de rangee FIXE (9 par page, priorite absolue),
+ *  un nom trop long doit s'adapter plutot que casser l'alignement - jamais
+ *  un caractere coupe au ras du cadre, toujours une ellipse propre.
+ *  Police/taille doivent deja etre posees sur `doc` avant l'appel. */
+function fitToLines(doc: PDFKit.PDFDocument, text: string, width: number, maxLines: number): string {
+  // includeGap:true — sans ça, la valeur ne correspond pas à la hauteur par
+  // ligne réellement utilisée par heightOfString() pour empiler du texte
+  // multiligne, et le budget calculé ici serait trop court : des noms tenant
+  // réellement sur 2 lignes se retrouvaient tronqués à tort (deux références
+  // différentes affichant alors le même nom coupé).
+  const lineH = doc.currentLineHeight(true);
+  const maxH = lineH * maxLines + 0.5;
+  if (doc.heightOfString(text, { width }) <= maxH) return text;
+
+  let lo = 0, hi = text.length, best = text.slice(0, 1) + '…';
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const candidate = text.slice(0, mid).trimEnd() + '…';
+    if (doc.heightOfString(candidate, { width }) <= maxH) { best = candidate; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  return best;
+}
+
+/** Nom pret a l'affichage : suffixe redondant retire, nombre+unite proteges,
+ *  puis tenu sur 2 lignes. Doit etre appele avec fontSize(11)/Helvetica deja
+ *  poses sur `doc` (fitToLines mesure avec l'etat courant). */
+function prepareDisplayName(doc: PDFKit.PDFDocument, rawName: string, width: number): string {
+  const cleaned = keepUnitsTogether(stripRedundantPackSuffix(rawName));
+  return fitToLines(doc, cleaned, width, 2);
+}
+
+/** En-tete minimal repete sur chaque page produit : le vrai logo (ressource
+ *  embarquee, voir lib/incaLogoBase64.ts) et, seul texte, "catalogue
+ *  professionnel 2026" - aucune date, grille, coordonnee ou titre de
+ *  categorie. La grille compte sur une hauteur d'en-tete constante (voir
+ *  CONTENT_TOP) pour rester a hauteur fixe. */
+function drawCatalogueHeader(doc: PDFKit.PDFDocument, logoBuffer: Buffer | null): void {
   if (logoBuffer) {
     try {
-      doc.image(logoBuffer, CAT_LEFT, 28, { height: 32 });
+      doc.image(logoBuffer, CAT_LEFT, 14, { height: 24 });
     } catch {
-      // Ressource embarquée corrompue (ne devrait jamais arriver) — repli
-      // texte plutôt que de faire échouer tout le document.
-      doc.fontSize(15).font('Helvetica-Bold').fillColor(CAT_INK).text('Inca Import', CAT_LEFT, 34, { lineBreak: false });
+      // Ressource embarquee corrompue (ne devrait jamais arriver) - repli
+      // texte plutot que de faire echouer tout le document.
+      doc.fontSize(13).font('Helvetica-Bold').fillColor(CAT_INK).text('Inca Import', CAT_LEFT, 18, { lineBreak: false });
     }
   } else {
-    doc.fontSize(15).font('Helvetica-Bold').fillColor(CAT_INK).text('Inca Import', CAT_LEFT, 34, { lineBreak: false });
+    doc.fontSize(13).font('Helvetica-Bold').fillColor(CAT_INK).text('Inca Import', CAT_LEFT, 18, { lineBreak: false });
   }
 
-  doc.fontSize(11).font('Helvetica').fillColor(CAT_INK)
-    .text('catalogue professionnel 2026', 300, 38, { width: 250, align: 'right', lineBreak: false });
+  doc.fontSize(10).font('Helvetica').fillColor(CAT_INK)
+    .text('catalogue professionnel 2026', 300, 21, { width: CAT_RIGHT - 300, align: 'right', lineBreak: false });
 
-  doc.moveTo(CAT_LEFT, 74).lineTo(CAT_RIGHT, 74).lineWidth(0.5).strokeColor(CAT_BORDER).stroke();
-  return 96;
+  doc.moveTo(CAT_LEFT, 46).lineTo(CAT_RIGHT, 46).lineWidth(0.5).strokeColor(CAT_BORDER).stroke();
 }
 
-/** Hauteur réelle d'une rangée de 3 fiches, dérivée des polices posées sur
- *  `doc` — jamais devinée, sinon deux rangées finiraient par se chevaucher
- *  sans qu'aucun test ne le révèle avant l'impression. Les noms ne sont
- *  JAMAIS tronqués : la rangée s'étend le temps qu'il faut (voir consigne
- *  "la lisibilité prime sur le nombre de fiches à caser"). */
-function measureCatalogueRowHeight(doc: PDFKit.PDFDocument, row: CatalogueProductInput[], colW: number, photoH: number): number {
-  doc.fontSize(13).font('Helvetica-Bold');
-  let maxNameH = 0;
-  for (const p of row) maxNameH = Math.max(maxNameH, doc.heightOfString(keepUnitsTogether(p.name), { width: colW }));
-  doc.fontSize(25).font('Helvetica-Bold');
-  const priceLH = doc.currentLineHeight();
-  doc.fontSize(10.5).font('Helvetica');
-  const cartonLH = doc.currentLineHeight();
-  return photoH + 10 + maxNameH + 7 + priceLH + 4 + cartonLH + 16;
+/** Selection deterministe (aucun hasard, aucune IA) de 4 a 6 produits
+ *  photographies pour la mosaique de couverture, en visant la diversite de
+ *  familles demandee (boisson "simple", boisson proteinee, snack,
+ *  confiserie, chips, divers) plutot que l'ordre brut du catalogue. Se
+ *  degrade proprement si une famille est absente de la selection en cours
+ *  (catalogue filtre a une seule categorie, par exemple). */
+function pickCoverProducts(products: CatalogueProductInput[]): CatalogueProductInput[] {
+  const withPhoto = products.filter(p => p.imageBuffer != null);
+  const isProteinBoisson = (p: CatalogueProductInput) =>
+    p.category === 'boissons' && /prot[ée]in|milkshake/i.test(p.name);
+
+  const candidates = [
+    withPhoto.find(p => p.category === 'boissons' && !isProteinBoisson(p)),
+    withPhoto.find(isProteinBoisson),
+    withPhoto.find(p => p.category === 'snacks'),
+    withPhoto.find(p => p.category === 'confiseries'),
+    withPhoto.find(p => p.category === 'chips'),
+    withPhoto.find(p => p.category === 'divers'),
+  ];
+
+  const seen = new Set<string>();
+  const picked: CatalogueProductInput[] = [];
+  for (const p of candidates) {
+    if (p && !seen.has(p.id)) { picked.push(p); seen.add(p.id); }
+  }
+  for (const p of withPhoto) {
+    if (picked.length >= 5) break;
+    if (!seen.has(p.id)) { picked.push(p); seen.add(p.id); }
+  }
+  return picked.slice(0, 6);
 }
 
-/** Une fiche produit : grande photo (ou rien — jamais un cadre vide), nom
- *  complet, prix unitaire HT en gros, conditionnement carton. Les quatre
- *  seuls éléments demandés ; aucun prix carton, aucune description. */
+/** Emplacements fixes de la mosaique - tailles variees, disposition aeree et
+ *  asymetrique deliberement differente de la grille des fiches (voir brief :
+ *  "sans reprendre la grille des fiches"). */
+const COVER_SLOTS: { x: number; y: number; w: number; h: number }[] = [
+  { x: 222.5, y: 280, w: 150, h: 170 },
+  { x: 100,   y: 310, w: 110, h: 130 },
+  { x: 385,   y: 305, w: 110, h: 130 },
+  { x: 40,    y: 450, w: 85,  h: 100 },
+  { x: 470,   y: 450, w: 85,  h: 100 },
+  { x: 252.5, y: 520, w: 90,  h: 90  },
+];
+
+/** Couverture commerciale : fond blanc, logo reel bien visible, titre en
+ *  grand, mosaique de 4-6 vraies photos de produits, une touche de corail
+ *  (issue du logo) en accent. Aucun prix, aucun slogan, aucune donnee
+ *  administrative - voir le brief "evoquer une selection de produits". */
+function drawCatalogueCoverPage(
+  doc: PDFKit.PDFDocument, logoBuffer: Buffer | null, coverProducts: CatalogueProductInput[],
+): void {
+  if (logoBuffer) {
+    try {
+      const logoH = 90;
+      doc.image(logoBuffer, (CAT_PAGE_W - logoH * LOGO_ASPECT) / 2, 55, { height: logoH });
+    } catch {
+      doc.fontSize(30).font('Helvetica-Bold').fillColor(CAT_INK)
+        .text('Inca Import', 0, 85, { width: CAT_PAGE_W, align: 'center' });
+    }
+  } else {
+    doc.fontSize(30).font('Helvetica-Bold').fillColor(CAT_INK)
+      .text('Inca Import', 0, 85, { width: CAT_PAGE_W, align: 'center' });
+  }
+
+  doc.fontSize(32).font('Helvetica-Bold').fillColor(CAT_INK)
+    .text('catalogue professionnel 2026', 30, 188, { width: CAT_PAGE_W - 60, align: 'center', characterSpacing: 0.3 });
+
+  const ruleW = 60;
+  doc.moveTo(CAT_PAGE_W / 2 - ruleW / 2, 242).lineTo(CAT_PAGE_W / 2 + ruleW / 2, 242)
+    .lineWidth(2.5).strokeColor(CAT_PRIMARY).stroke();
+
+  coverProducts.forEach((p, i) => {
+    const slot = COVER_SLOTS[i];
+    if (!slot || !p.imageBuffer) return;
+    try {
+      doc.image(p.imageBuffer, slot.x, slot.y, { fit: [slot.w, slot.h], align: 'center', valign: 'center' });
+    } catch { /* photo illisible malgre la normalisation - case laissee vide, jamais bloquant */ }
+  });
+}
+
+/** Une fiche produit, a une position FIXE (row/col determinent x/y - jamais
+ *  mesuree individuellement) : grande photo (ou rien - jamais un cadre
+ *  vide), nom centre sur 2 lignes maximum, prix unitaire HT en gros centre,
+ *  conditionnement carton centre. Comme toutes les fiches d'une meme rangee
+ *  partagent les memes offsets fixes (nameY/priceY/cartonY, calcules une
+ *  fois pour tout le document), prix et conditionnements restent alignes
+ *  horizontalement meme quand les noms ont des longueurs differentes. */
 function drawCatalogueCard(
   doc: PDFKit.PDFDocument, p: CatalogueProductInput,
-  x: number, y: number, colW: number, photoH: number,
+  x: number, rowY: number, geom: { nameBlockH: number; priceLineH: number },
 ): void {
   if (p.imageBuffer) {
     try {
-      // Calée en bas (valign bottom) pour un effet "étagère" cohérent entre
-      // bouteilles hautes et paquets plus courts — le produit garde ses
-      // propres proportions (fit = contain, jamais déformé ni recadré ici :
-      // le recadrage des marges vides est déjà fait en amont, voir
+      // Calee en bas (valign bottom) pour un effet "etagere" coherent entre
+      // bouteilles hautes et paquets plus courts - le produit garde ses
+      // propres proportions (fit = contain, jamais deforme ni recadre ici :
+      // le recadrage des marges vides est deja fait en amont, voir
       // catalogueImages.ts).
-      doc.image(p.imageBuffer, x, y, { fit: [colW, photoH], align: 'center', valign: 'bottom' });
-    } catch { /* image corrompue malgré la normalisation — fiche compacte, jamais bloquant */ }
+      doc.image(p.imageBuffer, x, rowY, { fit: [COL_W, PHOTO_H], align: 'center', valign: 'bottom' });
+    } catch { /* image corrompue malgre la normalisation - fiche compacte, jamais bloquant */ }
   }
 
-  let ty = y + photoH + 10;
-  const name = keepUnitsTogether(p.name);
-  doc.fontSize(13).font('Helvetica-Bold').fillColor(CAT_INK).text(name, x, ty, { width: colW, lineGap: 0 });
-  ty += doc.heightOfString(name, { width: colW }) + 7;
+  const nameY = rowY + PHOTO_H + 8;
+  doc.fontSize(11).font('Helvetica').fillColor(CAT_INK);
+  const name = prepareDisplayName(doc, p.name, COL_W);
+  doc.text(name, x, nameY, { width: COL_W, align: 'center', lineGap: 0 });
 
+  const priceY = nameY + geom.nameBlockH + 6;
   const unitPrice = p.cartonPriceHt != null && p.unitsPerCarton ? p.cartonPriceHt / p.unitsPerCarton : null;
-  doc.fontSize(25).font('Helvetica-Bold');
-  const priceLH = doc.currentLineHeight();
-  doc.fillColor(CAT_PRIMARY)
-    .text(unitPrice != null ? euro(unitPrice) : '—', x, ty, { continued: true, lineBreak: false });
-  doc.fontSize(10).font('Helvetica').fillColor(CAT_MUTED).text('  HT / unité', { lineBreak: false });
-  ty += priceLH + 4;
+  const priceStr = unitPrice != null ? euro(unitPrice) : '—';
 
+  doc.fontSize(25).font('Helvetica-Bold');
+  const priceW = doc.widthOfString(priceStr);
+  doc.fontSize(9.5).font('Helvetica');
+  const htStr = '  HT / unité';
+  const htW = doc.widthOfString(htStr);
+  const comboX = x + (COL_W - (priceW + htW)) / 2;
+
+  doc.fontSize(25).font('Helvetica-Bold').fillColor(CAT_PRIMARY)
+    .text(priceStr, comboX, priceY, { lineBreak: false });
+  doc.fontSize(9.5).font('Helvetica').fillColor(CAT_MUTED)
+    .text(htStr, comboX + priceW, priceY + 12, { lineBreak: false });
+
+  const cartonY = priceY + geom.priceLineH + 5;
   if (p.unitsPerCarton != null) {
-    doc.fontSize(10.5).font('Helvetica').fillColor(CAT_MUTED)
-      .text(`Carton de ${p.unitsPerCarton} unité${p.unitsPerCarton > 1 ? 's' : ''}`, x, ty, { width: colW, lineBreak: false });
+    doc.fontSize(9.5).font('Helvetica').fillColor(CAT_MUTED)
+      .text(`Carton de ${p.unitsPerCarton} unité${p.unitsPerCarton > 1 ? 's' : ''}`, x, cartonY, { width: COL_W, align: 'center', lineBreak: false });
   }
 }
 
@@ -171,13 +297,13 @@ export function generateCataloguePDF(
 ): Promise<{ buffer: Buffer; issues: CatalogueGenerationIssue[] }> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
-      margin: 40, size: 'A4', bufferPages: true,
+      margin: 35, size: 'A4', bufferPages: true,
       info: {
         Title: `Catalogue produits — ${data.groupLabel}`,
         Author: COMPANY.name,
         Subject: 'Catalogue produits',
-        // Jamais de coût/marge ici, ni nulle part ailleurs dans ce document —
-        // seuls des prix de vente déjà résolus entrent dans ce module.
+        // Jamais de cout/marge ici, ni nulle part ailleurs dans ce document -
+        // seuls des prix de vente deja resolus entrent dans ce module.
       },
     });
     const chunks: Buffer[] = [];
@@ -192,32 +318,47 @@ export function generateCataloguePDF(
     }
     doc.on('end', () => resolve({ buffer: Buffer.concat(chunks), issues }));
 
-    const COLS = 3;
-    const GUTTER = 18;
-    const COL_W = (CAT_WIDTH - GUTTER * (COLS - 1)) / COLS;
-    const PHOTO_H = 136; // ≈ 48 mm, valeur de la maquette de référence
+    // Couverture commerciale - premiere page (creee automatiquement par
+    // PDFDocument), sans en-tete ni grille.
+    drawCatalogueCoverPage(doc, logoBuffer, pickCoverProducts(data.products));
 
-    let y = drawCatalogueHeader(doc, logoBuffer);
-    const newPage = () => {
-      doc.addPage();
-      y = drawCatalogueHeader(doc, logoBuffer);
-    };
+    // Geometrie de fiche calculee UNE SEULE FOIS pour tout le document : la
+    // grille est a hauteur de rangee fixe (priorite absolue "9 par page"),
+    // donc ces hauteurs ne dependent d'aucun contenu particulier.
+    // includeGap:true partout ici, pour la meme raison que dans fitToLines :
+    // la valeur doit correspondre a la hauteur par ligne reellement utilisee
+    // par PDFKit, jamais une estimation "sans interligne" trop courte.
+    doc.fontSize(11).font('Helvetica');
+    const nameBlockH = doc.currentLineHeight(true) * 2;
+    doc.fontSize(25).font('Helvetica-Bold');
+    const priceLineH = doc.currentLineHeight(true);
+    const geom = { nameBlockH, priceLineH };
 
-    // Grille continue : les produits arrivent déjà triés catégorie puis nom,
-    // donc les catégories restent groupées dans l'ordre sans qu'un bloc de
-    // titre ne soit nécessaire pour le faire visuellement (consigne : "pas de
-    // titre de catégorie volumineux, sans recréer des blocs de
-    // présentation").
-    for (const row of chunk3(data.products)) {
-      const rowH = measureCatalogueRowHeight(doc, row, COL_W, PHOTO_H);
-      if (y + rowH > CAT_BOTTOM) newPage();
-      row.forEach((p, i) => drawCatalogueCard(doc, p, CAT_LEFT + i * (COL_W + GUTTER), y, COL_W, PHOTO_H));
-      if (row.length === COLS) {
-        doc.moveTo(CAT_LEFT, y + rowH - 10).lineTo(CAT_RIGHT, y + rowH - 10)
-          .lineWidth(0.5).strokeColor(CAT_BORDER).stroke();
+    doc.addPage();
+    drawCatalogueHeader(doc, logoBuffer);
+
+    // Grille stricte 3x3 = 9 par page, en continu (categories deja triees
+    // par l'appelant, aucun saut de page ne doit etre provoque par un
+    // changement de categorie - voir brief "priorite absolue 9 par page").
+    data.products.forEach((p, i) => {
+      const posInPage = i % 9;
+      if (posInPage === 0 && i > 0) {
+        doc.addPage();
+        drawCatalogueHeader(doc, logoBuffer);
       }
-      y += rowH;
-    }
+      const col = posInPage % COLS;
+      const row = Math.floor(posInPage / COLS);
+      const x = CAT_LEFT + col * (COL_W + GUTTER);
+      const rowY = CONTENT_TOP + row * ROW_H;
+
+      drawCatalogueCard(doc, p, x, rowY, geom);
+
+      const rowComplete = col === COLS - 1 || i === data.products.length - 1;
+      if (rowComplete && row < 2) {
+        const ly = CONTENT_TOP + (row + 1) * ROW_H - 12;
+        doc.moveTo(CAT_LEFT, ly).lineTo(CAT_RIGHT, ly).lineWidth(0.5).strokeColor(CAT_BORDER).stroke();
+      }
+    });
 
     doc.end();
   });
