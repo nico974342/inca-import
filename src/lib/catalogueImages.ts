@@ -5,20 +5,35 @@ import sharp from 'sharp';
 // un délai maximum et un échec individuel ne fait qu'omettre CETTE image
 // (le PDF retombe sur le placeholder pour ce produit), voir generateCataloguePDF.
 
-const FETCH_TIMEOUT_MS = 4000;
-const MAX_CONCURRENT = 8;
+// Délai généreux : chaque image est aussi redimensionnée/recompressée par
+// sharp (CPU), pas seulement téléchargée — sous 8 requêtes concurrentes, le
+// temps de traitement s'additionne au temps réseau. Un timeout trop serré ici
+// bascule des produits ayant une vraie photo dans le bloc "sans photo" pour
+// une simple lenteur passagère, pas une image réellement indisponible.
+const FETCH_TIMEOUT_MS = 8000;
+const MAX_CONCURRENT = 6;
 
-/** PDFKit n'accepte que JPEG et PNG — un WebP (format autorisé à l'upload,
- *  voir /api/produits/upload-image.ts) doit être reconverti avant d'être
- *  embarqué, sinon PDFKit lève une erreur qui casserait tout le document. */
+// Les photos produit sources (WebP compris — PDFKit ne lit que JPEG/PNG) font
+// souvent plusieurs centaines de Ko à quelques Mo pièce. Embarquées telles
+// quelles dans ~70-80 vignettes, le PDF dépassait 14 Mo pour un catalogue
+// complet. Chaque image est donc systématiquement redimensionnée à sa taille
+// d'affichage réelle (vignette catalogue, jamais agrandie) et recompressée en
+// JPEG — largement suffisant à l'écran comme à l'impression, et le format qui
+// compresse le mieux une photo (contrairement au PNG utilisé avant pour le
+// seul cas WebP).
+const MAX_IMG_PX = 360;
+const JPEG_QUALITY = 78;
+
 async function normalizeForPdf(buffer: Buffer): Promise<Buffer | null> {
-  const isJpeg = buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
-  const isPng  = buffer.length > 4 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
-  if (isJpeg || isPng) return buffer;
   try {
-    // Tout le reste (WebP, ou un format imprévu) passe par sharp — reconverti
-    // en PNG, jamais réinjecté tel quel dans PDFKit.
-    return await sharp(buffer).png().toBuffer();
+    return await sharp(buffer)
+      .rotate() // respecte l'orientation EXIF avant le redimensionnement
+      .resize({ width: MAX_IMG_PX, height: MAX_IMG_PX, fit: 'inside', withoutEnlargement: true })
+      // Un PNG à fond transparent recompressé tel quel en JPEG deviendrait noir
+      // (fond par défaut de sharp) — aplati sur blanc, comme le reste de la page.
+      .flatten({ background: '#ffffff' })
+      .jpeg({ quality: JPEG_QUALITY })
+      .toBuffer();
   } catch {
     return null;
   }

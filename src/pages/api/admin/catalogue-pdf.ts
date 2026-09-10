@@ -63,11 +63,14 @@ export const GET: APIRoute = async ({ url }) => {
     imageBuffer: images.get(p.id) ?? null,
   }));
 
-  const editionDateLabel = formatDateReunion(new Date(), { day: 'numeric', month: 'long' });
+  const now = new Date();
+  const editionDateLabel = formatDateReunion(now, { day: 'numeric', month: 'long' });
+  const editionMonthYearLabel = formatDateReunion(now, { month: 'long', year: 'numeric' });
 
   const buffer = await generateCataloguePDF({
     groupLabel,
     editionDateLabel,
+    editionMonthYearLabel,
     products: catalogueProducts,
   });
 
