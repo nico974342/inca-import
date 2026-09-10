@@ -15,27 +15,39 @@ const MAX_CONCURRENT = 6;
 
 // Les photos produit sources (WebP compris — PDFKit ne lit que JPEG/PNG) font
 // souvent plusieurs centaines de Ko à quelques Mo pièce. Embarquées telles
-// quelles dans ~70-80 vignettes, le PDF dépassait 14 Mo pour un catalogue
-// complet. Chaque image est donc systématiquement redimensionnée à sa taille
-// d'affichage réelle (vignette catalogue, jamais agrandie) et recompressée en
-// JPEG — largement suffisant à l'écran comme à l'impression, et le format qui
-// compresse le mieux une photo (contrairement au PNG utilisé avant pour le
-// seul cas WebP).
-const MAX_IMG_PX = 360;
-const JPEG_QUALITY = 78;
+// quelles, le PDF dépassait 14 Mo pour un catalogue complet. Chaque image est
+// donc systématiquement redimensionnée à sa taille d'affichage réelle (jamais
+// agrandie) et recompressée en JPEG — largement suffisant à l'écran comme à
+// l'impression, et le format qui compresse le mieux une photo (contrairement
+// au PNG utilisé avant pour le seul cas WebP). Le plafond est plus généreux
+// que pour la vignette précédente : les photos occupent maintenant ~48mm de
+// haut sur la page (vs ~25mm), donc plus de pixels sources pour rester nettes
+// à cette taille d'affichage.
+const MAX_IMG_PX = 480;
+const JPEG_QUALITY = 76;
 
 async function normalizeForPdf(buffer: Buffer): Promise<Buffer | null> {
+  // Beaucoup de photos produit fournisseur ont une marge blanche généreuse
+  // autour du produit — recadrée avant redimensionnement, sinon "agrandir
+  // la photo" agrandit surtout cette marge, pas le produit lui-même.
+  // trim() peut échouer sur un fond non uniforme ou une image déjà cadrée au
+  // plus près : on retente alors sans recadrage plutôt que de perdre la photo.
+  const finish = (img: sharp.Sharp) => img
+    .resize({ width: MAX_IMG_PX, height: MAX_IMG_PX, fit: 'inside', withoutEnlargement: true })
+    // Un PNG à fond transparent recompressé tel quel en JPEG deviendrait noir
+    // (fond par défaut de sharp) — aplati sur blanc, comme le reste de la page.
+    .flatten({ background: '#ffffff' })
+    .jpeg({ quality: JPEG_QUALITY })
+    .toBuffer();
+
   try {
-    return await sharp(buffer)
-      .rotate() // respecte l'orientation EXIF avant le redimensionnement
-      .resize({ width: MAX_IMG_PX, height: MAX_IMG_PX, fit: 'inside', withoutEnlargement: true })
-      // Un PNG à fond transparent recompressé tel quel en JPEG deviendrait noir
-      // (fond par défaut de sharp) — aplati sur blanc, comme le reste de la page.
-      .flatten({ background: '#ffffff' })
-      .jpeg({ quality: JPEG_QUALITY })
-      .toBuffer();
+    return await finish(sharp(buffer).rotate().trim({ threshold: 12 }));
   } catch {
-    return null;
+    try {
+      return await finish(sharp(buffer).rotate());
+    } catch {
+      return null;
+    }
   }
 }
 

@@ -3,7 +3,9 @@ import { supabaseAdmin } from '../../../lib/supabase';
 import { generateCataloguePDF, type CatalogueProductInput } from '../../../lib/pdf';
 import { fetchPriceGroupOverrides, resolveGroupPrice } from '../../../lib/clients';
 import { fetchProductImages } from '../../../lib/catalogueImages';
-import { formatDateReunion } from '../../../lib/datetime';
+import { INCA_LOGO_PNG_BASE64 } from '../../../lib/incaLogoBase64';
+
+const LOGO_BUFFER = Buffer.from(INCA_LOGO_PNG_BASE64, 'base64');
 
 // Middleware (src/middleware.ts) protège déjà tout /api/admin/* derrière
 // isStaff — pas besoin de revérifier le rôle ici, même convention que les
@@ -63,16 +65,19 @@ export const GET: APIRoute = async ({ url }) => {
     imageBuffer: images.get(p.id) ?? null,
   }));
 
-  const now = new Date();
-  const editionDateLabel = formatDateReunion(now, { day: 'numeric', month: 'long' });
-  const editionMonthYearLabel = formatDateReunion(now, { month: 'long', year: 'numeric' });
+  const { buffer, issues } = await generateCataloguePDF({ groupLabel, products: catalogueProducts }, LOGO_BUFFER);
 
-  const buffer = await generateCataloguePDF({
-    groupLabel,
-    editionDateLabel,
-    editionMonthYearLabel,
-    products: catalogueProducts,
-  });
+  // Jamais affiché dans le PDF (voir generateCataloguePDF) — signalé ici pour
+  // l'administrateur, via les logs serveur, sans bloquer ni dégrader l'export.
+  if (issues.length > 0) {
+    const byKind = { missing_image: 0, missing_price: 0, missing_units: 0 };
+    for (const issue of issues) byKind[issue.kind]++;
+    console.warn(
+      `[catalogue-pdf] ${issues.length} anomalie(s) — ` +
+      `${byKind.missing_image} photo(s) manquante(s), ${byKind.missing_price} prix manquant(s), ${byKind.missing_units} conditionnement(s) manquant(s) :`,
+      issues.map(i => `${i.productName} (${i.kind})`).join(' · '),
+    );
+  }
 
   return new Response(buffer, {
     headers: {
