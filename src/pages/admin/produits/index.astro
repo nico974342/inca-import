@@ -7,9 +7,16 @@ import {
 } from '../../../lib/constants';
 import { fetchAvailability, toAvailability } from '../../../lib/stock';
 import { reunionMonthStart } from '../../../lib/datetime';
-import { isAdmin } from '../../../lib/roles';
+import { isAdmin, isStaff } from '../../../lib/roles';
 
-if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
+const viewer = (Astro.locals as any).user;
+if (!isStaff(viewer)) return Astro.redirect('/admin');
+// Le commercial voit un catalogue lisible mais expurgé : aucune donnée de
+// coût/marge ne doit atteindre le HTML rendu (pas seulement être masquée en
+// CSS), et aucune action de gestion (créer/modifier/supprimer) ne lui est
+// offerte. Un seul indicateur gouverne tout le template ci-dessous — voir
+// chaque section gardée par `canManage` pour ce qui reste admin-only.
+const canManage = isAdmin(viewer);
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'];
 
@@ -223,6 +230,12 @@ function formatUnitPrice(priceHt: number | null, unitsPerCarton: number | null):
   return formatPrice(priceHt / unitsPerCarton);
 }
 
+/** "24 u/carton" — conditionnement, affiché à côté du prix unitaire. */
+function formatConditioning(unitsPerCarton: number | null): string | null {
+  if (!unitsPerCarton || unitsPerCarton <= 0) return null;
+  return `${unitsPerCarton} u/carton`;
+}
+
 function formatQty(n: number): string {
   return n.toLocaleString('fr-FR');
 }
@@ -260,9 +273,11 @@ const DELETE_ERROR_MSG: Record<string, string> = {
       {DELETE_ERROR_MSG[deleteError] ?? DELETE_ERROR_MSG.erreur}
     </div>
   )}
-  <div class="toolbar">
-    <a href="/admin/produits/new" class="btn btn-primary">+ Nouveau produit</a>
-  </div>
+  {canManage && (
+    <div class="toolbar">
+      <a href="/admin/produits/new" class="btn btn-primary">+ Nouveau produit</a>
+    </div>
+  )}
 
   <div class="filter-bar">
     <a href={catUrl('')} class={`filter-tab ${!filterCat ? 'filter-tab--active' : ''}`}>
@@ -310,17 +325,19 @@ const DELETE_ERROR_MSG: Record<string, string> = {
       <div class="ss-stat">
         <span class="ss-label">Stock actuel</span>
         <span class="ss-value" id="ssStockCartons"></span>
-        <span class="ss-sub" id="ssStockValue"></span>
+        {canManage && <span class="ss-sub" id="ssStockValue"></span>}
       </div>
       <div class="ss-stat">
         <span class="ss-label">CA HT généré <span class="ss-period">12 mois</span></span>
         <span class="ss-value" id="ssCa"></span>
       </div>
-      <div class="ss-stat">
-        <span class="ss-label">Marge HT générée <span class="ss-period">12 mois</span></span>
-        <span class="ss-value ss-value--accent" id="ssMarge"></span>
-        <span class="ss-sub" id="ssMargePct"></span>
-      </div>
+      {canManage && (
+        <div class="ss-stat">
+          <span class="ss-label">Marge HT générée <span class="ss-period">12 mois</span></span>
+          <span class="ss-value ss-value--accent" id="ssMarge"></span>
+          <span class="ss-sub" id="ssMargePct"></span>
+        </div>
+      )}
     </div>
     <p class="ss-note" id="ssNote" hidden></p>
   </div>
@@ -349,13 +366,15 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                 {currentSort === 'prix' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
               </a>
             </th>
-            <th>Coût moy. HT</th>
-            <th>
-              <a href={sortUrl('marge')} class={`th-sort ${currentSort === 'marge' ? 'th-sort--active' : ''}`}>
-                Marge
-                {currentSort === 'marge' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
-              </a>
-            </th>
+            {canManage && <th>Coût moy. HT</th>}
+            {canManage && (
+              <th>
+                <a href={sortUrl('marge')} class={`th-sort ${currentSort === 'marge' ? 'th-sort--active' : ''}`}>
+                  Marge
+                  {currentSort === 'marge' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
+                </a>
+              </th>
+            )}
             <th>
               <a href={sortUrl('ventes_mois')} class={`th-sort ${currentSort === 'ventes_mois' ? 'th-sort--active' : ''}`}>
                 Ventes mois en cours
@@ -395,8 +414,8 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                 title="Estimation basée sur la vitesse de vente moyenne des 10 dernières semaines (commandes confirmées ou livrées). « — » = pas de vente récente, pas d'estimation possible."
               >?</span>
             </th>
-            <th>Pos.</th>
-            <th></th>
+            {canManage && <th>Pos.</th>}
+            {canManage && <th></th>}
           </tr>
         </thead>
         <tbody>
@@ -406,15 +425,17 @@ const DELETE_ERROR_MSG: Record<string, string> = {
               data-units-sold={p.agg.unitsSold}
               data-cartons-sold={p.agg.cartonsSold}
               data-stock-cartons={p.agg.stockCartons}
-              data-stock-value={p.agg.stockValue}
+              data-stock-value={canManage ? p.agg.stockValue : undefined}
               data-ca={p.agg.caHt}
-              data-ca-calculable={p.agg.caCalculable}
-              data-marge={p.agg.margeHt}
+              data-ca-calculable={canManage ? p.agg.caCalculable : undefined}
+              data-marge={canManage ? p.agg.margeHt : undefined}
               data-partial-units={p.agg.partialUnits ? '1' : null}
-              data-partial-stock={p.agg.partialStock ? '1' : null}
+              data-partial-stock={canManage && p.agg.partialStock ? '1' : null}
             >
               <td class="td-strong">
-                <a href={`/admin/produits/${p.id}/performance`} class="product-link">{p.name}</a>
+                {canManage
+                  ? <a href={`/admin/produits/${p.id}/performance`} class="product-link">{p.name}</a>
+                  : p.name}
               </td>
               <td>
                 <span class={`badge badge--${p.category}`}>
@@ -424,17 +445,21 @@ const DELETE_ERROR_MSG: Record<string, string> = {
               <td class="td-mono">{p.sku ?? '—'}</td>
               <td class="td-mono">
                 {formatPrice(p.price_ht)}
-                {formatUnitPrice(p.price_ht, (p as any).units_per_carton ?? null) && (
-                  <span class="td-sub"> ({formatUnitPrice(p.price_ht, (p as any).units_per_carton ?? null)}/unité)</span>
+                {(formatUnitPrice(p.price_ht, (p as any).units_per_carton ?? null) || formatConditioning((p as any).units_per_carton ?? null)) && (
+                  <span class="td-sub">
+                    {' '}({[formatUnitPrice(p.price_ht, (p as any).units_per_carton ?? null) && `${formatUnitPrice(p.price_ht, (p as any).units_per_carton ?? null)}/unité`, formatConditioning((p as any).units_per_carton ?? null)].filter(Boolean).join(' · ')})
+                  </span>
                 )}
               </td>
-              <td class="td-mono td-muted">
-                {formatPrice((p as any).prix_achat_moyen_ht ?? null)}
-                {formatUnitPrice((p as any).prix_achat_moyen_ht ?? null, (p as any).units_per_carton ?? null) && (
-                  <span class="td-sub"> ({formatUnitPrice((p as any).prix_achat_moyen_ht ?? null, (p as any).units_per_carton ?? null)}/unité)</span>
-                )}
-              </td>
-              {(() => {
+              {canManage && (
+                <td class="td-mono td-muted">
+                  {formatPrice((p as any).prix_achat_moyen_ht ?? null)}
+                  {formatUnitPrice((p as any).prix_achat_moyen_ht ?? null, (p as any).units_per_carton ?? null) && (
+                    <span class="td-sub"> ({formatUnitPrice((p as any).prix_achat_moyen_ht ?? null, (p as any).units_per_carton ?? null)}/unité)</span>
+                  )}
+                </td>
+              )}
+              {canManage && (() => {
                 const mi = margeInfo(p.margePct);
                 return <td><span class={`marge-chip ${mi.cls}`}>{mi.label}</span></td>;
               })()}
@@ -498,20 +523,22 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                   <p class="td-sub">{p.vitesseVente.toFixed(1)} cartons/sem.</p>
                 )}
               </td>
-              <td class="td-muted">{p.position}</td>
-              <td class="td-actions">
-                <div class="actions-inner">
-                  <a href={`/admin/produits/${p.id}/edit`} class="action-link">Modifier</a>
-                  <form
-                    action={`/api/produits/${p.id}/delete`}
-                    method="post"
-                    class="delete-form"
-                    onsubmit="return confirm('Supprimer ce produit ?')"
-                  >
-                    <button type="submit" class="action-link action-link--danger">Supprimer</button>
-                  </form>
-                </div>
-              </td>
+              {canManage && <td class="td-muted">{p.position}</td>}
+              {canManage && (
+                <td class="td-actions">
+                  <div class="actions-inner">
+                    <a href={`/admin/produits/${p.id}/edit`} class="action-link">Modifier</a>
+                    <form
+                      action={`/api/produits/${p.id}/delete`}
+                      method="post"
+                      class="delete-form"
+                      onsubmit="return confirm('Supprimer ce produit ?')"
+                    >
+                      <button type="submit" class="action-link action-link--danger">Supprimer</button>
+                    </form>
+                  </div>
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -527,8 +554,14 @@ const DELETE_ERROR_MSG: Record<string, string> = {
   ) : (
     <div class="empty-state">
       <p class="empty-title">Aucun produit encore.</p>
-      <p class="empty-body">Ajoutez votre premier produit pour le voir apparaître dans le catalogue.</p>
-      <a href="/admin/produits/new" class="btn btn-primary" style="margin-top: var(--space-5)">+ Ajouter un produit</a>
+      {canManage ? (
+        <>
+          <p class="empty-body">Ajoutez votre premier produit pour le voir apparaître dans le catalogue.</p>
+          <a href="/admin/produits/new" class="btn btn-primary" style="margin-top: var(--space-5)">+ Ajouter un produit</a>
+        </>
+      ) : (
+        <p class="empty-body">Le catalogue est vide pour l'instant.</p>
+      )}
     </div>
   )}
 </AdminLayout>
@@ -574,24 +607,30 @@ const DELETE_ERROR_MSG: Record<string, string> = {
     }
 
     const setText = (id: string, text: string) => { const n = el(id); if (n) n.textContent = text; };
+    // Présence des nœuds coût/marge dans le DOM = seule source de vérité
+    // côté client pour savoir si ce visiteur y a droit — le serveur ne les
+    // a tout simplement pas rendus pour un commercial (voir index.astro).
+    const showMargin = !!el('ssMarge');
 
     setText('ssCount', `${matched.length} produits`);
     setText('ssQuery', `« ${searchInput?.value.trim() ?? ''} »`);
     setText('ssUnits', `${num.format(Math.round(units))} unités`);
     setText('ssCartonsSold', `${num.format(Math.round(cartonsSold))} cartons`);
     setText('ssStockCartons', `${num.format(Math.round(stockCartons))} cartons`);
-    setText('ssStockValue', `${eur.format(stockValue)} de stock`);
     setText('ssCa', eur.format(ca));
-    setText('ssMarge', eur.format(marge));
-    // Sur caCalculable (coût connu), jamais sur ca (CA total) — un coût
-    // d'achat absent est inconnu, pas nul, voir lib/constants.ts (margeCouverte).
-    setText('ssMargePct', caCalculable > 0 ? `${((marge / caCalculable) * 100).toFixed(1)} % du CA à coût connu` : '—');
+    if (showMargin) {
+      setText('ssStockValue', `${eur.format(stockValue)} de stock`);
+      setText('ssMarge', eur.format(marge));
+      // Sur caCalculable (coût connu), jamais sur ca (CA total) — un coût
+      // d'achat absent est inconnu, pas nul, voir lib/constants.ts (margeCouverte).
+      setText('ssMargePct', caCalculable > 0 ? `${((marge / caCalculable) * 100).toFixed(1)} % du CA à coût connu` : '—');
+    }
 
     // Say so when a total is understated rather than letting it read as exact.
     const notes: string[] = [];
     if (partialUnits) notes.push('unités partielles (conditionnement non défini pour certains produits)');
-    if (partialStock) notes.push('valeur de stock partielle (PUMP non défini pour certains produits)');
-    if (ca > 0 && caCalculable < ca) notes.push(`marge calculée sur ${((caCalculable / ca) * 100).toFixed(1)} % du CA (coût d'achat inconnu sur le reste)`);
+    if (showMargin && partialStock) notes.push('valeur de stock partielle (PUMP non défini pour certains produits)');
+    if (showMargin && ca > 0 && caCalculable < ca) notes.push(`marge calculée sur ${((caCalculable / ca) * 100).toFixed(1)} % du CA (coût d'achat inconnu sur le reste)`);
     const noteEl = el('ssNote');
     if (noteEl) {
       noteEl.textContent = notes.length ? `* ${notes.join(' · ')}` : '';
