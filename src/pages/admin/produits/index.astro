@@ -342,6 +342,21 @@ const DELETE_ERROR_MSG: Record<string, string> = {
     <p class="ss-note" id="ssNote" hidden></p>
   </div>
 
+  {/* Textes des notes coût/marge fournis en donnée server-rendue, jamais en
+      littéral dans le script partagé ci-dessous — sinon ces phrases (sans
+      aucun chiffre, mais mentionnant le coût) resteraient lisibles dans le
+      HTML d'un commercial même si la logique qui les affiche ne s'exécute
+      jamais pour lui. Absent du DOM = absent du code source pour ce rôle. */}
+  {canManage && (
+    <span
+      id="ssNoteTemplates"
+      hidden
+      data-partial-stock="valeur de stock partielle (PUMP non défini pour certains produits)"
+      data-coverage-prefix="marge calculée sur "
+      data-coverage-suffix=" % du CA (coût d'achat inconnu sur le reste)"
+    ></span>
+  )}
+
   {rows && rows.length > 0 ? (
     <div class="table-wrap">
       <table class="data-table">
@@ -618,19 +633,24 @@ const DELETE_ERROR_MSG: Record<string, string> = {
     setText('ssCartonsSold', `${num.format(Math.round(cartonsSold))} cartons`);
     setText('ssStockCartons', `${num.format(Math.round(stockCartons))} cartons`);
     setText('ssCa', eur.format(ca));
+    // Textes de note fournis par le serveur, uniquement rendus pour ce rôle
+    // (voir #ssNoteTemplates) — pas de phrase liée au coût en dur ici.
+    const noteTpl = el('ssNoteTemplates') as HTMLElement | null;
+
     if (showMargin) {
       setText('ssStockValue', `${eur.format(stockValue)} de stock`);
       setText('ssMarge', eur.format(marge));
-      // Sur caCalculable (coût connu), jamais sur ca (CA total) — un coût
-      // d'achat absent est inconnu, pas nul, voir lib/constants.ts (margeCouverte).
+      // Sur caCalculable (part au coût connu), jamais sur ca (CA total) — voir lib/constants.ts (margeCouverte).
       setText('ssMargePct', caCalculable > 0 ? `${((marge / caCalculable) * 100).toFixed(1)} % du CA à coût connu` : '—');
     }
 
     // Say so when a total is understated rather than letting it read as exact.
     const notes: string[] = [];
     if (partialUnits) notes.push('unités partielles (conditionnement non défini pour certains produits)');
-    if (showMargin && partialStock) notes.push('valeur de stock partielle (PUMP non défini pour certains produits)');
-    if (showMargin && ca > 0 && caCalculable < ca) notes.push(`marge calculée sur ${((caCalculable / ca) * 100).toFixed(1)} % du CA (coût d'achat inconnu sur le reste)`);
+    if (showMargin && partialStock && noteTpl?.dataset.partialStock) notes.push(noteTpl.dataset.partialStock);
+    if (showMargin && ca > 0 && caCalculable < ca && noteTpl) {
+      notes.push(`${noteTpl.dataset.coveragePrefix ?? ''}${((caCalculable / ca) * 100).toFixed(1)}${noteTpl.dataset.coverageSuffix ?? ''}`);
+    }
     const noteEl = el('ssNote');
     if (noteEl) {
       noteEl.textContent = notes.length ? `* ${notes.join(' · ')}` : '';
