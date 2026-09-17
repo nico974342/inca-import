@@ -30,22 +30,33 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
   const form = await request.formData();
   const productIds = form.getAll('product_id[]') as string[];
   const quantities  = form.getAll('quantity[]').map(v => parseInt(v as string, 10));
+  const pricesRaw   = form.getAll('price[]') as string[];
 
   // Collapse into product_id -> total quantity (defends against accidental
-  // duplicate lines for the same product from the client).
+  // duplicate lines for the same product from the client). A price override
+  // is only recorded when the client actually sent a non-empty value for
+  // that line — an empty string means "the admin didn't touch the price
+  // field", and must never be treated as "set it to 0".
   const submitted = new Map<string, number>();
+  const priceOverrideByProduct = new Map<string, number>();
   for (let i = 0; i < productIds.length; i++) {
     const pid = productIds[i];
     const qty = quantities[i];
     if (!pid || !Number.isFinite(qty) || qty <= 0) continue;
     submitted.set(pid, (submitted.get(pid) ?? 0) + qty);
+
+    const rawPrice = pricesRaw[i];
+    if (rawPrice != null && rawPrice.trim() !== '') {
+      const parsed = Number(rawPrice);
+      if (Number.isFinite(parsed) && parsed >= 0) priceOverrideByProduct.set(pid, parsed);
+    }
   }
 
   if (submitted.size === 0) return redirectTo(`/admin/commandes/${id}/edit?error=empty`);
 
   const { data: currentItems } = await supabaseAdmin
     .from('order_items')
-    .select('id, product_id, product_name, quantity')
+    .select('id, product_id, product_name, quantity, price_ht_snapshot')
     .eq('order_id', id);
 
   const currentByProduct = new Map(
@@ -68,36 +79,47 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
   const added: Array<{ name: string; qty: number }> = [];
   const removed: Array<{ name: string; qty: number }> = [];
   const changed: Array<{ name: string; from: number; to: number }> = [];
+  const repriced: Array<{ name: string; from: number | null; to: number }> = [];
   const items: OrderLineInput[] = [];
 
   for (const [pid, qty] of submitted) {
     const existing = currentByProduct.get(pid);
     const prod = productMap.get(pid);
+    const override = priceOverrideByProduct.get(pid);
     if (existing) {
-      // Ré-résout le prix/TVA/coût sur le produit actuel, comme pour une
-      // nouvelle ligne — sinon une correction du prix catalogue après coup
-      // (ex. prix à 0€ par erreur, corrigé plus tard) ne se répercute jamais
-      // sur les lignes déjà présentes, même quand on modifie explicitement
-      // la commande. Si le produit a disparu du catalogue, on conserve le
-      // snapshot existant (le RPC ne touche pas les colonnes à null).
+      // Par défaut, une ligne existante conserve son price_ht_snapshot /
+      // tva_rate_snapshot / pump_snapshot tels quels — une commande éditée
+      // pour changer une quantité ne doit JAMAIS recalculer silencieusement
+      // le prix historique d'une autre ligne (ni même de la sienne). Le prix
+      // n'est réécrit QUE si l'écran d'édition a explicitement envoyé une
+      // valeur pour CETTE ligne (l'admin a touché son champ prix) — voir
+      // price[] dans edit.astro. tva_rate_snapshot/pump_snapshot ne sont
+      // jamais corrigibles depuis cet écran, donc toujours null ici (le RPC
+      // les laisse intacts).
       items.push({
         product_id:        pid,
         product_name:      existing.product_name,
         quantity:          qty,
         unit:              null,
-        price_ht_snapshot: prod ? resolveClientPrice(pid, prod.price_ht, priceOverrides, remisePct) : null,
-        tva_rate_snapshot: prod ? prod.tva_rate : null,
-        pump_snapshot:     prod ? prod.prix_achat_moyen_ht : null,
+        price_ht_snapshot: override ?? null,
+        tva_rate_snapshot: null,
+        pump_snapshot:     null,
       });
       if (existing.quantity !== qty) changed.push({ name: existing.product_name, from: existing.quantity, to: qty });
+      if (override != null) {
+        const from = existing.price_ht_snapshot != null ? Number(existing.price_ht_snapshot) : null;
+        if (from !== override) repriced.push({ name: existing.product_name, from, to: override });
+      }
     } else {
       if (!prod) continue;
+      // Une ligne nouvellement ajoutée reste tarifée sur le produit actuel,
+      // sauf si l'admin a explicitement corrigé son prix avant d'enregistrer.
       items.push({
         product_id:        pid,
         product_name:      prod.name,
         quantity:          qty,
         unit:              prod.unit,
-        price_ht_snapshot: resolveClientPrice(pid, prod.price_ht, priceOverrides, remisePct),
+        price_ht_snapshot: override ?? resolveClientPrice(pid, prod.price_ht, priceOverrides, remisePct),
         tva_rate_snapshot: prod.tva_rate,
         pump_snapshot:     prod.prix_achat_moyen_ht,
       });
@@ -121,11 +143,12 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
     return redirectTo(`/admin/commandes/${id}/edit?error=erreur`);
   }
 
-  if (added.length || removed.length || changed.length) {
+  if (added.length || removed.length || changed.length || repriced.length) {
     const summary = [
-      added.length   ? `+${added.length} produit(s) ajouté(s)` : null,
-      removed.length ? `-${removed.length} produit(s) retiré(s)` : null,
-      changed.length ? `${changed.length} quantité(s) modifiée(s)` : null,
+      added.length    ? `+${added.length} produit(s) ajouté(s)` : null,
+      removed.length  ? `-${removed.length} produit(s) retiré(s)` : null,
+      changed.length  ? `${changed.length} quantité(s) modifiée(s)` : null,
+      repriced.length ? `${repriced.length} prix corrigé(s)` : null,
     ].filter(Boolean).join(' · ');
 
     await logAdminAction({
@@ -134,7 +157,7 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
       targetType: 'order',
       targetId: id,
       targetLabel: order.societe ?? order.nom,
-      details: { resume: summary, ajoutes: added, retires: removed, modifies: changed },
+      details: { resume: summary, ajoutes: added, retires: removed, modifies: changed, prix_corriges: repriced },
     });
   }
 

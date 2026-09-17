@@ -1,28 +1,29 @@
 -- Bug : modifier une commande existante (changement de quantité, ajout d'une
--- ligne, etc.) ne rafraîchissait jamais le prix/TVA/coût des lignes DÉJÀ
--- présentes. order_update_checked (voir order_update_checked.sql) ne SET
--- que `quantity` dans son étape 1 — price_ht_snapshot, tva_rate_snapshot et
--- pump_snapshot restaient figés à leur valeur de création, même quand
--- l'appelant en envoyait une nouvelle valeur (src/pages/api/admin/orders/
--- [id]/update.ts envoyait d'ailleurs `null` pour ces trois colonnes sur les
--- lignes existantes, en s'appuyant explicitement sur le fait qu'elles ne
--- seraient pas touchées).
+-- ligne, etc.) ne permettait JAMAIS de corriger le prix d'une ligne déjà
+-- présente. order_update_checked (voir order_update_checked.sql) ne SET que
+-- `quantity` dans son étape 1 — price_ht_snapshot restait figé à sa valeur
+-- de création, même quand l'écran d'édition affichait un nouveau prix pour
+-- cette ligne et que l'appelant tentait de le sauvegarder.
 --
 -- Cas réel : une ligne créée avec price_ht_snapshot = 0 € (prix produit à 0
 -- par erreur au moment de la commande) restait à 0 € pour toujours, même
--- après correction du prix catalogue et modification explicite de la
--- commande par un admin — la ligne rouverte affichait encore 0 €.
+-- après correction du prix catalogue.
 --
--- Ce correctif fait ré-évaluer price_ht_snapshot / tva_rate_snapshot /
--- pump_snapshot à chaque édition, pour toutes les lignes conservées, à
--- partir du produit actuel — exactement comme une ligne nouvellement
--- ajoutée l'est déjà (voir l'étape 2, INSERT, inchangée). C'est un choix
--- délibéré : "modifier la commande" doit refléter les prix catalogue
--- actuels sur les lignes retouchées, pas seulement sur les lignes ajoutées.
--- L'appelant doit désormais envoyer un price_ht_snapshot/tva_rate_snapshot/
--- pump_snapshot résolu pour CHAQUE ligne (existante ou nouvelle) ; NULL reste
--- interprété comme "conserve la valeur actuelle" (COALESCE), pour le cas où
--- le produit a disparu du catalogue entre-temps.
+-- Ce correctif rend price_ht_snapshot éditable ligne par ligne, à la
+-- discrétion de l'admin (écran de modification, champ prix — voir
+-- edit.astro et src/pages/api/admin/orders/[id]/update.ts) :
+--   - `quantity` est toujours réécrite (comportement inchangé) ;
+--   - `price_ht_snapshot` n'est réécrit QUE si l'appelant envoie une valeur
+--     non nulle pour cette ligne précise (COALESCE conserve sinon la valeur
+--     existante) — jamais de recalcul automatique depuis le catalogue au
+--     simple fait d'enregistrer une commande ;
+--   - `tva_rate_snapshot` et `pump_snapshot` ne sont jamais réécrits par une
+--     édition, intentionnellement : l'écran ne permet pas de les corriger,
+--     donc il n'y a rien à leur appliquer ici (comportement inchangé par
+--     rapport à la version originale de ce fichier).
+-- Modifier UNIQUEMENT une quantité (aucune valeur de prix envoyée) laisse
+-- ainsi le price_ht_snapshot de CETTE ligne — et de toutes les autres —
+-- strictement inchangé.
 
 CREATE OR REPLACE FUNCTION public.order_update_checked(p_order_id uuid, p_items jsonb)
  RETURNS TABLE(r_conflicts jsonb)
@@ -92,14 +93,13 @@ BEGIN
   END IF;
 
   -- Tout passe : diff atomique des lignes.
-  -- 1) Lignes déjà présentes : quantité ET prix/TVA/coût ré-alignés sur le
-  -- produit actuel (COALESCE conserve l'existant si l'appelant envoie NULL,
-  -- ex. produit disparu du catalogue).
+  -- 1) Lignes déjà présentes : quantité toujours mise à jour ; le prix n'est
+  -- réécrit que si l'appelant envoie explicitement une valeur pour cette
+  -- ligne (COALESCE conserve sinon price_ht_snapshot tel quel). TVA et coût
+  -- restent hors de portée d'une édition, volontairement.
   UPDATE order_items oi
   SET quantity          = (it->>'quantity')::int,
-      price_ht_snapshot = COALESCE(NULLIF(it->>'price_ht_snapshot', '')::numeric, oi.price_ht_snapshot),
-      tva_rate_snapshot = COALESCE(NULLIF(it->>'tva_rate_snapshot', '')::numeric, oi.tva_rate_snapshot),
-      pump_snapshot      = COALESCE(NULLIF(it->>'pump_snapshot', '')::numeric, oi.pump_snapshot)
+      price_ht_snapshot = COALESCE(NULLIF(it->>'price_ht_snapshot', '')::numeric, oi.price_ht_snapshot)
   FROM jsonb_array_elements(p_items) it
   WHERE oi.order_id = p_order_id
     AND oi.product_id = (it->>'product_id')::uuid;
