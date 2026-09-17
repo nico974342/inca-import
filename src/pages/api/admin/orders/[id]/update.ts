@@ -72,21 +72,25 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
 
   for (const [pid, qty] of submitted) {
     const existing = currentByProduct.get(pid);
+    const prod = productMap.get(pid);
     if (existing) {
-      // Only the quantity changes for an existing line — snapshot fields are
-      // left untouched by the RPC's update branch.
+      // Ré-résout le prix/TVA/coût sur le produit actuel, comme pour une
+      // nouvelle ligne — sinon une correction du prix catalogue après coup
+      // (ex. prix à 0€ par erreur, corrigé plus tard) ne se répercute jamais
+      // sur les lignes déjà présentes, même quand on modifie explicitement
+      // la commande. Si le produit a disparu du catalogue, on conserve le
+      // snapshot existant (le RPC ne touche pas les colonnes à null).
       items.push({
         product_id:        pid,
         product_name:      existing.product_name,
         quantity:          qty,
         unit:              null,
-        price_ht_snapshot: null,
-        tva_rate_snapshot: null,
-        pump_snapshot:     null,
+        price_ht_snapshot: prod ? resolveClientPrice(pid, prod.price_ht, priceOverrides, remisePct) : null,
+        tva_rate_snapshot: prod ? prod.tva_rate : null,
+        pump_snapshot:     prod ? prod.prix_achat_moyen_ht : null,
       });
       if (existing.quantity !== qty) changed.push({ name: existing.product_name, from: existing.quantity, to: qty });
     } else {
-      const prod = productMap.get(pid);
       if (!prod) continue;
       items.push({
         product_id:        pid,
