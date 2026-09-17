@@ -167,6 +167,7 @@ let lines = existingItems.map(it => {
     // Can always keep the original quantity even if stock has since dropped
     // below it — only an INCREASE is capped by what's currently available.
     maxQty: stock != null ? Math.max(it.quantity, stock) : null,
+    priceEdited: false,
   };
 });
 
@@ -204,7 +205,10 @@ function renderLines() {
         '<span class="item-name">' + escapeHtml(line.name) + '</span>' +
         (line.unit ? '<span class="item-unit">' + escapeHtml(line.unit) + '</span>' : '') +
       '</td>' +
-      '<td class="col-pu td-r td-mono">' + (line.price != null ? fmt(line.price) : '—') + '</td>' +
+      '<td class="col-pu td-r">' +
+        '<input type="number" class="input input--num price-input" min="0" step="0.01" value="' + (line.price != null ? line.price : '') + '" data-idx="' + idx + '" />' +
+        (line.priceEdited ? '<span class="price-edited-hint">modifié</span>' : '') +
+      '</td>' +
       '<td class="col-qty td-r">' +
         '<input type="number" class="input input--num qty-input" min="1" step="1" value="' + line.quantity + '" data-idx="' + idx + '" />' +
         (overStock ? '<span class="stock-warn">Max ' + line.maxQty + ' disponible' + (line.maxQty > 1 ? 's' : '') + '</span>' : '') +
@@ -215,6 +219,22 @@ function renderLines() {
     itemsBody.appendChild(tr);
   });
 
+  itemsBody.querySelectorAll('.price-input').forEach(input => {
+    input.addEventListener('input', () => {
+      const i = Number(input.dataset.idx);
+      const val = parseFloat(input.value);
+      if (!Number.isFinite(val) || val < 0) return;
+      lines[i].price = val;
+      // Marque cette ligne comme explicitement corrigée par l'admin — c'est
+      // ce flag, pas la simple présence d'un prix, qui décide si la valeur
+      // est envoyée au serveur (voir editForm submit plus bas). Une ligne
+      // jamais touchée ne doit renvoyer aucune valeur, pour que son
+      // price_ht_snapshot reste garanti inchangé côté serveur, quels que
+      // soient les arrondis d'affichage.
+      lines[i].priceEdited = true;
+      renderLines();
+    });
+  });
   itemsBody.querySelectorAll('.qty-input').forEach(input => {
     input.addEventListener('input', () => {
       const i = Number(input.dataset.idx);
@@ -258,7 +278,7 @@ function addProduct(p) {
   } else {
     lines.push({
       product_id: p.id, name: p.name, unit: p.unit, price: p.price, tva_rate: p.tva_rate,
-      quantity: 1, baseline: 0, maxQty: p.stock,
+      quantity: 1, baseline: 0, maxQty: p.stock, priceEdited: false,
     });
   }
   renderLines();
@@ -309,7 +329,7 @@ catTabs.querySelectorAll('.cat-tab').forEach(tab => {
 });
 
 editForm.addEventListener('submit', () => {
-  editForm.querySelectorAll('input[name="product_id[]"], input[name="quantity[]"]').forEach(el => el.remove());
+  editForm.querySelectorAll('input[name="product_id[]"], input[name="quantity[]"], input[name="price[]"]').forEach(el => el.remove());
   lines.forEach(line => {
     const pidInput = document.createElement('input');
     pidInput.type = 'hidden';
@@ -322,6 +342,16 @@ editForm.addEventListener('submit', () => {
     qtyInput.name = 'quantity[]';
     qtyInput.value = String(line.quantity);
     editForm.appendChild(qtyInput);
+
+    // Vide = "non modifié" : le serveur ne touche alors pas au
+    // price_ht_snapshot existant de cette ligne. N'envoyer une valeur que si
+    // l'admin a explicitement édité le champ prix de CETTE ligne — jamais un
+    // recalcul silencieux depuis le catalogue au simple fait d'enregistrer.
+    const priceInput = document.createElement('input');
+    priceInput.type = 'hidden';
+    priceInput.name = 'price[]';
+    priceInput.value = line.priceEdited && line.price != null ? String(line.price) : '';
+    editForm.appendChild(priceInput);
   });
 });
 
@@ -530,6 +560,14 @@ renderLines();
   display: block;
   font-size: var(--text-xs);
   color: oklch(0.50 0.19 25);
+  margin-top: 2px;
+}
+
+:global(.price-edited-hint) {
+  display: block;
+  font-size: var(--text-xs);
+  font-style: italic;
+  color: var(--color-muted);
   margin-top: 2px;
 }
 
