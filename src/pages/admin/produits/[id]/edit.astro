@@ -34,6 +34,27 @@ const { data: purchaseHistory } = await supabaseAdmin
 
 const pump = (product as any).prix_achat_moyen_ht as number | null;
 
+// Dernier prix fournisseur / dernier coût rendu (Transit → coût rendu).
+// « Dernier coût rendu » est le coût réellement entré à la dernière réception
+// (stock_reception_items.unit_cost_ht) : depuis une expédition Transit avec
+// frais d'import saisis, c'est le coût rendu calculé qui y est passé ; pour
+// une réception directe (sans Transit), c'est le prix fournisseur saisi à la
+// main — la meilleure info disponible sans complexifier le modèle.
+const dernierCoutRendu = (purchaseHistory ?? [])[0]?.unit_cost_ht != null
+  ? Number((purchaseHistory ?? [])[0].unit_cost_ht) : null;
+
+// « Dernier prix fournisseur » vient de Transit (shipment_items), qui
+// conserve le prix brut avant frais d'import, distinct du coût rendu.
+const { data: lastShipmentPrices } = await supabaseAdmin
+  .from('shipment_items')
+  .select('unit_cost_ht, shipments(created_at)')
+  .eq('product_id', id)
+  .not('unit_cost_ht', 'is', null);
+const dernierPrixFournisseur = (lastShipmentPrices ?? [])
+  .filter((r: any) => r.shipments?.created_at)
+  .sort((a: any, b: any) => new Date(b.shipments.created_at).getTime() - new Date(a.shipments.created_at).getTime())
+  [0]?.unit_cost_ht ?? null;
+
 // ── Réassort: sales velocity over the lookback window, for this product only ──
 const lookbackIso = new Date(Date.now() - REAPPRO_WEEKS_LOOKBACK * 7 * 24 * 60 * 60 * 1000).toISOString();
 const { data: salesRows } = await supabaseAdmin
@@ -283,6 +304,24 @@ if (Astro.request.method === 'POST') {
     </div>
 
     <div class="pump-stat-row">
+      <div class="pump-stat">
+        <span class="pump-stat-label">Dernier prix fournisseur</span>
+        <span class="pump-stat-value">
+          {dernierPrixFournisseur != null
+            ? Number(dernierPrixFournisseur).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : <span class="pump-none">Non renseigné</span>}
+        </span>
+        <span class="pump-stat-sub">(/ carton, hors frais d'import)</span>
+      </div>
+      <div class="pump-stat">
+        <span class="pump-stat-label">Dernier coût rendu</span>
+        <span class="pump-stat-value">
+          {dernierCoutRendu != null
+            ? Number(dernierCoutRendu).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : <span class="pump-none">Non renseigné</span>}
+        </span>
+        <span class="pump-stat-sub">(/ carton, dernière réception)</span>
+      </div>
       <div class="pump-stat">
         <span class="pump-stat-label">Prix de vente HT</span>
         <span class="pump-stat-value">

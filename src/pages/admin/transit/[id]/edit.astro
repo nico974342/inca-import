@@ -77,7 +77,7 @@ if (!shipment && !tableMissing) return Astro.redirect('/admin/transit?err=introu
 
 const { data: products } = await supabaseAdmin
   .from('products')
-  .select('id, name, sku, prix_achat_moyen_ht')
+  .select('id, name, sku, prix_achat_moyen_ht, units_per_carton')
   .order('name');
 
 const { data: supplierRows } = await supabaseAdmin.from('suppliers').select('name').order('name');
@@ -155,7 +155,7 @@ const ERR_MSG: Record<string, string> = {
               <tr>
                 <th>Produit</th>
                 <th class="num">Quantité</th>
-                <th class="num">Coût unitaire HT</th>
+                <th class="num">Prix fournisseur / carton HT</th>
                 <th class="num">Total</th>
                 <th></th>
               </tr>
@@ -207,6 +207,16 @@ const ERR_MSG: Record<string, string> = {
     if (cell) cell.textContent = qty && cost
       ? (qty * cost).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })
       : '—';
+
+    // Coût saisi = prix / CARTON (comme le PUMP) : ce rappel évite qu'il soit
+    // relu plus tard comme un prix / unité.
+    const p = PRODUCTS.find(x => x.id === tr.querySelector('[data-product-select]')?.value);
+    const costHint = tr.querySelector('[data-cost-hint]');
+    if (costHint) {
+      costHint.textContent = (cost && p && p.units_per_carton)
+        ? `soit ${(cost / p.units_per_carton).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 })} / unité`
+        : '';
+    }
   }
   function toggleHint() { if (hint) hint.hidden = (body?.children.length ?? 0) > 0; }
 
@@ -214,14 +224,17 @@ const ERR_MSG: Record<string, string> = {
     if (!body) return;
     const tr = document.createElement('tr');
     const opts = PRODUCTS.map(p =>
-      `<option value="${p.id}"${item && item.product_id === p.id ? ' selected' : ''}>${p.name}${p.sku ? ' (' + p.sku + ')' : ''}</option>`
+      `<option value="${p.id}"${item && item.product_id === p.id ? ' selected' : ''}>${p.name}${p.sku ? ' (' + p.sku + ')' : ''}${p.units_per_carton ? ' — ' + p.units_per_carton + '/carton' : ''}</option>`
     ).join('');
     tr.innerHTML = `
       <td><select name="product_id[]" data-product-select required>
         <option value="">— Choisir un produit —</option>${opts}
       </select></td>
       <td class="num"><input type="number" name="quantity[]" min="1" step="1" required value="${item ? item.quantity : ''}" /></td>
-      <td class="num"><input type="number" name="unit_cost_ht[]" min="0" step="0.01" placeholder="—" value="${item && item.unit_cost_ht != null ? item.unit_cost_ht : ''}" /></td>
+      <td class="num">
+        <input type="number" name="unit_cost_ht[]" min="0" step="0.01" placeholder="—" value="${item && item.unit_cost_ht != null ? item.unit_cost_ht : ''}" />
+        <span class="cost-hint" data-cost-hint></span>
+      </td>
       <td class="num" data-total>—</td>
       <td class="num"><button type="button" class="remove-btn" title="Retirer">×</button></td>
     `;
@@ -306,6 +319,7 @@ const ERR_MSG: Record<string, string> = {
 .items-table .num { text-align: right; }
 .items-table input { width: 110px; text-align: right; font-family: var(--font-mono); }
 .items-table select { width: 100%; min-width: 200px; }
+.cost-hint { display: block; margin-top: 2px; font-size: var(--text-xs); color: var(--color-muted); white-space: nowrap; }
 .remove-btn {
   padding: 0.2rem 0.5rem;
   font-size: var(--text-base);

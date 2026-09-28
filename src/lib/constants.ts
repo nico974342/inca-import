@@ -1306,3 +1306,106 @@ export function isApproachingOrBelowSeuil(
   if (joursAvantRupture != null && delaiLivraisonJours != null && joursAvantRupture <= delaiLivraisonJours) return true;
   return false;
 }
+
+// ── Coût rendu (Transit) ────────────────────────────────────────────────
+/** Libellés proposés par défaut sur le formulaire de frais — l'admin peut
+ *  toujours les modifier ou ajouter d'autres lignes "Autres frais". */
+export const IMPORT_COST_LABELS = [
+  'Transport / fret',
+  'Assurance',
+  'Frais portuaires / transitaire / douane',
+  'Octroi de mer',
+  'Octroi de mer régional',
+  'Taxe boisson / soda',
+  'Étiquetage',
+  'Livraison jusqu\'au dépôt',
+  'Autres frais',
+] as const;
+
+export type ShipmentCostLine = {
+  /** null = frais général de l'expédition, réparti au prorata de la valeur
+   *  fournisseur. Renseigné = frais imputé directement à ce produit. */
+  product_id: string | null;
+  amount_ht: number;
+  is_estimated: boolean;
+};
+
+export type ShipmentCostItem = {
+  product_id: string;
+  quantity: number;            // cartons
+  unit_cost_ht: number | null; // prix fournisseur, € / carton
+};
+
+export type LandedCostItem = ShipmentCostItem & {
+  supplierValue: number;
+  importFeeTotal: number;         // frais import affectés à cette ligne, €
+  importFeeUnit: number;          // € / carton
+  landedUnitCost: number | null;  // prix fournisseur + frais import, € / carton
+  landedTotal: number | null;
+};
+
+export type LandedCostSummary = {
+  items: LandedCostItem[];
+  totalSupplierValue: number;
+  totalGeneralFees: number;
+  totalSpecificFees: number;
+  totalImportFees: number;
+  totalLanded: number;
+  /** 'aucun' : pas de frais saisis, le coût rendu retombe sur le prix
+   *  fournisseur brut. 'estime' : au moins un frais est encore une
+   *  prévision. 'definitif' : toutes les lignes de frais sont facturées. */
+  costsStatus: 'aucun' | 'estime' | 'definitif';
+};
+
+/**
+ * Calcule le coût rendu dépôt de chaque ligne d'une expédition à partir de
+ * ses frais d'import. Rien n'est stocké de dérivé : tout se recalcule à la
+ * volée depuis shipment_items + shipment_costs.
+ *
+ * Répartition volontairement simple (une seule méthode, voir demande
+ * initiale) : les frais généraux sont répartis au prorata de la valeur
+ * fournisseur de chaque ligne ; à défaut de valeur connue (aucun prix
+ * fournisseur saisi), on retombe sur un prorata aux quantités pour ne pas
+ * perdre les frais généraux en division par zéro. Les frais spécifiques
+ * s'ajoutent uniquement à la ligne du produit visé.
+ */
+export function computeLandedCosts(
+  items: ShipmentCostItem[],
+  costs: ShipmentCostLine[],
+): LandedCostSummary {
+  const generalCosts = costs.filter(c => c.product_id == null);
+  const totalGeneralFees = generalCosts.reduce((s, c) => s + c.amount_ht, 0);
+
+  const specificByProduct = new Map<string, number>();
+  for (const c of costs) {
+    if (c.product_id == null) continue;
+    specificByProduct.set(c.product_id, (specificByProduct.get(c.product_id) ?? 0) + c.amount_ht);
+  }
+  const totalSpecificFees = [...specificByProduct.values()].reduce((s, v) => s + v, 0);
+
+  const totalSupplierValue = items.reduce((s, it) => s + (it.unit_cost_ht != null ? it.unit_cost_ht * it.quantity : 0), 0);
+  const totalQty = items.reduce((s, it) => s + it.quantity, 0);
+  const useQtyFallback = totalSupplierValue <= 0 && totalQty > 0;
+
+  const outItems: LandedCostItem[] = items.map(it => {
+    const supplierValue = it.unit_cost_ht != null ? it.unit_cost_ht * it.quantity : 0;
+    const weight = useQtyFallback
+      ? (totalQty > 0 ? it.quantity / totalQty : 0)
+      : (totalSupplierValue > 0 ? supplierValue / totalSupplierValue : 0);
+    const generalShare = totalGeneralFees * weight;
+    const specificShare = specificByProduct.get(it.product_id) ?? 0;
+    const importFeeTotal = generalShare + specificShare;
+    const importFeeUnit = it.quantity > 0 ? importFeeTotal / it.quantity : 0;
+    const landedUnitCost = it.unit_cost_ht != null ? it.unit_cost_ht + importFeeUnit : null;
+    const landedTotal = landedUnitCost != null ? landedUnitCost * it.quantity : null;
+    return { ...it, supplierValue, importFeeTotal, importFeeUnit, landedUnitCost, landedTotal };
+  });
+
+  const totalImportFees = totalGeneralFees + totalSpecificFees;
+  const totalLanded = totalSupplierValue + totalImportFees;
+
+  const costsStatus: LandedCostSummary['costsStatus'] =
+    costs.length === 0 ? 'aucun' : costs.some(c => c.is_estimated) ? 'estime' : 'definitif';
+
+  return { items: outItems, totalSupplierValue, totalGeneralFees, totalSpecificFees, totalImportFees, totalLanded, costsStatus };
+}

@@ -6,7 +6,8 @@ import { logAdminAction } from '../../lib/audit';
 import ShipRoute from '../../components/admin/ShipRoute.astro';
 import {
   SHIPMENT_STATUSES, SHIPMENT_STATUS_LABEL, SHIPMENT_ACTIVE_STATUSES,
-  computeShipmentProgress, allocateCargoSlots, matchSupplierName, type ShipmentStatus,
+  computeShipmentProgress, allocateCargoSlots, matchSupplierName, computeLandedCosts,
+  type ShipmentStatus, type ShipmentCostItem, type ShipmentCostLine,
 } from '../../lib/constants';
 import { formatDateReunion, todayReunionISO } from '../../lib/datetime';
 import { isAdmin } from '../../lib/roles';
@@ -110,7 +111,11 @@ if (Astro.request.method === 'POST') {
 
 const { data: shipmentsRaw, error: loadErr } = await supabaseAdmin
   .from('shipments')
-  .select('id, supplier_name, reference, departure_date, eta, status, notes, created_at, shipment_items(id, quantity, unit_cost_ht, products(id, name, sku, unit, category))')
+  .select(`
+    id, supplier_name, reference, departure_date, eta, status, notes, created_at,
+    shipment_items(id, quantity, unit_cost_ht, products(id, name, sku, unit, category, units_per_carton)),
+    shipment_costs(id, product_id, amount_ht, is_estimated)
+  `)
   .in('status', SHIPMENT_ACTIVE_STATUSES as readonly string[])
   .order('eta', { ascending: true, nullsFirst: false });
 
@@ -118,7 +123,7 @@ const tableMissing = loadErr?.code === 'PGRST205' || loadErr?.code === '42P01';
 
 const { data: products } = await supabaseAdmin
   .from('products')
-  .select('id, name, sku, prix_achat_moyen_ht')
+  .select('id, name, sku, prix_achat_moyen_ht, units_per_carton')
   .order('name');
 
 const { data: supplierRows } = await supabaseAdmin.from('suppliers').select('name').order('name');
@@ -126,16 +131,45 @@ const supplierNames = (supplierRows ?? []).map(s => s.name);
 
 const now = new Date();
 const shipments = (shipmentsRaw ?? []).map(s => {
-  const items = ((s as any).shipment_items ?? []) as any[];
+  // shipment_items.quantity est en CARTONS, unit_cost_ht en € / CARTON —
+  // comme stock_quantity et le PUMP (voir products.units_per_carton). Le
+  // détail /unité n'existe que si le conditionnement est renseigné sur la
+  // fiche produit ; sinon on n'affiche que le carton, jamais une valeur
+  // devinée.
+  const rawItems = ((s as any).shipment_items ?? []) as any[];
+  const items = rawItems.map(it => {
+    const cartons = it.quantity ?? 0;
+    const unitsPerCarton = it.products?.units_per_carton ?? null;
+    const totalUnits = unitsPerCarton != null ? cartons * unitsPerCarton : null;
+    const pricePerCarton = it.unit_cost_ht != null ? Number(it.unit_cost_ht) : null;
+    const pricePerUnit = pricePerCarton != null && unitsPerCarton ? pricePerCarton / unitsPerCarton : null;
+    const totalValue = pricePerCarton != null ? pricePerCarton * cartons : null;
+    return { ...it, cartons, unitsPerCarton, totalUnits, pricePerCarton, pricePerUnit, totalValue };
+  });
   const totalQty  = items.reduce((n, it) => n + (it.quantity ?? 0), 0);
   const totalCost = items.reduce((n, it) => n + (it.unit_cost_ht != null ? Number(it.unit_cost_ht) * it.quantity : 0), 0);
   const anyMissingCost = items.some(it => it.unit_cost_ht == null);
+
+  // Coût rendu = prix fournisseur + frais d'import répartis (voir
+  // computeLandedCosts) — affiché en résumé sur la carte, détaillé sur
+  // /admin/transit/[id]/couts.
+  const costLines: ShipmentCostLine[] = ((s as any).shipment_costs ?? []).map((c: any) => ({
+    product_id: c.product_id,
+    amount_ht: Number(c.amount_ht),
+    is_estimated: c.is_estimated,
+  }));
+  const landedItems: ShipmentCostItem[] = items.map(it => ({
+    product_id: it.product_id, quantity: it.quantity, unit_cost_ht: it.pricePerCarton,
+  }));
+  const landed = computeLandedCosts(landedItems, costLines);
+
   return {
     ...s,
     items,
     totalQty,
     totalCost,
     anyMissingCost,
+    landed,
     progress: computeShipmentProgress(s.departure_date, s.eta, s.status, now),
     // La cargaison dessinée sur le pont est la composition réelle de
     // l'expédition, pas une décoration.
@@ -171,6 +205,9 @@ function fmtDate(d: string | null): string {
 }
 function fmtPrice(n: number): string {
   return n.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
+}
+function fmtEUR2(n: number): string {
+  return n.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 ---
 <AdminLayout title="Transit" activeNav="transit">
@@ -236,7 +273,7 @@ function fmtPrice(n: number): string {
                 <tr>
                   <th>Produit</th>
                   <th class="num">Quantité</th>
-                  <th class="num">Coût unitaire HT</th>
+                  <th class="num">Prix fournisseur / carton HT</th>
                   <th class="num">Total</th>
                   <th></th>
                 </tr>
@@ -283,6 +320,9 @@ function fmtPrice(n: number): string {
                       </select>
                     </form>
                     <a href={`/admin/transit/${s.id}/edit`} class="link-action">Modifier</a>
+                    <a href={`/admin/transit/${s.id}/couts`} class="link-action">
+                      {s.landed.costsStatus === 'aucun' ? '+ Frais / coût rendu' : 'Voir détail coût rendu'}
+                    </a>
                     <a href={`/admin/reception/new?shipment=${s.id}`} class="btn btn-primary btn-sm">Réceptionner</a>
                   </div>
                 </header>
@@ -304,11 +344,24 @@ function fmtPrice(n: number): string {
                       {s.items.map((it: any) => (
                         <tr>
                           <td class="it-name">{it.products?.name ?? 'Produit supprimé'}</td>
-                          <td class="it-qty">{it.quantity} {it.products?.unit ?? 'cartons'}</td>
+                          <td class="it-qty">
+                            <span class="it-cartons">{it.cartons.toLocaleString('fr-FR')} cartons</span>
+                            {it.unitsPerCarton != null && (
+                              <span class="it-pack">
+                                {it.unitsPerCarton}/carton · {it.totalUnits!.toLocaleString('fr-FR')} unités
+                              </span>
+                            )}
+                          </td>
                           <td class="it-cost">
-                            {it.unit_cost_ht != null
-                              ? `${Number(it.unit_cost_ht).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })} /u`
-                              : <span class="muted">coût non renseigné</span>}
+                            {it.pricePerCarton != null ? (
+                              <>
+                                {it.pricePerUnit != null && (
+                                  <span class="it-price-unit">{fmtEUR2(it.pricePerUnit)} / unité</span>
+                                )}
+                                <span class="it-price-carton">{fmtEUR2(it.pricePerCarton)} / carton</span>
+                                <span class="it-price-total">{fmtEUR2(it.totalValue!)} total</span>
+                              </>
+                            ) : <span class="muted">coût non renseigné</span>}
                           </td>
                         </tr>
                       ))}
@@ -327,6 +380,24 @@ function fmtPrice(n: number): string {
                     {s.notes && <p class="sh-notes">{s.notes}</p>}
                   </div>
                 </div>
+
+                {s.items.length > 0 && (
+                  <div class="sh-landed">
+                    <span class="landed-stat">
+                      <span class="landed-label">Valeur fournisseur</span>
+                      <span class="landed-value">{fmtEUR2(s.landed.totalSupplierValue)}</span>
+                    </span>
+                    <span class="landed-stat">
+                      <span class="landed-label">Frais import</span>
+                      <span class="landed-value">{fmtEUR2(s.landed.totalImportFees)}</span>
+                    </span>
+                    <span class="landed-stat landed-stat--total">
+                      <span class="landed-label">Coût rendu total</span>
+                      <span class="landed-value">{fmtEUR2(s.landed.totalLanded)}</span>
+                      {s.landed.costsStatus === 'estime' && <span class="landed-flag" title="Frais encore estimés">estimé</span>}
+                    </span>
+                  </div>
+                )}
               </article>
             ))}
           </div>
@@ -364,18 +435,31 @@ function fmtPrice(n: number): string {
     if (cell) cell.textContent = qty && cost
       ? (qty * cost).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })
       : '—';
+
+    // Coût saisi = prix / CARTON (comme le PUMP) : ce rappel évite qu'il soit
+    // relu plus tard comme un prix / unité.
+    const p = PRODUCTS.find(x => x.id === tr.querySelector('[data-product-select]')?.value);
+    const hint = tr.querySelector('[data-cost-hint]');
+    if (hint) {
+      hint.textContent = (cost && p && p.units_per_carton)
+        ? `soit ${(cost / p.units_per_carton).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 })} / unité`
+        : '';
+    }
   }
 
   function addRow() {
     if (!body) return;
     const tr = document.createElement('tr');
-    const opts = PRODUCTS.map(p => `<option value="${p.id}">${p.name}${p.sku ? ' (' + p.sku + ')' : ''}</option>`).join('');
+    const opts = PRODUCTS.map(p => `<option value="${p.id}">${p.name}${p.sku ? ' (' + p.sku + ')' : ''}${p.units_per_carton ? ' — ' + p.units_per_carton + '/carton' : ''}</option>`).join('');
     tr.innerHTML = `
       <td><select name="product_id[]" data-product-select required>
         <option value="">— Choisir un produit —</option>${opts}
       </select></td>
       <td class="num"><input type="number" name="quantity[]" min="1" step="1" placeholder="0" required /></td>
-      <td class="num"><input type="number" name="unit_cost_ht[]" min="0" step="0.01" placeholder="—" /></td>
+      <td class="num">
+        <input type="number" name="unit_cost_ht[]" min="0" step="0.01" placeholder="—" />
+        <span class="cost-hint" data-cost-hint></span>
+      </td>
       <td class="num" data-total>—</td>
       <td class="num"><button type="button" class="remove-btn" title="Retirer">×</button></td>
     `;
@@ -486,6 +570,7 @@ function fmtPrice(n: number): string {
 .items-table .num { text-align: right; }
 .items-table input { width: 110px; text-align: right; font-family: var(--font-mono); }
 .items-table select { width: 100%; min-width: 200px; }
+.cost-hint { display: block; margin-top: 2px; font-size: var(--text-xs); color: var(--color-muted); white-space: nowrap; }
 .remove-btn {
   padding: 0.2rem 0.5rem;
   font-size: var(--text-base);
@@ -527,10 +612,45 @@ function fmtPrice(n: number): string {
 .sh-items td { padding: var(--space-1) 0; border-bottom: 1px dashed var(--color-border); }
 .sh-items tr:last-child td { border-bottom: none; }
 .it-name { color: var(--color-ink); }
-.it-qty  { text-align: right; font-family: var(--font-mono); white-space: nowrap; padding-left: var(--space-4) !important; }
-.it-cost { text-align: right; font-size: var(--text-xs); color: var(--color-muted); white-space: nowrap; padding-left: var(--space-4) !important; }
+.it-qty, .it-cost {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  text-align: right;
+  white-space: nowrap;
+  padding-left: var(--space-4) !important;
+}
+.it-cartons     { font-family: var(--font-mono); color: var(--color-ink); }
+.it-pack        { font-size: var(--text-xs); color: var(--color-muted); }
+.it-price-unit  { font-size: var(--text-xs); color: var(--color-muted); font-family: var(--font-mono); }
+.it-price-carton { font-family: var(--font-mono); font-weight: 600; color: var(--color-ink); }
+.it-price-total { font-size: var(--text-xs); color: var(--color-muted); font-family: var(--font-mono); }
 .muted { color: var(--color-muted); }
 .muted a { color: var(--color-primary-deep); }
+
+.sh-landed {
+  display: flex;
+  gap: var(--space-5);
+  justify-content: flex-end;
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--color-border);
+}
+.landed-stat { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.landed-label { font-size: var(--text-xs); color: var(--color-muted); }
+.landed-value { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-ink); }
+.landed-stat--total .landed-value { font-weight: 700; }
+.landed-flag {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: oklch(0.50 0.13 70);
+  background: oklch(0.95 0.06 75);
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
 
 .sh-totals { flex: 0 0 auto; text-align: right; min-width: 140px; }
 .t-qty  { display: block; font-size: 1.05rem; font-weight: 700; color: var(--color-ink); font-variant-numeric: tabular-nums; }

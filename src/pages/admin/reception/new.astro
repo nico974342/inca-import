@@ -3,6 +3,7 @@ import AdminLayout from '../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../lib/supabase';
 import { todayReunionISO } from '../../../lib/datetime';
 import { isAdmin } from '../../../lib/roles';
+import { computeLandedCosts, type ShipmentCostItem, type ShipmentCostLine } from '../../../lib/constants';
 
 if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
@@ -23,23 +24,48 @@ const preselectProductId = Astro.url.searchParams.get('product') ?? null;
 //    stock et recalcule le PUMP. Le transit lui-même n'a rien touché. ──
 const shipmentId = Astro.url.searchParams.get('shipment');
 let prefill: { supplierName: string; notes: string | null; items: { product_id: string; quantity: number; unit_cost_ht: number | null }[] } | null = null;
+let prefillEstimated = false;
 
 if (shipmentId) {
   const { data: shipment } = await supabaseAdmin
     .from('shipments')
-    .select('id, supplier_name, reference, notes, shipment_items(product_id, quantity, unit_cost_ht)')
+    .select(`
+      id, supplier_name, reference, notes,
+      shipment_items(product_id, quantity, unit_cost_ht),
+      shipment_costs(product_id, amount_ht, is_estimated)
+    `)
     .eq('id', shipmentId)
     .single();
 
   if (shipment) {
     const ref = (shipment as any).reference;
+    const rawItems = ((shipment as any).shipment_items ?? []) as any[];
+    const costLines: ShipmentCostLine[] = ((shipment as any).shipment_costs ?? []).map((c: any) => ({
+      product_id: c.product_id,
+      amount_ht: Number(c.amount_ht),
+      is_estimated: c.is_estimated,
+    }));
+    const landedItems: ShipmentCostItem[] = rawItems.map(it => ({
+      product_id: it.product_id,
+      quantity: it.quantity,
+      unit_cost_ht: it.unit_cost_ht != null ? Number(it.unit_cost_ht) : null,
+    }));
+    // Coût rendu (prix fournisseur + frais d'import répartis, voir
+    // /admin/transit/[id]/couts) plutôt que le prix fournisseur brut : c'est
+    // ce montant qui doit alimenter le stock et le PUMP à la réception. Sans
+    // frais saisis, landedUnitCost retombe sur unit_cost_ht — comportement
+    // inchangé pour les expéditions sans coût rendu calculé.
+    const landed = computeLandedCosts(landedItems, costLines);
+    const landedByProduct = new Map(landed.items.map(it => [it.product_id, it.landedUnitCost]));
+
+    prefillEstimated = landed.costsStatus === 'estime';
     prefill = {
       supplierName: shipment.supplier_name ?? '',
       notes: ref ? `Réception expédition ${ref}` : (shipment as any).notes ?? null,
-      items: (((shipment as any).shipment_items ?? []) as any[]).map(it => ({
+      items: rawItems.map(it => ({
         product_id: it.product_id,
         quantity: it.quantity,
-        unit_cost_ht: it.unit_cost_ht != null ? Number(it.unit_cost_ht) : null,
+        unit_cost_ht: landedByProduct.get(it.product_id) ?? (it.unit_cost_ht != null ? Number(it.unit_cost_ht) : null),
       })),
     };
   }
@@ -54,9 +80,18 @@ if (shipmentId) {
 
   {prefill && (
     <div class="prefill-note" role="status">
-      Pré-rempli depuis une expédition en transit. Ajustez les quantités et les coûts réellement reçus :
+      Pré-rempli avec le <strong>coût rendu</strong> (prix fournisseur + frais d'import) depuis l'expédition
+      en transit. Ajustez les quantités et les coûts réellement reçus si besoin :
       c'est <strong>cette validation</strong> qui met à jour le stock et le PUMP, puis bascule l'expédition
       en « Réceptionné ».
+    </div>
+  )}
+
+  {prefillEstimated && (
+    <div class="prefill-warning" role="status">
+      ⚠ Coût rendu encore estimé — les frais d'import n'ont pas tous été facturés définitivement.
+      Vous pouvez corriger les montants ci-dessous si la facture réelle est déjà connue, ou valider
+      tel quel et ajuster plus tard sur une prochaine réception.
     </div>
   )}
 
@@ -323,6 +358,16 @@ if (PREFILL_ITEMS.length > 0) {
   border-radius: var(--radius-sm);
 }
 .prefill-note strong { font-weight: 700; }
+
+.prefill-warning {
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-5);
+  font-size: var(--text-sm);
+  color: oklch(0.42 0.12 70);
+  background: oklch(0.96 0.05 75);
+  border: 1px solid oklch(0.88 0.09 75);
+  border-radius: var(--radius-sm);
+}
 
 .page-header {
   margin-bottom: var(--space-6);
