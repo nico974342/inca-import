@@ -95,6 +95,14 @@ const suggestedLabels = IMPORT_COST_LABELS.filter(l => l === 'Autres frais' || !
 function fmt(n: number): string {
   return n.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+// 4 décimales pour l'unitaire : sur un produit à moins d'un euro l'unité, 2
+// décimales masquent des écarts de coût rendu qui comptent.
+function fmt4(n: number): string {
+  return n.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 4, maximumFractionDigits: 4 });
+}
+
+// Coefficient global : de combien le coût rendu majore la valeur fournisseur.
+const coefficient = landed.totalSupplierValue > 0 ? landed.totalLanded / landed.totalSupplierValue : null;
 
 const ok  = Astro.url.searchParams.get('ok');
 const err = Astro.url.searchParams.get('err');
@@ -182,13 +190,36 @@ const productsForSelect = rawItems.map(it => ({ id: it.product_id, name: it.prod
               <tbody>
                 {landed.items.map(it => {
                   const p = itemsByProductId.get(it.product_id);
+                  const upc = p?.products?.units_per_carton ?? null;
                   return (
                     <tr>
                       <td>{p?.products?.name ?? 'Produit supprimé'}</td>
-                      <td class="num">{it.quantity.toLocaleString('fr-FR')}</td>
-                      <td class="num">{it.unit_cost_ht != null ? fmt(it.unit_cost_ht) : <span class="muted">—</span>}</td>
-                      <td class="num">{fmt(it.importFeeUnit)}</td>
-                      <td class="num td-strong">{it.landedUnitCost != null ? fmt(it.landedUnitCost) : <span class="muted">—</span>}</td>
+                      <td class="num">
+                        <span class="qty-cartons">{it.quantity.toLocaleString('fr-FR')} cartons</span>
+                        {upc != null && (
+                          <span class="qty-units">{(it.quantity * upc).toLocaleString('fr-FR')} unités</span>
+                        )}
+                      </td>
+                      <td class="num">
+                        {it.unit_cost_ht != null ? (
+                          <>
+                            <span class="price-carton">{fmt(it.unit_cost_ht)}</span>
+                            {upc != null && <span class="price-unit">{fmt4(it.unit_cost_ht / upc)} / unité</span>}
+                          </>
+                        ) : <span class="muted">—</span>}
+                      </td>
+                      <td class="num">
+                        <span class="price-carton">{fmt(it.importFeeUnit)}</span>
+                        {upc != null && <span class="price-unit">{fmt4(it.importFeeUnit / upc)} / unité</span>}
+                      </td>
+                      <td class="num">
+                        {it.landedUnitCost != null ? (
+                          <>
+                            <span class="price-carton td-strong">{fmt(it.landedUnitCost)}</span>
+                            {upc != null && <span class="price-unit">{fmt4(it.landedUnitCost / upc)} / unité</span>}
+                          </>
+                        ) : <span class="muted">—</span>}
+                      </td>
                       <td class="num">{it.landedTotal != null ? fmt(it.landedTotal) : <span class="muted">—</span>}</td>
                     </tr>
                   );
@@ -210,6 +241,10 @@ const productsForSelect = rawItems.map(it => ({ id: it.product_id, name: it.prod
           <div class="summary-stat summary-stat--total">
             <span class="summary-label">Coût rendu total</span>
             <span class="summary-value">{fmt(landed.totalLanded)}</span>
+          </div>
+          <div class="summary-stat">
+            <span class="summary-label">Coefficient</span>
+            <span class="summary-value">{coefficient != null ? `×${coefficient.toFixed(2)}` : '—'}</span>
           </div>
         </div>
       </div>
@@ -374,6 +409,22 @@ const productsForSelect = rawItems.map(it => ({ id: it.product_id, name: it.prod
 .td-strong { font-weight: 700; color: var(--color-ink); }
 .muted { color: var(--color-muted); }
 .pump-empty { color: var(--color-muted); font-size: var(--text-sm); }
+
+.detail-table .num { display: table-cell; }
+.detail-table td.num { vertical-align: top; }
+.qty-cartons, .price-carton {
+  display: block;
+  font-family: var(--font-mono);
+  color: var(--color-ink);
+  white-space: nowrap;
+}
+.qty-units, .price-unit {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  white-space: nowrap;
+}
 
 .detail-summary {
   display: flex;
