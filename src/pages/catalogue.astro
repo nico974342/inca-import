@@ -6,13 +6,24 @@ import { supabaseAdmin, createAuthClient } from '../lib/supabase';
 import { fetchAvailability, sellableQty } from '../lib/stock';
 import { fetchClientPriceOverrides, resolveClientPrice } from '../lib/clients';
 import { isClientRole } from '../lib/roles';
+import { fetchGrantedForUser, whereVisibleTo } from '../lib/catalogue';
 
-const { data: products } = await supabaseAdmin
-  .from('products')
-  .select('id, name, slug, category, description, image_url, unit, units_per_carton, price_ht, tva_rate, stock_quantity')
-  // Produits masqués (visible_catalogue = false) : exclus à la source, donc
-  // de la grille, des filtres, des compteurs et des totaux du panier.
-  .eq('visible_catalogue', true)
+const supabase = createAuthClient(Astro.request, Astro.cookies);
+const { data: { user } } = await supabase.auth.getUser();
+const isClient = isClientRole(user);
+
+// Produits masqués (visible_catalogue = false) : exclus à la source, donc de la
+// grille, des filtres, des compteurs et des totaux du panier — sauf ceux que ce
+// client précis a été autorisé à voir (voir lib/catalogue.ts). Un visiteur non
+// connecté n'a jamais d'autorisation.
+const granted = await fetchGrantedForUser(user);
+
+const { data: products } = await whereVisibleTo(
+  supabaseAdmin
+    .from('products')
+    .select('id, name, slug, category, description, image_url, unit, units_per_carton, price_ht, tva_rate, stock_quantity'),
+  granted,
+)
   .order('position', { ascending: true })
   .order('name', { ascending: true });
 
@@ -21,10 +32,6 @@ const { data: products } = await supabaseAdmin
 // même s'il reste de la marchandise dans l'entrepôt.
 const availability = await fetchAvailability(products ?? []);
 const dispo = (id: string) => sellableQty(availability.get(id));
-
-const supabase = createAuthClient(Astro.request, Astro.cookies);
-const { data: { user } } = await supabase.auth.getUser();
-const isClient = isClientRole(user);
 
 let isPending = false;
 let remisePct: number | null = null;

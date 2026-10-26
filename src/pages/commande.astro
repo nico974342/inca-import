@@ -7,6 +7,7 @@ import { Resend } from 'resend';
 import { generateOrderPDF } from '../lib/pdf';
 import { sanitizeText } from '../lib/sanitize';
 import { normalizeEmail, findClientByEmail, fetchClientPriceOverrides, resolveClientPrice } from '../lib/clients';
+import { fetchGrantedForUser } from '../lib/catalogue';
 import { createOrderChecked, describeConflicts, fetchAvailability, sellableQty } from '../lib/stock';
 import { COMPANY, RESEND_DEFAULT_FROM } from '../lib/constants';
 import { todayReunion } from '../lib/datetime';
@@ -40,12 +41,16 @@ const CAT_LABEL: Record<string, string> = {
 // ── Produits masqués du catalogue depuis leur ajout au panier ──────────
 // Retirés réellement du panier (pas seulement cachés) : ils ne doivent ni
 // s'afficher ni se commander. Le rempart définitif reste order_create_checked.
-const { data: hiddenInCart } = await supabaseAdmin
+// Un produit masqué reste commandable pour les clients explicitement autorisés
+// (voir lib/catalogue.ts) : seules les lignes masquées ET non autorisées partent.
+const { data: maskedInCart } = await supabaseAdmin
   .from('cart_items')
   .select('product_id, products!inner(visible_catalogue)')
   .eq('user_id', user.id)
   .eq('products.visible_catalogue', false);
-if (hiddenInCart && hiddenInCart.length > 0) {
+const grantedForCart = maskedInCart && maskedInCart.length > 0 ? await fetchGrantedForUser(user) : new Set<string>();
+const hiddenInCart = (maskedInCart ?? []).filter(r => !grantedForCart.has(r.product_id));
+if (hiddenInCart.length > 0) {
   await supabaseAdmin
     .from('cart_items')
     .delete()

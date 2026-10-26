@@ -258,6 +258,21 @@ const { data: priceGroups } = await supabaseAdmin
   .from('price_groups')
   .select('id, name, is_default')
   .order('name', { ascending: true });
+
+// ── Produits réservés : produits actuellement masqués du catalogue client, et
+//    lesquels ce client est autorisé à voir (voir lib/catalogue.ts). ──
+const { data: maskedProducts } = await supabaseAdmin
+  .from('products')
+  .select('id, name, category, sku')
+  .eq('visible_catalogue', false)
+  .order('name', { ascending: true });
+const { data: accessRows } = await supabaseAdmin
+  .from('client_product_access')
+  .select('product_id')
+  .eq('client_id', id);
+const grantedIds = new Set((accessRows ?? []).map(r => r.product_id as string));
+const SEARCH_THRESHOLD = 8;
+const grantedMaskedCount = (maskedProducts ?? []).filter(m => grantedIds.has(m.id)).length;
 ---
 <AdminLayout title={`Client — ${client.nom}`} activeNav="clients">
   <a href="/admin/clients" class="back-link">← Retour aux clients</a>
@@ -394,6 +409,42 @@ const { data: priceGroups } = await supabaseAdmin
           </form>
         )}
       </div>
+    </div>
+  )}
+
+  {(maskedProducts ?? []).length > 0 && (
+    <div class="card" id="accesCard" data-client-id={client.id}>
+      <h2 class="card-title">Produits réservés</h2>
+      <p class="acces-intro">
+        Produits masqués du catalogue client. Cochez ceux que <strong>ce client</strong> peut voir et commander ;
+        pour tous les autres clients, ils restent invisibles.
+        {!viewerIsAdmin && ' Seul un administrateur peut modifier ces accès.'}
+      </p>
+      {(maskedProducts ?? []).length > SEARCH_THRESHOLD && (
+        <input type="search" id="accesSearch" class="acces-search" placeholder="Rechercher un produit…" autocomplete="off" aria-label="Rechercher un produit réservé" />
+      )}
+      <ul class="acces-list" id="accesList">
+        {(maskedProducts ?? []).map(p => (
+          <li class="acces-item" data-search={`${p.name} ${p.sku ?? ''}`.toLowerCase()}>
+            <label class="acces-label">
+              <input
+                type="checkbox"
+                class="acces-check"
+                data-product-id={p.id}
+                checked={grantedIds.has(p.id)}
+                disabled={!viewerIsAdmin}
+              />
+              <span class="acces-name">{p.name}</span>
+              <span class="acces-cat">{p.category}</span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      <p class="acces-empty" id="accesEmpty" hidden>Aucun produit ne correspond.</p>
+      <p class="acces-summary" id="accesSummary">
+        {grantedMaskedCount > 0 ? `${grantedMaskedCount} produit${grantedMaskedCount > 1 ? 's' : ''} réservé${grantedMaskedCount > 1 ? 's' : ''} accessible${grantedMaskedCount > 1 ? 's' : ''} à ce client` : 'Aucun accès accordé'}
+      </p>
+      <p class="acces-toast" id="accesToast" role="alert" hidden></p>
     </div>
   )}
 
@@ -1018,7 +1069,118 @@ input:focus, select:focus, textarea:focus {
   .info-row { flex-direction: column; align-items: flex-start; gap: var(--space-1); }
   .info-row dd { text-align: left; }
 }
+
+/* ── Produits réservés ───────────────────────────────────────────────── */
+.acces-intro { font-size: var(--text-sm); color: var(--color-muted); margin: 0 0 var(--space-4); max-width: 68ch; }
+.acces-search {
+  width: 100%;
+  max-width: 360px;
+  margin-bottom: var(--space-3);
+}
+.acces-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-1) var(--space-5);
+  max-height: 360px;
+  overflow-y: auto;
+}
+.acces-item[hidden] { display: none; }
+.acces-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.acces-check:disabled + .acces-name { color: var(--color-muted); }
+.acces-label:has(.acces-check:disabled) { cursor: default; }
+.acces-name { font-weight: 500; color: var(--color-ink); }
+.acces-cat { margin-left: auto; font-size: var(--text-xs); color: var(--color-muted); }
+.acces-empty { font-size: var(--text-sm); color: var(--color-muted); }
+.acces-summary { margin: var(--space-3) 0 0; font-size: var(--text-xs); color: var(--color-muted); }
+.acces-toast {
+  position: fixed;
+  right: var(--space-5);
+  bottom: var(--space-5);
+  max-width: 340px;
+  padding: var(--space-3) var(--space-4);
+  border-radius: 6px;
+  background: oklch(0.95 0.04 25);
+  color: oklch(0.40 0.16 25);
+  border: 1px solid oklch(0.85 0.08 25);
+  font-size: var(--text-sm);
+  box-shadow: 0 4px 16px oklch(0.2 0 0 / 0.15);
+}
 </style>
+
+<script>
+  // Produits réservés : une case cochée = enregistrement immédiat (même principe
+  // que l'interrupteur de visibilité sur /admin/produits), retour arrière si
+  // le serveur refuse.
+  const accesCard = document.getElementById('accesCard');
+  if (accesCard) {
+    const clientId = accesCard.dataset.clientId;
+    const toast = document.getElementById('accesToast') as HTMLElement | null;
+    const summary = document.getElementById('accesSummary');
+    const search = document.getElementById('accesSearch') as HTMLInputElement | null;
+    const empty = document.getElementById('accesEmpty') as HTMLElement | null;
+    const items = Array.from(document.querySelectorAll<HTMLElement>('#accesList .acces-item'));
+    let toastTimer: number | undefined;
+
+    const showError = (message: string) => {
+      if (!toast) return;
+      toast.textContent = message;
+      toast.hidden = false;
+      window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(() => { toast.hidden = true; }, 6000);
+    };
+    const refreshSummary = () => {
+      if (!summary) return;
+      const n = accesCard.querySelectorAll<HTMLInputElement>('.acces-check:checked').length;
+      summary.textContent = n > 0 ? `${n} produit${n > 1 ? 's' : ''} réservé${n > 1 ? 's' : ''} accessible${n > 1 ? 's' : ''} à ce client` : 'Aucun accès accordé';
+    };
+
+    accesCard.querySelectorAll<HTMLInputElement>('.acces-check').forEach(box => {
+      box.addEventListener('change', async () => {
+        const allowed = box.checked;
+        box.disabled = true;
+        refreshSummary();
+        try {
+          const res = await fetch(`/api/admin/clients/${clientId}/product-access`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ product_id: box.dataset.productId, allowed }),
+          });
+          if (!res.ok) {
+            const data = await res.json().catch(() => null);
+            throw new Error(data?.error ?? `Erreur ${res.status}`);
+          }
+        } catch (err) {
+          box.checked = !allowed;
+          refreshSummary();
+          showError(`Accès non modifié : ${err instanceof Error ? err.message : 'erreur réseau'}.`);
+        } finally {
+          box.disabled = false;
+        }
+      });
+    });
+
+    search?.addEventListener('input', () => {
+      const q = search.value.trim().toLowerCase();
+      let shown = 0;
+      for (const li of items) {
+        const match = !q || (li.dataset.search ?? '').includes(q);
+        li.hidden = !match;
+        if (match) shown++;
+      }
+      if (empty) empty.hidden = shown > 0;
+    });
+  }
+</script>
 
 <script>
   const sameCheck = document.getElementById('facturation_same') as HTMLInputElement | null;

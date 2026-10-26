@@ -2,6 +2,7 @@ import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../lib/supabase';
 import { isClientRole } from '../../../lib/roles';
 import { isClientAccountActive } from '../../../lib/clients';
+import { fetchGrantedForUser, isProductVisibleTo } from '../../../lib/catalogue';
 
 export const POST: APIRoute = async ({ request, cookies }) => {
   const json = (status: number, body: object) =>
@@ -42,12 +43,14 @@ export const POST: APIRoute = async ({ request, cookies }) => {
   // (which already caps client-side) never desyncs from the stored cart.
   const { data: product } = await supabaseAdmin
     .from('products')
-    .select('stock_quantity, visible_catalogue')
+    .select('id, stock_quantity, visible_catalogue')
     .eq('id', productId)
     .maybeSingle();
 
-  // Produit masqué du catalogue : même réponse qu'un produit inexistant.
-  if (!product || product.visible_catalogue === false) return json(404, { error: 'Produit introuvable' });
+  // Produit masqué du catalogue (et non autorisé pour ce client) : même
+  // réponse qu'un produit inexistant.
+  const granted = product?.visible_catalogue === false ? await fetchGrantedForUser(user) : new Set<string>();
+  if (!product || !isProductVisibleTo(product, granted)) return json(404, { error: 'Produit introuvable' });
 
   const stock = product.stock_quantity ?? 0;
   if (stock < 1) return json(409, { error: 'Rupture de stock', available: 0 });

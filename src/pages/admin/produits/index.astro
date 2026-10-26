@@ -26,6 +26,15 @@ const { data: products, error } = await supabaseAdmin
   .order('position', { ascending: true })
   .order('name', { ascending: true });
 
+// Nombre de clients explicitement autorisés à voir chaque produit masqué : un
+// produit masqué avec des clients autorisés n'est pas invisible pour tout le monde.
+const { data: accessRows } = await supabaseAdmin.from('client_product_access').select('product_id');
+const accessCountByProduct = new Map<string, number>();
+for (const r of accessRows ?? []) {
+  accessCountByProduct.set(r.product_id, (accessCountByProduct.get(r.product_id) ?? 0) + 1);
+}
+const accessLabel = (n: number) => `${n} client${n > 1 ? 's' : ''}`;
+
 // Physique / réservé / disponible : les trois chiffres, pas seulement le stock.
 const availability = await fetchAvailability(products ?? []);
 
@@ -499,11 +508,19 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                     >
                       <span class="vis-track"><span class="vis-thumb"></span></span>
                       <span class="vis-label">{on ? 'Visible' : 'Masqué'}</span>
+                      {(accessCountByProduct.get(p.id) ?? 0) > 0 && (
+                        <span class="vis-access" title={`${accessLabel(accessCountByProduct.get(p.id)!)} autorisé${accessCountByProduct.get(p.id)! > 1 ? 's' : ''} à voir ce produit masqué (fiche client › Produits réservés)`}>
+                          · {accessLabel(accessCountByProduct.get(p.id)!)}
+                        </span>
+                      )}
                     </button>
                   ) : (
                     <span class={`vis-state ${on ? 'vis-state--on' : 'vis-state--off'}`}>
                       <span class="vis-dot" aria-hidden="true"></span>
                       {on ? 'Visible' : 'Masqué'}
+                      {!on && (accessCountByProduct.get(p.id) ?? 0) > 0 && (
+                        <span class="vis-access">· {accessLabel(accessCountByProduct.get(p.id)!)}</span>
+                      )}
                     </span>
                   );
                 })()}
@@ -1114,6 +1131,9 @@ const DELETE_ERROR_MSG: Record<string, string> = {
   transition: transform 120ms ease-out;
 }
 .vis-switch[aria-checked="false"] .vis-thumb { transform: translateX(-14px); }
+/* Clients autorisés : n'a de sens que pour un produit masqué. */
+.vis-access { font-weight: 400; color: var(--color-muted); }
+.vis-switch[aria-checked="true"] .vis-access { display: none; }
 .vis-switch:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: 4px; }
 .vis-switch:disabled { opacity: 0.55; cursor: progress; }
 .vis-state {
