@@ -22,7 +22,7 @@ const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'];
 
 const { data: products, error } = await supabaseAdmin
   .from('products')
-  .select('id, name, category, sku, price_ht, unit, units_per_carton, in_stock, stock_quantity, position, prix_achat_moyen_ht, seuil_reappro, created_at')
+  .select('id, name, category, sku, price_ht, unit, units_per_carton, in_stock, stock_quantity, position, prix_achat_moyen_ht, seuil_reappro, created_at, visible_catalogue')
   .order('position', { ascending: true })
   .order('name', { ascending: true });
 
@@ -111,9 +111,15 @@ const catCounts: Record<string, number> = {};
 for (const c of CATEGORIES) catCounts[c] = 0;
 for (const p of (products ?? [])) catCounts[p.category] = (catCounts[p.category] ?? 0) + 1;
 
-const filteredProducts = filterCat
-  ? (products ?? []).filter(p => p.category === filterCat)
-  : (products ?? []);
+// Filtre « masqués » : produits retirés du catalogue client (visible_catalogue
+// = false). Se combine avec le filtre de famille.
+const filterMasques = Astro.url.searchParams.get('visibilite') === 'masques';
+const masquesCount = (products ?? []).filter(p => (p as any).visible_catalogue === false).length;
+
+const filteredProducts = (products ?? []).filter(p =>
+  (!filterCat || p.category === filterCat) &&
+  (!filterMasques || (p as any).visible_catalogue === false)
+);
 
 // ── Sortable columns ───────────────────────────────────────────────────
 // Marge and the monthly sales totals are computed values, so sorting happens in-memory
@@ -138,6 +144,14 @@ function catUrl(cat: string): string {
   const params = new URLSearchParams(Astro.url.searchParams);
   params.delete('delete_error');
   if (cat) params.set('cat', cat); else params.delete('cat');
+  const qs = params.toString();
+  return `/admin/produits${qs ? `?${qs}` : ''}`;
+}
+
+function masquesUrl(on: boolean): string {
+  const params = new URLSearchParams(Astro.url.searchParams);
+  params.delete('delete_error');
+  if (on) params.set('visibilite', 'masques'); else params.delete('visibilite');
   const qs = params.toString();
   return `/admin/produits${qs ? `?${qs}` : ''}`;
 }
@@ -289,6 +303,13 @@ const DELETE_ERROR_MSG: Record<string, string> = {
         {catCounts[c] > 0 && <span class="filter-count">{catCounts[c]}</span>}
       </a>
     ))}
+    {(masquesCount > 0 || filterMasques) && (
+      <a href={masquesUrl(!filterMasques)} class={`filter-tab filter-tab--masques ${filterMasques ? 'filter-tab--active' : ''}`}
+         title="Produits retirés du catalogue client">
+        Masqués
+        <span class="filter-count">{masquesCount}</span>
+      </a>
+    )}
   </div>
 
   <div class="search-row">
@@ -450,6 +471,9 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                 {canManage
                   ? <a href={`/admin/produits/${p.id}/performance`} class="product-link">{p.name}</a>
                   : p.name}
+                {(p as any).visible_catalogue === false && (
+                  <span class="hidden-flag" title="Masqué du catalogue client">masqué</span>
+                )}
               </td>
               <td>
                 <span class={`badge badge--${p.category}`}>
@@ -965,6 +989,16 @@ const DELETE_ERROR_MSG: Record<string, string> = {
 .data-table tbody tr:hover td { background: var(--color-surface); }
 
 .td-strong { font-weight: 500; color: var(--color-ink); }
+.hidden-flag {
+  margin-left: var(--space-2);
+  padding: 1px 6px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: 4px;
+  font-size: var(--text-xs);
+  font-weight: 400;
+  color: var(--color-muted);
+  white-space: nowrap;
+}
 .td-muted  { color: var(--color-muted); }
 .td-mono   { font-family: var(--font-mono); color: var(--color-ink); }
 .td-sub    { font-size: var(--text-xs); color: var(--color-muted); }

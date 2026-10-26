@@ -107,6 +107,13 @@ export async function createOrderChecked(
     telephone: string;
     email: string | null;
     notes: string | null;
+    /**
+     * Vrai uniquement pour la saisie par un admin/commercial (commande rapide) :
+     * autorise les produits masqués du catalogue client (visible_catalogue =
+     * false). Absent/faux pour tout achat client, où un produit masqué est
+     * refusé par la fonction SQL elle-même.
+     */
+    allow_hidden_products?: boolean;
   },
   items: OrderLineInput[],
 ): Promise<OrderCreateResult> {

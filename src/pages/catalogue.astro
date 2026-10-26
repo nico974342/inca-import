@@ -10,6 +10,9 @@ import { isClientRole } from '../lib/roles';
 const { data: products } = await supabaseAdmin
   .from('products')
   .select('id, name, slug, category, description, image_url, unit, units_per_carton, price_ht, tva_rate, stock_quantity')
+  // Produits masqués (visible_catalogue = false) : exclus à la source, donc
+  // de la grille, des filtres, des compteurs et des totaux du panier.
+  .eq('visible_catalogue', true)
   .order('position', { ascending: true })
   .order('name', { ascending: true });
 
@@ -44,8 +47,11 @@ if (isClient && user) {
     .from('cart_items')
     .select('product_id, quantity')
     .eq('user_id', user.id);
+  // Une ligne de panier dont le produit a été masqué depuis n'est ni affichée
+  // ni comptée ; /commande la retire réellement du panier.
+  const visibleIds = new Set((products ?? []).map(p => p.id));
   for (const row of cartRows ?? []) {
-    cartMap[row.product_id] = row.quantity;
+    if (visibleIds.has(row.product_id)) cartMap[row.product_id] = row.quantity;
   }
 }
 

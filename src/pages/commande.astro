@@ -37,9 +37,29 @@ const CAT_LABEL: Record<string, string> = {
   divers:      'Divers',
 };
 
+// ── Produits masqués du catalogue depuis leur ajout au panier ──────────
+// Retirés réellement du panier (pas seulement cachés) : ils ne doivent ni
+// s'afficher ni se commander. Le rempart définitif reste order_create_checked.
+const { data: hiddenInCart } = await supabaseAdmin
+  .from('cart_items')
+  .select('product_id, products!inner(visible_catalogue)')
+  .eq('user_id', user.id)
+  .eq('products.visible_catalogue', false);
+if (hiddenInCart && hiddenInCart.length > 0) {
+  await supabaseAdmin
+    .from('cart_items')
+    .delete()
+    .eq('user_id', user.id)
+    .in('product_id', hiddenInCart.map(r => r.product_id));
+}
+const removedHiddenFromCart = (hiddenInCart?.length ?? 0) > 0 || Astro.url.searchParams.get('retire') === '1';
+
 // ── POST: confirm order ────────────────────────────────────────
 if (Astro.request.method === 'POST') {
   if (!accountActive) return Astro.redirect('/commande?error=compte_non_actif');
+  // Le panier vient de changer sous les yeux du client : on le lui remontre
+  // avant de commander plutôt que de valider un panier qu'il n'a pas relu.
+  if ((hiddenInCart?.length ?? 0) > 0) return Astro.redirect('/commande?retire=1');
 
   const form  = await Astro.request.formData();
   const notes = sanitizeText(form.get('notes') as string, 1000);
@@ -305,6 +325,12 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
       {hasError && !success && (
         <p class="order-error" role="alert">
           Une erreur est survenue lors de la validation. Veuillez réessayer.
+        </p>
+      )}
+      {removedHiddenFromCart && !success && (
+        <p class="order-error" role="status">
+          Un ou plusieurs produits de votre panier ne sont plus disponibles au catalogue et ont été retirés.
+          Vérifiez votre panier avant de confirmer.
         </p>
       )}
       {stockError && !success && (

@@ -37,6 +37,8 @@ export const GET: APIRoute = async ({ url }) => {
     .from('products')
     .select('id, name, category, unit, units_per_carton, price_ht, in_stock, image_url')
     .in('category', selectedCats)
+    // Document destiné aux clients : les produits masqués n'y figurent jamais.
+    .eq('visible_catalogue', true)
     .order('category', { ascending: true })
     .order('name', { ascending: true });
 

@@ -14,7 +14,7 @@ const { data: { user } } = await supabase.auth.getUser();
 
 // Comptes de références affichés en page d'accueil : calculés depuis le
 // catalogue à chaque rendu, pour ne jamais afficher un chiffre périmé.
-const { data: productsRaw } = await supabaseAdmin.from('products').select('category');
+const { data: productsRaw } = await supabaseAdmin.from('products').select('category').eq('visible_catalogue', true);
 const products = productsRaw ?? [];
 const totalRefs = products.length;
 const categoryCounts = {

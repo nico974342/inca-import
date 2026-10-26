@@ -83,6 +83,8 @@ if (Astro.request.method === 'POST') {
       telephone: client.telephone ?? '',
       email:     client.email ? normalizeEmail(client.email) : null,
       notes:     notes || null,
+      // Saisie staff : les produits masqués du catalogue client restent commandables.
+      allow_hidden_products: true,
     },
     orderItems.map(item => ({
       product_id:        item.product_id,

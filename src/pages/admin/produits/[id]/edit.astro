@@ -101,7 +101,8 @@ if (Astro.request.method === 'POST') {
   // délai n'a pas de sens, et ne doit jamais faire primer un "override" vide
   // sur le fournisseur (resolveDelaiLivraison, constants.ts).
   const delai_livraison_override = data.get('delai_livraison_override') === 'on' && delai_livraison_jours != null;
-  const commande_min_cartons      = data.get('commande_min_cartons')      ? parseInt(data.get('commande_min_cartons') as string, 10) : null;
+  const visible_catalogue = data.get('visible_catalogue') === 'on';
+  const commande_min_cartons      = data.get('commande_min_cartons')     ? parseInt(data.get('commande_min_cartons') as string, 10) : null;
   const commande_multiple_cartons = data.get('commande_multiple_cartons') ? parseInt(data.get('commande_multiple_cartons') as string, 10) : null;
 
   if (!name || !slug || !category) {
@@ -115,6 +116,7 @@ if (Astro.request.method === 'POST') {
       .update({
         name, slug, category, description, sku, price_ht, tva_rate, unit, units_per_carton, image_url, position,
         seuil_reappro, delai_livraison_jours, delai_livraison_override, commande_min_cartons, commande_multiple_cartons,
+        visible_catalogue,
       })
       .eq('id', id);
 
@@ -246,6 +248,16 @@ if (Astro.request.method === 'POST') {
           <div class="field">
             <label for="position">Position</label>
             <input type="number" id="position" name="position" min="0" value={product.position ?? 0} />
+          </div>
+        </div>
+
+        <div class="field-group">
+          <div class="field">
+            <label class="field-checkbox">
+              <input type="checkbox" name="visible_catalogue" checked={(product as any).visible_catalogue !== false} />
+              Visible dans le catalogue client
+            </label>
+            <p class="field-computed-hint">Décochez pour retirer ce produit du catalogue, du panier et du catalogue PDF. Il reste géré normalement en administration.</p>
           </div>
         </div>
 

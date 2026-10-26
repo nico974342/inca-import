@@ -12,9 +12,18 @@ const { data: product } = await supabaseAdmin
   .from('products')
   .select('id, name, slug, category, description, sku, price_ht, unit, units_per_carton, image_url, in_stock, stock_quantity')
   .eq('slug', slug)
-  .single();
+  .eq('visible_catalogue', true)
+  .maybeSingle();
 
-if (!product) return Astro.redirect('/catalogue');
+// Produit inconnu OU masqué : même réponse 404, pour ne pas révéler
+// l'existence d'un produit retiré du catalogue.
+if (!product) {
+  return new Response(
+    '<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Produit introuvable — Inca Import</title></head>' +
+    '<body style="font-family:sans-serif;padding:2rem"><h1>Produit introuvable</h1><p><a href="/catalogue">Retour au catalogue</a></p></body></html>',
+    { status: 404, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+  );
+}
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
