@@ -303,13 +303,11 @@ const DELETE_ERROR_MSG: Record<string, string> = {
         {catCounts[c] > 0 && <span class="filter-count">{catCounts[c]}</span>}
       </a>
     ))}
-    {(masquesCount > 0 || filterMasques) && (
-      <a href={masquesUrl(!filterMasques)} class={`filter-tab filter-tab--masques ${filterMasques ? 'filter-tab--active' : ''}`}
-         title="Produits retirés du catalogue client">
-        Masqués
-        <span class="filter-count">{masquesCount}</span>
-      </a>
-    )}
+    <a href={masquesUrl(!filterMasques)} class={`filter-tab filter-tab--masques ${filterMasques ? 'filter-tab--active' : ''}`}
+       title="Produits retirés du catalogue client">
+      Masqués
+      <span class="filter-count" id="masquesCount">{masquesCount}</span>
+    </a>
   </div>
 
   <div class="search-row">
@@ -394,6 +392,14 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                 {currentSort === 'categorie' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
               </a>
             </th>
+            <th>
+              Catalogue
+              <span
+                class="help-icon"
+                tabindex="0"
+                title="Visible = proposé aux clients. Masqué = retiré du catalogue, de la fiche, du panier et du catalogue PDF (le produit reste géré normalement ici)."
+              >?</span>
+            </th>
             <th>SKU</th>
             <th>
               <a href={sortUrl('prix')} class={`th-sort ${currentSort === 'prix' ? 'th-sort--active' : ''}`}>
@@ -456,6 +462,7 @@ const DELETE_ERROR_MSG: Record<string, string> = {
         <tbody>
           {rows.map(p => (
             <tr
+              class={(p as any).visible_catalogue === false ? 'row--hidden' : undefined}
               data-search={p.name.toLowerCase()}
               data-units-sold={p.agg.unitsSold}
               data-cartons-sold={p.agg.cartonsSold}
@@ -471,14 +478,35 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                 {canManage
                   ? <a href={`/admin/produits/${p.id}/performance`} class="product-link">{p.name}</a>
                   : p.name}
-                {(p as any).visible_catalogue === false && (
-                  <span class="hidden-flag" title="Masqué du catalogue client">masqué</span>
-                )}
               </td>
               <td>
                 <span class={`badge badge--${p.category}`}>
                   {CAT_LABEL[p.category] ?? p.category}
                 </span>
+              </td>
+              <td class="vis-cell">
+                {(() => {
+                  const on = (p as any).visible_catalogue !== false;
+                  return canManage ? (
+                    <button
+                      type="button"
+                      role="switch"
+                      class="vis-switch"
+                      aria-checked={on ? 'true' : 'false'}
+                      aria-label={`Visibilité catalogue de ${p.name}`}
+                      data-id={p.id}
+                      title={on ? 'Visible dans le catalogue client — cliquer pour masquer' : 'Masqué du catalogue client — cliquer pour afficher'}
+                    >
+                      <span class="vis-track"><span class="vis-thumb"></span></span>
+                      <span class="vis-label">{on ? 'Visible' : 'Masqué'}</span>
+                    </button>
+                  ) : (
+                    <span class={`vis-state ${on ? 'vis-state--on' : 'vis-state--off'}`}>
+                      <span class="vis-dot" aria-hidden="true"></span>
+                      {on ? 'Visible' : 'Masqué'}
+                    </span>
+                  );
+                })()}
               </td>
               <td class="td-mono">{p.sku ?? '—'}</td>
               <td class="td-mono">
@@ -602,7 +630,66 @@ const DELETE_ERROR_MSG: Record<string, string> = {
       )}
     </div>
   )}
+  <p class="vis-toast" id="visToast" role="alert" hidden></p>
 </AdminLayout>
+
+<script>
+  // Interrupteur de visibilité catalogue : enregistrement immédiat au clic,
+  // mise à jour optimiste, retour à l'état précédent si le serveur refuse.
+  const visToast = document.getElementById('visToast') as HTMLElement | null;
+  const masquesCountEl = document.getElementById('masquesCount');
+  let visToastTimer: number | undefined;
+
+  function showVisError(message: string) {
+    if (!visToast) return;
+    visToast.textContent = message;
+    visToast.hidden = false;
+    window.clearTimeout(visToastTimer);
+    visToastTimer = window.setTimeout(() => { visToast.hidden = true; }, 6000);
+  }
+
+  function applyVisState(btn: HTMLButtonElement, visible: boolean) {
+    btn.setAttribute('aria-checked', visible ? 'true' : 'false');
+    btn.title = visible
+      ? 'Visible dans le catalogue client — cliquer pour masquer'
+      : 'Masqué du catalogue client — cliquer pour afficher';
+    const label = btn.querySelector('.vis-label');
+    if (label) label.textContent = visible ? 'Visible' : 'Masqué';
+    btn.closest('tr')?.classList.toggle('row--hidden', !visible);
+  }
+
+  function bumpMasquesCount(delta: number) {
+    if (!masquesCountEl) return;
+    masquesCountEl.textContent = String(Math.max(0, (Number(masquesCountEl.textContent) || 0) + delta));
+  }
+
+  document.querySelectorAll<HTMLButtonElement>('.vis-switch').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const wasVisible = btn.getAttribute('aria-checked') === 'true';
+      const next = !wasVisible;
+      btn.disabled = true;
+      applyVisState(btn, next);
+      bumpMasquesCount(next ? -1 : 1);
+      try {
+        const res = await fetch('/api/produits/visibilite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: btn.dataset.id, visible: next }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => null);
+          throw new Error(data?.error ?? `Erreur ${res.status}`);
+        }
+      } catch (err) {
+        applyVisState(btn, wasVisible);
+        bumpMasquesCount(next ? 1 : -1);
+        showVisError(`Visibilité non modifiée : ${err instanceof Error ? err.message : 'erreur réseau'}.`);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+</script>
 
 <script>
   const searchInput    = document.getElementById('prodSearch') as HTMLInputElement | null;
@@ -989,15 +1076,71 @@ const DELETE_ERROR_MSG: Record<string, string> = {
 .data-table tbody tr:hover td { background: var(--color-surface); }
 
 .td-strong { font-weight: 500; color: var(--color-ink); }
-.hidden-flag {
-  margin-left: var(--space-2);
-  padding: 1px 6px;
-  border: 1px dashed var(--color-border-strong);
-  border-radius: 4px;
+/* ── Visibilité catalogue : interrupteur (admin) / état seul (commercial) ── */
+.vis-cell { white-space: nowrap; }
+.vis-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px 4px 2px 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
   font-size: var(--text-xs);
-  font-weight: 400;
-  color: var(--color-muted);
-  white-space: nowrap;
+  font-weight: 600;
+  color: oklch(0.32 0.14 145);
+}
+.vis-switch[aria-checked="false"] { color: var(--color-muted); }
+.vis-track {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  background: oklch(0.62 0.15 145);
+  transition: background-color 120ms ease-out;
+  flex: none;
+}
+.vis-switch[aria-checked="false"] .vis-track { background: oklch(0.80 0.01 260); }
+.vis-thumb {
+  position: absolute;
+  top: 2px;
+  left: 16px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px oklch(0.2 0 0 / 0.3);
+  transition: transform 120ms ease-out;
+}
+.vis-switch[aria-checked="false"] .vis-thumb { transform: translateX(-14px); }
+.vis-switch:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: 4px; }
+.vis-switch:disabled { opacity: 0.55; cursor: progress; }
+.vis-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.vis-state--on  { color: oklch(0.32 0.14 145); }
+.vis-state--off { color: var(--color-muted); }
+.vis-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.vis-state--off .vis-dot { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
+/* Produit masqué : la ligne s'efface légèrement, sans devenir illisible. */
+.row--hidden > td:not(.vis-cell):not(.td-actions) { opacity: 0.62; }
+.vis-toast {
+  position: fixed;
+  right: var(--space-5);
+  bottom: var(--space-5);
+  max-width: 340px;
+  padding: var(--space-3) var(--space-4);
+  border-radius: 6px;
+  background: oklch(0.95 0.04 25);
+  color: oklch(0.40 0.16 25);
+  border: 1px solid oklch(0.85 0.08 25);
+  font-size: var(--text-sm);
+  box-shadow: 0 4px 16px oklch(0.2 0 0 / 0.15);
 }
 .td-muted  { color: var(--color-muted); }
 .td-mono   { font-family: var(--font-mono); color: var(--color-ink); }

@@ -40,6 +40,7 @@ const ACTION_LABELS: Record<string, string> = {
   'produit.creation':          'Produit créé',
   'produit.suppression':       'Produit supprimé',
   'produit.stock_ajustement':  'Stock ajusté',
+  'produit.visibilite_catalogue': 'Visibilité catalogue',
   'reception.creation':     'Réception stock',
   'reception.modification': 'Réception modifiée',
   'reception.suppression':  'Réception supprimée',
@@ -62,6 +63,7 @@ const ACTION_COLOR: Record<string, string> = {
   'produit.creation':          'green',
   'produit.suppression':       'red',
   'produit.stock_ajustement':  'amber',
+  'produit.visibilite_catalogue': 'purple',
   'reception.creation':     'green',
   'reception.modification': 'blue',
   'reception.suppression':  'red',
@@ -99,6 +101,9 @@ function formatDetails(details: Record<string, unknown> | null, action: string):
     }
     const delta = typeof details.delta === 'number' ? ` (${details.delta > 0 ? '+' : ''}${details.delta})` : '';
     return `${details.avant} → ${details.apres}${delta} · ${methode}`;
+  }
+  if (action === 'produit.visibilite_catalogue') {
+    return `${details.ancien} → ${details.nouveau}`;
   }
   if (action === 'client.modification' && details.notifications_email) {
     const n = details.notifications_email as { avant: boolean; apres: boolean };
