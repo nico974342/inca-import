@@ -102,6 +102,9 @@ if (Astro.request.method === 'POST') {
   // sur le fournisseur (resolveDelaiLivraison, constants.ts).
   const delai_livraison_override = data.get('delai_livraison_override') === 'on' && delai_livraison_jours != null;
   const visible_catalogue = data.get('visible_catalogue') === 'on';
+  // Durée de conservation type : sert UNIQUEMENT à pré-remplir la DLC d'un lot à la réception.
+  const dureeRaw = parseInt((data.get('duree_conservation_mois') as string) ?? '', 10);
+  const duree_conservation_mois = Number.isFinite(dureeRaw) && dureeRaw > 0 && dureeRaw <= 120 ? dureeRaw : null;
   const commande_min_cartons      = data.get('commande_min_cartons')     ? parseInt(data.get('commande_min_cartons') as string, 10) : null;
   const commande_multiple_cartons = data.get('commande_multiple_cartons') ? parseInt(data.get('commande_multiple_cartons') as string, 10) : null;
 
@@ -116,7 +119,7 @@ if (Astro.request.method === 'POST') {
       .update({
         name, slug, category, description, sku, price_ht, tva_rate, unit, units_per_carton, image_url, position,
         seuil_reappro, delai_livraison_jours, delai_livraison_override, commande_min_cartons, commande_multiple_cartons,
-        visible_catalogue,
+        visible_catalogue, duree_conservation_mois,
       })
       .eq('id', id);
 
@@ -282,6 +285,14 @@ if (Astro.request.method === 'POST') {
                 <strong class="field-warn"> Une valeur est enregistrée mais n'est pas utilisée (case décochée).</strong>
               )}
             </p>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <div class="field">
+            <label for="duree_conservation_mois">Durée de conservation (mois)</label>
+            <input type="number" id="duree_conservation_mois" name="duree_conservation_mois" min="1" max="120" step="1" value={(product as any).duree_conservation_mois ?? ''} placeholder="ex : 12" />
+            <p class="field-computed-hint">Optionnel. Sert uniquement à pré-remplir la DLC d'un lot à la réception (date de réception + cette durée) — la vraie DLC reste celle saisie pour chaque lot.</p>
           </div>
         </div>
 

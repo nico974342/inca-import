@@ -2,6 +2,7 @@
 import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { fetchReservedByProduct } from '../../lib/stock';
+import { fetchDlcBadges } from '../../lib/dlc';
 import { isAdmin } from '../../lib/roles';
 
 const viewerIsAdmin = isAdmin((Astro.locals as any).user);
@@ -24,10 +25,12 @@ let products: Array<Record<string, unknown>> = [];
 // Le chiffre éditable reste le physique — c'est lui que l'admin ajuste. Le
 // réservé et le disponible l'accompagnent en lecture seule.
 const reservedByProduct = await fetchReservedByProduct();
+// Niveau DLC du lot le plus urgent (information de suivi : aucun effet sur les quantités).
+const dlcBadges = await fetchDlcBadges();
 products = products.map(p => {
   const physical = (p.stock_quantity as number) ?? 0;
   const reserved = reservedByProduct.get(p.id as string) ?? 0;
-  return { ...p, reserved, available: physical - reserved };
+  return { ...p, reserved, available: physical - reserved, dlc: dlcBadges.get(p.id as string) ?? null };
 });
 
 const CAT_LABEL: Record<string, string> = {
@@ -328,6 +331,17 @@ const CAT_LABEL: Record<string, string> = {
     applyData(data.products ?? []);
   };
 
+  // Pastille DLC : lot le plus urgent du produit (périmé / critique / à risque).
+  const DLC_STYLE = {
+    perime:   'background:oklch(0.93 0.07 25);color:oklch(0.40 0.18 25);',
+    critique: 'background:oklch(0.94 0.08 55);color:oklch(0.40 0.15 50);',
+    a_risque: 'background:oklch(0.96 0.07 90);color:oklch(0.42 0.11 85);',
+  };
+  function dlcChipHtml(p) {
+    if (!p.dlc) return '';
+    return `<span title="${escapeHtml(p.dlc.title)}" style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:var(--radius-full);font-size:var(--text-xs);font-weight:600;white-space:nowrap;cursor:help;${DLC_STYLE[p.dlc.level] ?? ''}">DLC · ${escapeHtml(p.dlc.label)}</span>`;
+  }
+
   function rowHtml(p, idx) {
     return `
       <tr style="${rowStyle(p.stock_quantity, idx)}">
@@ -335,6 +349,7 @@ const CAT_LABEL: Record<string, string> = {
           <div style="display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap;">
             <span style="font-weight:600;color:var(--color-ink);">${escapeHtml(p.name)}</span>
             <span style="display:inline-block;padding:2px 8px;border-radius:var(--radius-full);font-size:var(--text-xs);font-weight:500;white-space:nowrap;${catStyle(p.category)}">${escapeHtml(catLabels[p.category] ?? p.category)}</span>
+            ${dlcChipHtml(p)}
             ${p.seuil_reappro != null && p.stock_quantity <= p.seuil_reappro
               ? `<span title="Seuil de réapprovisionnement : ${p.seuil_reappro} cartons" style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:var(--radius-full);font-size:var(--text-xs);font-weight:600;white-space:nowrap;background:oklch(0.95 0.07 60);color:oklch(0.38 0.15 55);border:1px solid oklch(0.85 0.09 60);">⚠ Réassort</span>`
               : ''}

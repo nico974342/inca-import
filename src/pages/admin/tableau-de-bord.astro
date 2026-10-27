@@ -4,6 +4,8 @@ import { supabaseAdmin } from '../../lib/supabase';
 import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR } from '../../lib/constants';
 import { formatDateReunion, reunionMonthStart } from '../../lib/datetime';
 import { isAdmin } from '../../lib/roles';
+import { fetchDlcOverview } from '../../lib/dlc';
+import LotsASurveiller from '../../components/admin/LotsASurveiller.astro';
 
 // Version allégée du tableau de bord, pour un rôle commercial : ni marge, ni
 // valeur de stock, ni produits à surveiller — ces figures vivent uniquement
@@ -12,6 +14,9 @@ import { isAdmin } from '../../lib/roles';
 if (isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'] as const;
+
+// Alertes DLC : information de vente (aucun coût), visible aussi du commercial.
+const dlcOverview = await fetchDlcOverview().catch(err => { console.error('[tableau-de-bord] dlc:', err?.message ?? err); return null; });
 const monthStart = reunionMonthStart(0).toISOString();
 
 const [
@@ -59,6 +64,8 @@ function fmtEuros(n: number) {
       <span class="kpi-value">{fmtEuros(panierMoyen)}</span>
     </div>
   </div>
+
+  <LotsASurveiller overview={dlcOverview} />
 
   <div class="grid-2col">
     <div class="card">

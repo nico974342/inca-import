@@ -3,6 +3,7 @@ import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
 import { logAdminAction } from '../../../../../lib/audit';
 import { isAdmin } from '../../../../../lib/roles';
 import { matchSupplierName } from '../../../../../lib/constants';
+import { parseDlc } from '../../../../../lib/dlc';
 
 export const POST: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -25,6 +26,7 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
   const productIds = form.getAll('product_id[]') as string[];
   const quantities = form.getAll('quantity[]') as string[];
   const unitCosts  = form.getAll('unit_cost_ht[]') as string[];
+  const dlcs       = form.getAll('dlc[]') as string[];
 
   const editUrl = `/admin/reception/${id}/edit`;
 
@@ -32,13 +34,13 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
     return Response.redirect(new URL(editUrl, request.url), 303);
   }
 
-  const newRows: { productId: string; quantity: number; unitCost: number }[] = [];
+  const newRows: { productId: string; quantity: number; unitCost: number; dlc: string | null }[] = [];
   for (let i = 0; i < productIds.length; i++) {
     const pid  = productIds[i]?.trim();
     const qty  = parseInt(quantities[i] ?? '0', 10);
     const cost = parseFloat(unitCosts[i] ?? '0');
     if (!pid || qty <= 0 || cost < 0) continue;
-    newRows.push({ productId: pid, quantity: qty, unitCost: cost });
+    newRows.push({ productId: pid, quantity: qty, unitCost: cost, dlc: parseDlc(dlcs[i]) });
   }
 
   if (newRows.length === 0) {
@@ -90,6 +92,7 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
       product_id:   r.productId,
       quantity:     r.quantity,
       unit_cost_ht: r.unitCost,
+      dlc:          r.dlc,
     })),
   });
 

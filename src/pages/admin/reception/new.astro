@@ -9,7 +9,7 @@ if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
 const { data: products } = await supabaseAdmin
   .from('products')
-  .select('id, name, sku, stock_quantity, prix_achat_moyen_ht')
+  .select('id, name, sku, stock_quantity, prix_achat_moyen_ht, duree_conservation_mois')
   .order('name');
 
 const { data: supplierRows } = await supabaseAdmin.from('suppliers').select('name').order('name');
@@ -134,6 +134,7 @@ if (shipmentId) {
               <th class="col-pump">PUMP actuel</th>
               <th class="col-qty">Quantité reçue <span class="required">*</span></th>
               <th class="col-cost">Coût unitaire HT <span class="required">*</span></th>
+              <th class="col-dlc">DLC <span class="th-sub">(optionnelle)</span></th>
               <th class="col-total">Total HT</th>
               <th class="col-action"></th>
             </tr>
@@ -143,7 +144,7 @@ if (shipmentId) {
           </tbody>
           <tfoot>
             <tr id="totalRow" class="total-row" style="display:none">
-              <td colspan="5" class="total-label">Total réception</td>
+              <td colspan="6" class="total-label">Total réception</td>
               <td class="total-value" id="grandTotal">—</td>
               <td></td>
             </tr>
@@ -151,6 +152,10 @@ if (shipmentId) {
         </table>
       </div>
 
+      <p class="items-hint" id="dlcHint">
+        <strong>DLC</strong> : date limite de ce lot précis. Pré-remplie (date de réception + durée de conservation du produit)
+        quand elle est connue — c'est une suggestion, à vérifier avant d'enregistrer. Laisser vide = « non renseignée ».
+      </p>
       <p class="items-hint" id="noItemsHint">Cliquez sur « + Ajouter un produit » pour commencer.</p>
     </section>
 
@@ -178,6 +183,28 @@ function fmtNum(n) {
   if (n == null) return '—';
   return n.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+
+
+// ── DLC : suggestion = date de réception + durée de conservation type du produit.
+//    Ce n'est qu'un pré-remplissage, toujours modifiable ; une valeur saisie à la
+//    main (data-touched) n'est plus jamais écrasée. Vide = DLC non renseignée.
+function addMonthsISO(iso, months) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const total = y * 12 + (m - 1) + months;
+  const ty = Math.floor(total / 12), tm = total % 12;
+  const last = new Date(Date.UTC(ty, tm + 1, 0)).getUTCDate();
+  return ty + '-' + String(tm + 1).padStart(2, '0') + '-' + String(Math.min(d, last)).padStart(2, '0');
+}
+function suggestDlc(tr) {
+  const input = tr.querySelector('[name="dlc[]"]');
+  if (!input || input.dataset.touched === '1') return;
+  const prod = productMap[tr.querySelector('[data-product-select]')?.value];
+  const received = document.getElementById('received_at')?.value;
+  input.value = prod && prod.duree_conservation_mois && received
+    ? addMonthsISO(received, Number(prod.duree_conservation_mois))
+    : '';
+}
+function suggestAllDlc() { document.querySelectorAll('.item-row').forEach(suggestDlc); }
 
 function buildOptions(selectedId) {
   const usedIds = getUsedProductIds();
@@ -222,6 +249,9 @@ function addRow(productId) {
     <td class="col-cost">
       <input type="number" name="unit_cost_ht[]" class="input input--num" min="0" step="0.01" placeholder="0.00" required />
     </td>
+    <td class="col-dlc">
+      <input type="date" name="dlc[]" class="input" />
+    </td>
     <td class="col-total td-info" data-row-total="${idx}">—</td>
     <td class="col-action">
       <button type="button" class="remove-btn" data-remove="${idx}" title="Supprimer">×</button>
@@ -233,6 +263,8 @@ function addRow(productId) {
   const sel    = tr.querySelector('[data-product-select]');
   const qtyIn  = tr.querySelector('[name="quantity[]"]');
   const costIn = tr.querySelector('[name="unit_cost_ht[]"]');
+  const dlcIn  = tr.querySelector('[name="dlc[]"]');
+  dlcIn.addEventListener('input', () => { dlcIn.dataset.touched = '1'; });
 
   sel.addEventListener('change', () => {
     const pid = sel.value;
@@ -241,6 +273,7 @@ function addRow(productId) {
     const pumpCell  = tr.querySelector('[data-pump]');
     stockCell.textContent = prod ? (prod.stock_quantity ?? 0) : '—';
     pumpCell.textContent  = prod && prod.prix_achat_moyen_ht != null ? fmtNum(prod.prix_achat_moyen_ht) + ' €' : '—';
+    suggestDlc(tr);
     refreshAllSelects();
     updateTotal();
   });
@@ -254,6 +287,7 @@ function addRow(productId) {
     toggleHint();
   });
 
+  suggestDlc(tr);
   toggleHint();
   updateTotal();
 }
@@ -323,7 +357,7 @@ function checkDateHint() {
   }
 }
 
-dateInput?.addEventListener('change', checkDateHint);
+dateInput?.addEventListener('change', () => { checkDateHint(); suggestAllDlc(); });
 checkDateHint();
 
 // Arrived from a shipment: rebuild its lines so the admin only has to
@@ -517,12 +551,14 @@ if (PREFILL_ITEMS.length > 0) {
   vertical-align: middle;
 }
 
-.col-product { width: 32%; }
-.col-stock   { width: 10%; }
-.col-pump    { width: 12%; }
-.col-qty     { width: 13%; }
-.col-cost    { width: 13%; }
-.col-total   { width: 12%; }
+.col-product { width: 25%; }
+.col-stock   { width: 8%; }
+.col-pump    { width: 10%; }
+.col-qty     { width: 11%; }
+.col-cost    { width: 12%; }
+.col-dlc     { width: 15%; }
+.col-total   { width: 11%; }
+.th-sub      { font-weight: 400; color: var(--color-muted); font-size: var(--text-xs); }
 .col-action  { width: 48px; text-align: center; }
 
 .td-info {

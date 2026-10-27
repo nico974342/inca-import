@@ -2,6 +2,7 @@ import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../lib/supabase';
 import { logAdminAction } from '../../../lib/audit';
 import { isAdmin, isStaff } from '../../../lib/roles';
+import { fetchDlcBadges } from '../../../lib/dlc';
 
 // products.stock_updated_at n'a jamais existé : schema_v9.sql, qui l'ajoutait,
 // n'a jamais été lancé. Les replis qui vivaient ici masquaient l'absence de
@@ -15,7 +16,9 @@ async function listProducts() {
     .order('name', { ascending: true });
 
   if (error) console.error('listProducts error:', error);
-  return data ?? [];
+  // Pastille DLC (suivi seulement) : lecture, sans aucun effet sur le stock.
+  const dlcBadges = await fetchDlcBadges();
+  return (data ?? []).map(p => ({ ...p, dlc: dlcBadges.get(p.id) ?? null }));
 }
 
 /**

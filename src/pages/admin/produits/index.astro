@@ -7,6 +7,7 @@ import {
 } from '../../../lib/constants';
 import { fetchAvailability, toAvailability } from '../../../lib/stock';
 import { reunionMonthStart } from '../../../lib/datetime';
+import { fetchDlcBadges } from '../../../lib/dlc';
 import { isAdmin, isStaff } from '../../../lib/roles';
 
 const viewer = (Astro.locals as any).user;
@@ -33,6 +34,8 @@ const accessCountByProduct = new Map<string, number>();
 for (const r of accessRows ?? []) {
   accessCountByProduct.set(r.product_id, (accessCountByProduct.get(r.product_id) ?? 0) + 1);
 }
+// Niveau DLC du lot le plus urgent de chaque produit (suivi seulement, aucun coût).
+const dlcBadges = await fetchDlcBadges();
 const accessLabel = (n: number) => `${n} client${n > 1 ? 's' : ''}`;
 
 // Physique / réservé / disponible : les trois chiffres, pas seulement le stock.
@@ -487,6 +490,11 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                 {canManage
                   ? <a href={`/admin/produits/${p.id}/performance`} class="product-link">{p.name}</a>
                   : p.name}
+                {dlcBadges.get(p.id) && (
+                  <span class={`dlc-chip dlc-chip--${dlcBadges.get(p.id)!.level}`} title={dlcBadges.get(p.id)!.title}>
+                    DLC · {dlcBadges.get(p.id)!.label}
+                  </span>
+                )}
               </td>
               <td>
                 <span class={`badge badge--${p.category}`}>
@@ -1134,6 +1142,20 @@ const DELETE_ERROR_MSG: Record<string, string> = {
 /* Clients autorisés : n'a de sens que pour un produit masqué. */
 .vis-access { font-weight: 400; color: var(--color-muted); }
 .vis-switch[aria-checked="true"] .vis-access { display: none; }
+/* Pastille DLC : lot le plus urgent du produit. */
+.dlc-chip {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: help;
+}
+.dlc-chip--perime   { background: oklch(0.93 0.07 25);  color: oklch(0.40 0.18 25); }
+.dlc-chip--critique { background: oklch(0.94 0.08 55);  color: oklch(0.40 0.15 50); }
+.dlc-chip--a_risque { background: oklch(0.96 0.07 90);  color: oklch(0.42 0.11 85); }
 .vis-switch:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: 4px; }
 .vis-switch:disabled { opacity: 0.55; cursor: progress; }
 .vis-state {

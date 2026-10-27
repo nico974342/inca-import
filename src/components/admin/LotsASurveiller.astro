@@ -1,0 +1,211 @@
+---
+import { LOT_LEVEL_LABEL, type DlcOverview } from '../../lib/dlc';
+
+// Section « Lots à surveiller » (DLC) — affichée sur le tableau de bord admin ET
+// sur celui du commercial : c'est une information de vente, sans aucun coût.
+interface Props {
+  /** null = le calcul a échoué (ex. migration non appliquée) : on le dit, on ne masque pas. */
+  overview: DlcOverview | null;
+  limit?: number;
+}
+const { overview, limit = 10 } = Astro.props;
+
+const shown = overview ? overview.alerts.slice(0, limit) : [];
+const hidden = overview ? Math.max(0, overview.alerts.length - shown.length) : 0;
+
+const fmtDate = (iso: string) => iso.split('-').reverse().join('/');
+const fmtRate = (n: number | null) =>
+  n == null ? 'non estimable (aucune vente récente)' : `~${n.toLocaleString('fr-FR', { maximumFractionDigits: 1 })} cartons/sem.`;
+function daysLabel(d: number | null): string {
+  if (d == null) return '—';
+  if (d < 0) return `périmé depuis ${-d} j`;
+  if (d === 0) return 'dernier jour';
+  return `${d} j`;
+}
+const n = (x: number) => x.toLocaleString('fr-FR');
+---
+<div class="panel lots">
+  <div class="panel-header">
+    <h2 class="panel-title">
+      Lots à surveiller
+      <span
+        class="help-icon"
+        tabindex="0"
+        title="Lots dont la DLC est dépassée (périmé), à moins de 30 jours (critique), ou qui ne seront pas écoulés avant leur DLC au rythme de vente actuel (à risque)."
+      >?</span>
+    </h2>
+    <a href="/admin/stocks" class="panel-link">Stocks →</a>
+  </div>
+
+  {overview == null ? (
+    <p class="panel-empty">Suivi des DLC indisponible pour le moment.</p>
+  ) : (
+    <>
+      {shown.length > 0 ? (
+        <div class="lots-wrap">
+          <table class="lots-table">
+            <thead>
+              <tr>
+                <th>Produit</th>
+                <th>DLC</th>
+                <th class="th-r">Qté concernée</th>
+                <th class="th-r">Jours restants</th>
+                <th class="th-r">Non écoulé (estim.)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map(a => (
+                <tr>
+                  <td>
+                    <span class="lots-name">{a.productName}</span>
+                    <span class="lots-sub">Rythme : {fmtRate(a.weeklyRate)}</span>
+                  </td>
+                  <td class="lots-date">
+                    {fmtDate(a.dlc!)}
+                    <span class={`lot-chip lot-chip--${a.level}`}>{LOT_LEVEL_LABEL[a.level]}</span>
+                  </td>
+                  <td class="th-r lots-num">{a.qtyRemaining}</td>
+                  <td class={`th-r lots-num ${a.level === 'perime' ? 'lots-num--bad' : ''}`}>{daysLabel(a.daysLeft)}</td>
+                  <td class="th-r lots-num">
+                    {a.unsold == null
+                      ? <span class="lots-na" title="Aucune vente récente : le rythme n'est pas estimable, on ne conclut pas que le lot ne s'écoulera pas.">non estimable</span>
+                      : a.unsold}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {hidden > 0 && <p class="lots-more">+ {hidden} autre{hidden > 1 ? 's' : ''} lot{hidden > 1 ? 's' : ''} en alerte (moins urgents)</p>}
+        </div>
+      ) : (
+        <p class="panel-empty">
+          Aucun lot en alerte parmi ceux dont la DLC est renseignée.
+        </p>
+      )}
+
+      <ul class="lots-notes">
+        {overview.nonRenseigne.lots > 0 && (
+          <li>
+            <strong>{n(overview.nonRenseigne.lots)} lot{overview.nonRenseigne.lots > 1 ? 's' : ''}</strong> en stock
+            ({n(overview.nonRenseigne.cartons)} cartons) <strong>sans DLC renseignée</strong> — « non renseigné » ne veut pas dire « sans risque » :
+            aucune alerte n'est possible sur ces lots.
+          </li>
+        )}
+        {overview.nonEstimable.lots > 0 && (
+          <li>
+            {n(overview.nonEstimable.lots)} lot{overview.nonEstimable.lots > 1 ? 's' : ''} avec DLC mais produit sans vente récente
+            (risque <strong>non estimable</strong>, {n(overview.nonEstimable.cartons)} cartons).
+          </li>
+        )}
+        {overview.stockHorsLots.cartons > 0 && (
+          <li>
+            {n(overview.stockHorsLots.cartons)} cartons ({overview.stockHorsLots.products} produit{overview.stockHorsLots.products > 1 ? 's' : ''})
+            ne correspondent à aucun lot réceptionné (stock initial saisi à la main) : leur DLC est inconnue.
+          </li>
+        )}
+      </ul>
+      <p class="lots-assumption">
+        <strong>Hypothèse, pas un fait :</strong> le système ne trace pas quel lot part en premier. Le calcul suppose
+        « premier reçu, premier sorti » (FIFO) : le stock actuel est attribué aux lots les plus récents, les commandes déjà
+        réservées partent d'abord, puis le reste s'écoule au rythme de vente moyen des 10 dernières semaines.
+      </p>
+    </>
+  )}
+</div>
+
+<style>
+/* Panneau autonome : les styles .panel de /admin sont limités à cette page. */
+.panel {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: 0 1px 3px oklch(0.148 0.020 45.9 / 0.04);
+  margin-bottom: var(--space-5);
+}
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
+}
+.panel-title { font-size: var(--text-sm); font-weight: 600; color: var(--color-ink); }
+.panel-link { font-size: var(--text-xs); font-weight: 500; color: var(--color-primary-deep); text-decoration: none; white-space: nowrap; }
+.panel-link:hover { text-decoration: underline; }
+.panel-empty { padding: var(--space-5); font-size: var(--text-sm); color: var(--color-muted); text-align: center; }
+.help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--color-surface-2);
+  color: var(--color-muted);
+  font-size: 0.625rem;
+  font-weight: 700;
+  cursor: help;
+  vertical-align: middle;
+}
+.lots > .lots-wrap, .lots > .lots-notes, .lots > .lots-assumption { margin-left: var(--space-5); margin-right: var(--space-5); }
+.lots > .lots-notes { padding-left: var(--space-5); }
+.lots > .lots-assumption { margin-bottom: var(--space-4); }
+.lots > .lots-wrap { margin-top: var(--space-2); }
+.lots-wrap { overflow-x: auto; }
+.lots-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.lots-table th {
+  text-align: left;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+.lots-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+}
+.lots-table .th-r { text-align: right; }
+.lots-name { display: block; font-weight: 500; color: var(--color-ink); }
+.lots-sub { display: block; font-size: var(--text-xs); color: var(--color-muted); }
+.lots-date { white-space: nowrap; font-family: var(--font-mono); }
+.lots-num { font-family: var(--font-mono); white-space: nowrap; }
+.lots-num--bad { color: oklch(0.46 0.18 25); font-weight: 600; }
+.lots-na { font-family: inherit; font-style: italic; color: var(--color-muted); font-size: var(--text-xs); }
+.lot-chip {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.lot-chip--perime   { background: oklch(0.93 0.07 25);  color: oklch(0.40 0.18 25); }
+.lot-chip--critique { background: oklch(0.94 0.08 55);  color: oklch(0.40 0.15 50); }
+.lot-chip--a_risque { background: oklch(0.96 0.07 90);  color: oklch(0.42 0.11 85); }
+.lots-more { margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--color-muted); }
+.lots-notes {
+  margin: var(--space-3) 0 0;
+  padding-left: var(--space-5);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  display: grid;
+  gap: var(--space-1);
+}
+.lots-assumption {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface-2);
+}
+</style>

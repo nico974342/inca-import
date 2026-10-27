@@ -4,6 +4,7 @@ import { logAdminAction } from '../../../../lib/audit';
 import { todayReunionISO } from '../../../../lib/datetime';
 import { isAdmin } from '../../../../lib/roles';
 import { matchSupplierName } from '../../../../lib/constants';
+import { parseDlc } from '../../../../lib/dlc';
 
 export const POST: APIRoute = async ({ request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -23,18 +24,19 @@ export const POST: APIRoute = async ({ request, cookies }) => {
   const productIds = form.getAll('product_id[]') as string[];
   const quantities = form.getAll('quantity[]') as string[];
   const unitCosts  = form.getAll('unit_cost_ht[]') as string[];
+  const dlcs       = form.getAll('dlc[]') as string[];
 
   if (!supplierName || !receivedAt || productIds.length === 0) {
     return Response.redirect(new URL('/admin/reception/new', request.url), 303);
   }
 
-  const rows: { productId: string; quantity: number; unitCost: number }[] = [];
+  const rows: { productId: string; quantity: number; unitCost: number; dlc: string | null }[] = [];
   for (let i = 0; i < productIds.length; i++) {
     const pid  = productIds[i]?.trim();
     const qty  = parseInt(quantities[i] ?? '0', 10);
     const cost = parseFloat(unitCosts[i] ?? '0');
     if (!pid || qty <= 0 || cost < 0) continue;
-    rows.push({ productId: pid, quantity: qty, unitCost: cost });
+    rows.push({ productId: pid, quantity: qty, unitCost: cost, dlc: parseDlc(dlcs[i]) });
   }
 
   if (rows.length === 0) {
@@ -68,6 +70,7 @@ export const POST: APIRoute = async ({ request, cookies }) => {
       product_id:   r.productId,
       quantity:     r.quantity,
       unit_cost_ht: r.unitCost,
+      dlc:          r.dlc,
     })),
   });
 

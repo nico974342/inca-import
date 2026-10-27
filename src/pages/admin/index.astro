@@ -5,12 +5,17 @@ import { ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, CONTACT_STATUS_LABEL, CONTACT_S
 import { formatDateReunion, reunionMonthStart } from '../../lib/datetime';
 import { isAdmin } from '../../lib/roles';
 import { fetchCharges, resolveBreakEven } from '../../lib/charges';
+import { fetchDlcOverview } from '../../lib/dlc';
+import LotsASurveiller from '../../components/admin/LotsASurveiller.astro';
 
 // Marge, valeur de stock, produits à surveiller : ce tableau de bord est
 // admin uniquement. Un commercial voit une version allégée à la place.
 if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin/tableau-de-bord');
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'] as const;
+
+// Suivi des DLC (lecture seule) : un échec ne doit jamais casser le tableau de bord.
+const dlcOverview = await fetchDlcOverview().catch(err => { console.error('[dashboard] dlc:', err?.message ?? err); return null; });
 
 // ── 6 calendar months (oldest first, current month last), for the chart ──
 // Bornes ancrées sur le calendrier de La Réunion, pas celui du serveur
@@ -651,6 +656,9 @@ const hasPendingOrders   = (commandesEnAttente ?? 0) > 0;
       </div>
 
   </div>
+
+  <!-- ── Lots à surveiller (DLC) ────────── -->
+  <LotsASurveiller overview={dlcOverview} />
 
   <!-- ── Top 5 produits / Produits à surveiller ────────── -->
   <div class="two-col-grid">
