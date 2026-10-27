@@ -3,7 +3,7 @@ import AdminLayout from '../../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../../lib/supabase';
 import {
   marginColorClass,
-  REAPPRO_WEEKS_LOOKBACK, computeVitesseVente, computeJoursAvantRupture, isAtOrBelowSeuil,
+  isAtOrBelowSeuil,
 } from '../../../lib/constants';
 import { fetchAvailability, toAvailability } from '../../../lib/stock';
 import { reunionMonthStart } from '../../../lib/datetime';
@@ -93,21 +93,6 @@ for (const row of (marginRows ?? [])) {
   caCalculable12moByProduct.set(row.product_id, (caCalculable12moByProduct.get(row.product_id) ?? 0) + prix * row.quantity);
 }
 
-// ── Vitesse de vente / jours avant rupture — same order_items pull
-//    pattern as above, but over the shorter réassort lookback window. ──
-const reapproLookbackIso = new Date(Date.now() - REAPPRO_WEEKS_LOOKBACK * 7 * 24 * 60 * 60 * 1000).toISOString();
-const { data: recentSalesRows } = await supabaseAdmin
-  .from('order_items')
-  .select('product_id, quantity, orders!inner(status, created_at)')
-  .in('orders.status', REVENUE_STATUSES)
-  .gte('orders.created_at', reapproLookbackIso);
-
-const recentQtyByProduct = new Map<string, number>();
-for (const row of (recentSalesRows ?? [])) {
-  if (!row.product_id) continue;
-  recentQtyByProduct.set(row.product_id, (recentQtyByProduct.get(row.product_id) ?? 0) + row.quantity);
-}
-
 const CAT_LABEL: Record<string, string> = {
   boissons: 'Boissons',
   snacks: 'Snacks',
@@ -136,7 +121,7 @@ const filteredProducts = (products ?? []).filter(p =>
 // ── Sortable columns ───────────────────────────────────────────────────
 // Marge and the monthly sales totals are computed values, so sorting happens in-memory
 // here rather than pushed down to the DB query.
-const SORT_KEYS = ['nom', 'categorie', 'prix', 'stock', 'marge', 'ventes_mois', 'ventes_prec', 'rupture'] as const;
+const SORT_KEYS = ['nom', 'prix', 'stock', 'marge', 'ventes_mois', 'ventes_prec'] as const;
 type SortKey = (typeof SORT_KEYS)[number];
 
 const sortParam = Astro.url.searchParams.get('sort') ?? '';
@@ -172,11 +157,7 @@ const rows = filteredProducts.map(p => {
   const pump = (p as any).prix_achat_moyen_ht ?? null;
   const prix = p.price_ht ?? null;
   const margePct = pump == null || prix == null || prix === 0 ? null : ((prix - pump) / prix) * 100;
-  const vitesseVente = computeVitesseVente(recentQtyByProduct.get(p.id) ?? 0, (p as any).created_at);
-  // La rupture s'estime sur le disponible : du stock entièrement réservé ne
-  // tiendra personne, il est déjà promis.
   const dispo = availability.get(p.id) ?? toAvailability(p.stock_quantity, 0);
-  const joursAvantRupture = computeJoursAvantRupture(Math.max(0, dispo.available), vitesseVente);
   // État calculé ici : les comparaisons `<=` dans le JSX Astro sont lues
   // comme des ouvertures de balise.
   const stockState: 'reserved' | 'out' | 'low' | 'ok' =
@@ -200,7 +181,6 @@ const rows = filteredProducts.map(p => {
 
   return {
     ...p, margePct, dispo, stockState,
-    vitesseVente, joursAvantRupture,
     cartonsMois, unitesMois: hasUnits ? cartonsMois * upc : null,
     cartonsPrec, unitesPrec: hasUnits ? cartonsPrec * upc : null,
     needsReappro: isAtOrBelowSeuil(p.stock_quantity, (p as any).seuil_reappro ?? null),
@@ -233,14 +213,12 @@ if (currentSort) {
   rows.sort((a, b) => {
     switch (currentSort) {
       case 'nom':       return dir * a.name.localeCompare(b.name, 'fr');
-      case 'categorie': return dir * (CAT_LABEL[a.category] ?? a.category).localeCompare(CAT_LABEL[b.category] ?? b.category, 'fr');
       case 'prix':      return compareNullableNumber(a.price_ht, b.price_ht, dir as 1 | -1);
       case 'stock':     return compareNullableNumber(a.stock_quantity, b.stock_quantity, dir as 1 | -1);
       case 'marge':       return compareNullableNumber(a.margePct, b.margePct, dir as 1 | -1);
       // Sorted on cartons — units are the same figure scaled per product.
       case 'ventes_mois': return compareNullableNumber(a.cartonsMois, b.cartonsMois, dir as 1 | -1);
       case 'ventes_prec': return compareNullableNumber(a.cartonsPrec, b.cartonsPrec, dir as 1 | -1);
-      case 'rupture':   return compareNullableNumber(a.joursAvantRupture, b.joursAvantRupture, dir as 1 | -1);
       default:          return 0;
     }
   });
@@ -399,12 +377,6 @@ const DELETE_ERROR_MSG: Record<string, string> = {
               </a>
             </th>
             <th>
-              <a href={sortUrl('categorie')} class={`th-sort ${currentSort === 'categorie' ? 'th-sort--active' : ''}`}>
-                Catégorie
-                {currentSort === 'categorie' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
-              </a>
-            </th>
-            <th>
               Catalogue
               <span
                 class="help-icon"
@@ -412,7 +384,6 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                 title="Visible = proposé aux clients. Masqué = retiré du catalogue, de la fiche, du panier et du catalogue PDF (le produit reste géré normalement ici)."
               >?</span>
             </th>
-            <th>SKU</th>
             <th>
               <a href={sortUrl('prix')} class={`th-sort ${currentSort === 'prix' ? 'th-sort--active' : ''}`}>
                 Prix HT
@@ -456,18 +427,6 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                 {currentSort === 'stock' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
               </a>
             </th>
-            <th>
-              <a href={sortUrl('rupture')} class={`th-sort ${currentSort === 'rupture' ? 'th-sort--active' : ''}`}>
-                Rupture estimée
-                {currentSort === 'rupture' && <span class="sort-arrow">{currentDir === 'asc' ? '▲' : '▼'}</span>}
-              </a>
-              <span
-                class="help-icon"
-                tabindex="0"
-                title="Estimation basée sur la vitesse de vente moyenne des 10 dernières semaines (commandes confirmées ou livrées). « — » = pas de vente récente, pas d'estimation possible."
-              >?</span>
-            </th>
-            {canManage && <th>Pos.</th>}
             {canManage && <th></th>}
           </tr>
         </thead>
@@ -495,11 +454,6 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                     DLC · {dlcBadges.get(p.id)!.label}
                   </span>
                 )}
-              </td>
-              <td>
-                <span class={`badge badge--${p.category}`}>
-                  {CAT_LABEL[p.category] ?? p.category}
-                </span>
               </td>
               <td class="vis-cell">
                 {(() => {
@@ -533,7 +487,6 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                   );
                 })()}
               </td>
-              <td class="td-mono">{p.sku ?? '—'}</td>
               <td class="td-mono">
                 {formatPrice(p.price_ht)}
                 {(formatUnitPrice(p.price_ht, (p as any).units_per_carton ?? null) || formatConditioning((p as any).units_per_carton ?? null)) && (
@@ -602,19 +555,6 @@ const DELETE_ERROR_MSG: Record<string, string> = {
                   </p>
                 )}
               </td>
-              <td>
-                {p.joursAvantRupture != null ? (
-                  <span class={`rupture-chip ${p.joursAvantRupture <= 7 ? 'rupture-chip--soon' : p.joursAvantRupture <= 14 ? 'rupture-chip--warn' : ''}`}>
-                    {Math.round(p.joursAvantRupture)} j
-                  </span>
-                ) : (
-                  <span class="td-muted">—</span>
-                )}
-                {p.vitesseVente > 0 && (
-                  <p class="td-sub">{p.vitesseVente.toFixed(1)} cartons/sem.</p>
-                )}
-              </td>
-              {canManage && <td class="td-muted">{p.position}</td>}
               {canManage && (
                 <td class="td-actions">
                   <div class="actions-inner">
@@ -1274,18 +1214,6 @@ const DELETE_ERROR_MSG: Record<string, string> = {
   color: oklch(0.38 0.15 55);
   border: 1px solid oklch(0.85 0.09 60);
 }
-
-.rupture-chip {
-  display: inline-flex;
-  align-items: center;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  font-weight: 600;
-  color: var(--color-ink);
-  white-space: nowrap;
-}
-.rupture-chip--warn { color: oklch(0.42 0.14 60); }
-.rupture-chip--soon { color: oklch(0.46 0.18 25); }
 
 .action-link {
   font-size: var(--text-sm);
