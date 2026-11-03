@@ -19,7 +19,7 @@ const STATUS_MESSAGE: Record<string, string> = {
   en_preparation:
     "Votre commande est en cours de préparation dans notre entrepôt. Nous vous tiendrons informé dès l'expédition.",
   expediee:
-    "C'est parti ! Votre commande a été expédiée et sera livrée à votre point de vente dans les 48h.",
+    "C'est parti ! Votre commande a été expédiée et sera livrée à votre point de vente selon le délai convenu avec notre équipe (habituellement 48h dans l'Ouest de La Réunion).",
   livree:
     "Votre commande a bien été livrée. Merci de votre confiance. N'hésitez pas à nous contacter pour votre prochain réassort.",
   annulee:
@@ -313,7 +313,7 @@ export async function sendClientActivationEmail(params: {
             <p style="margin:0 0 16px;font-size:15px;color:#57534E;line-height:1.75;">
               Votre compte client Inca Import vient d'être activé par notre équipe. Vous pouvez désormais consulter nos tarifs professionnels et passer commande directement en ligne.
             </p>
-            <p style="margin:0;font-size:15px;color:#57534E;line-height:1.75;">Livraison sous 48h partout à La Réunion.</p>
+            <p style="margin:0;font-size:15px;color:#57534E;line-height:1.75;">Livraison sous 48h dans notre zone de livraison actuelle&nbsp;: l'Ouest de La Réunion (Saint-Paul, Saint-Gilles, Le Port, La Possession, Saint-Leu).<br>Autres communes&nbsp;: contactez-nous, nous étudions chaque demande.</p>
           </td>
         </tr>
         <tr>

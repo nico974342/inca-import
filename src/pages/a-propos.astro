@@ -8,7 +8,7 @@ import { createAuthClient } from '../lib/supabase';
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
 ---
-<Base title="À propos — Inca Import" description="L'histoire d'Inca Import, grossiste familial réunionnais basé à La Possession.">
+<Base title="À propos — Inca Import" description="L'histoire d'Inca Import, grossiste B2B familial réunionnais basé à La Possession. Livraison sous 48h dans l'Ouest de La Réunion.">
   <Nav user={user} />
   <main>
     <section class="about-hero">
@@ -53,8 +53,10 @@ const { data: { user } } = await supabase.auth.getUser();
           <h2 class="about-story-title">Notre entrepôt à La Possession</h2>
           <p>
             Toute notre logistique part de notre entrepôt situé à La Possession. C'est de là que
-            partent chaque jour les commandes vers les stations-service et supérettes de toute
-            l'île, avec un objectif constant&nbsp;: un réassort sans surprise, livré en 48h.
+            partent chaque jour les commandes vers les stations-service et supérettes de l'Ouest de
+            La Réunion (Saint-Paul, Saint-Gilles, Le Port, La Possession, Saint-Leu), avec un objectif constant&nbsp;: un réassort sans surprise,
+            livré en 48h. Notre zone de livraison est en cours d'extension&nbsp;: pour les autres
+            communes, contactez-nous, nous étudions chaque demande.
           </p>
           <p>
             Un stock permanent de plus de 120 références nous permet de répondre rapidement à

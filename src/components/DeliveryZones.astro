@@ -1,14 +1,30 @@
 ---
-const communes = [
+import { COMPANY } from '../lib/constants';
+
+// Zone de livraison actuelle (Ouest, 48h) : pastilles pleines. Les autres
+// communes restent affichées — un prospect de Saint-Pierre doit voir qu'il
+// peut demander — en pastilles creuses, « sur demande ».
+const served = [
+  { name: 'La Possession', x: 143,    y: 76     },
+  { name: 'Le Port',       x: 104.66, y: 90.48  },
+  { name: 'Saint-Paul',    x: 92.44,  y: 135.15 },
+  { name: 'Saint-Gilles',  x: 80,     y: 170    },
+  { name: 'Saint-Leu',     x: 103.68, y: 234.25 },
+];
+const onRequest = [
   { name: 'Saint-Denis',  x: 194.79, y: 54.39  },
   { name: 'Sainte-Marie', x: 253.35, y: 65.02  },
   { name: 'Saint-André',  x: 311.15, y: 106.79 },
   { name: 'Saint-Benoît', x: 347.98, y: 150.16 },
   { name: 'Saint-Pierre', x: 212.08, y: 338.85 },
-  { name: 'Saint-Leu',    x: 103.68, y: 234.25 },
-  { name: 'Le Port',      x: 104.66, y: 90.48  },
-  { name: 'Saint-Paul',   x: 92.44,  y: 135.15 },
 ];
+const communes = [
+  ...served.map(c => ({ ...c, zone: 'ouest' as const })),
+  ...onRequest.map(c => ({ ...c, zone: 'demande' as const })),
+];
+
+// Masse de l'Ouest, découpée sur le contour de l'île.
+const westZonePath = 'M0,40 L185,40 L172,120 L160,262 L0,262 Z';
 
 const islandPath =
   'M61.28,153.33 L65.62,162.51 L64.15,178 L83.01,197.2 L82.39,199.53 L92.74,210.59 ' +
@@ -27,17 +43,20 @@ const islandPath =
   'L103.51,87.84 L99.31,95.41 L100.69,90.94 L98.68,90.38 L96.39,100.49 L99.43,114.27 ' +
   'L96.39,128.68 L83.81,139.43 L72.12,140.25 L61.28,153.33 Z';
 
-const sub = 'Livraison 48h';
-function tooltipWidth(name) {
-  return Math.max(name.length, sub.length) * 6.6 + 28;
+const subFor = (zone: string) => zone === 'ouest' ? 'Livraison 48h' : 'Sur demande · contactez-nous';
+function tooltipWidth(c: { name: string; zone: string }) {
+  return Math.max(c.name.length, subFor(c.zone).length) * 6.6 + 28;
 }
 ---
 
 <section class="coverage" aria-labelledby="coverage-heading">
   <div class="container">
     <div class="coverage-header">
-      <h2 class="coverage-heading" id="coverage-heading">Nos zones de livraison</h2>
-      <p class="coverage-sub">Du littoral aux hauts, votre commande arrive en 48h où que vous soyez sur l'île.</p>
+      <h2 class="coverage-heading" id="coverage-heading">Notre zone de livraison actuelle</h2>
+      <p class="coverage-sub">
+        Livraison sous 48h dans l'Ouest de La Réunion&nbsp;: Saint-Paul, Saint-Gilles, Le Port,
+        La Possession et Saint-Leu. Notre zone est en cours d'extension.
+      </p>
     </div>
 
     <div class="coverage-map-wrap">
@@ -48,7 +67,10 @@ function tooltipWidth(name) {
         aria-labelledby="coverage-map-title"
         style="display:block; width:100%; height:auto; overflow:visible;"
       >
-        <title id="coverage-map-title">Carte de La Réunion — communes livrées par Inca Import</title>
+        <title id="coverage-map-title">Carte de La Réunion — zone de livraison actuelle d'Inca Import (Ouest, 48h) et communes sur demande</title>
+        <defs>
+          <clipPath id="island-clip"><path d={islandPath} /></clipPath>
+        </defs>
 
         <rect
           x="0" y="0" width="480" height="420" rx="24"
@@ -60,26 +82,32 @@ function tooltipWidth(name) {
           style="fill: white; stroke: oklch(0.568 0.149 45.9); stroke-width: 2; stroke-linejoin: round; filter: drop-shadow(0 10px 18px oklch(0.30 0.03 230 / 0.18));"
         />
 
+        <g clip-path="url(#island-clip)">
+          <path d={westZonePath} style="fill: oklch(0.568 0.149 45.9 / 0.16);" />
+        </g>
+
         {communes.map((c, i) => (
           <g
-            class="map-pin"
+            class={`map-pin map-pin--${c.zone}`}
             tabindex="0"
             role="button"
-            aria-label={`${c.name} — Livraison 48h`}
+            aria-label={c.zone === 'ouest' ? `${c.name} — Livraison 48h` : `${c.name} — Sur demande, contactez-nous`}
             transform={`translate(${c.x} ${c.y})`}
             style="cursor: pointer; outline: none;"
           >
-            <circle
+            {c.zone === 'ouest' && <circle
               class="pin-pulse"
               r="7"
               style={`fill: none; stroke: oklch(0.568 0.149 45.9); stroke-width: 2; transform-box: fill-box; transform-origin: center; animation-delay: ${i * 0.28}s;`}
-            />
+            />}
             <circle
               class="pin-dot"
               r="6.5"
-              style="fill: oklch(0.568 0.149 45.9); stroke: white; stroke-width: 2; transform-box: fill-box; transform-origin: center;"
+              style={c.zone === 'ouest'
+                ? 'fill: oklch(0.568 0.149 45.9); stroke: white; stroke-width: 2; transform-box: fill-box; transform-origin: center;'
+                : 'fill: white; stroke: oklch(0.568 0.149 45.9); stroke-width: 2; stroke-dasharray: 3 2.4; transform-box: fill-box; transform-origin: center;'}
             />
-            <circle class="pin-core" r="2.25" style="fill: white;" />
+            {c.zone === 'ouest' && <circle class="pin-core" r="2.25" style="fill: white;" />}
 
             <g
               class="pin-tooltip"
@@ -87,9 +115,9 @@ function tooltipWidth(name) {
               style="transform-box: fill-box; transform-origin: center;"
             >
               <rect
-                x={-(tooltipWidth(c.name) / 2)}
+                x={-(tooltipWidth(c) / 2)}
                 y="0"
-                width={tooltipWidth(c.name)}
+                width={tooltipWidth(c)}
                 height="42"
                 rx="9"
                 style="fill: white; stroke: oklch(0.90 0.01 220); stroke-width: 1; filter: drop-shadow(0 6px 14px oklch(0.30 0.03 230 / 0.20));"
@@ -100,8 +128,8 @@ function tooltipWidth(name) {
               >{c.name}</text>
               <text
                 x="0" y="32"
-                style="fill: oklch(0.568 0.149 45.9); font-family: var(--font-body); font-size: 11px; font-weight: 600; text-anchor: middle;"
-              >{sub}</text>
+                style={`fill: ${c.zone === 'ouest' ? 'oklch(0.568 0.149 45.9)' : 'var(--color-muted)'}; font-family: var(--font-body); font-size: 11px; font-weight: 600; text-anchor: middle;`}
+              >{subFor(c.zone)}</text>
             </g>
           </g>
         ))}
@@ -109,12 +137,25 @@ function tooltipWidth(name) {
     </div>
 
     <div class="coverage-legend">
-      <span class="legend-dot" style="background: oklch(0.568 0.149 45.9);"></span>
-      <span class="legend-label">Zone de livraison Inca Import</span>
+      <span class="legend-item">
+        <span class="legend-dot" style="background: oklch(0.568 0.149 45.9);"></span>
+        <span class="legend-label">Zone de livraison actuelle — livraison sous 48h</span>
+      </span>
+      <span class="legend-item">
+        <span class="legend-dot legend-dot--open"></span>
+        <span class="legend-label">Autres communes — sur demande</span>
+      </span>
     </div>
 
+    <p class="coverage-note">
+      <strong>Autres communes&nbsp;: contactez-nous, nous étudions chaque demande.</strong><br>
+      <a href={`tel:${COMPANY.phoneHref}`}>{COMPANY.phoneDisplay}</a> ·
+      <a href={`mailto:${COMPANY.contactEmail}`}>{COMPANY.contactEmail}</a>
+    </p>
+
     <ul class="sr-only">
-      {communes.map(c => <li>{c.name}</li>)}
+      {served.map(c => <li>{c.name} — zone de livraison actuelle, livraison sous 48h</li>)}
+      {onRequest.map(c => <li>{c.name} — sur demande, contactez-nous</li>)}
     </ul>
   </div>
 </section>
@@ -203,10 +244,28 @@ function tooltipWidth(name) {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-2);
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-6);
   margin-top: clamp(var(--space-6), 3vw, var(--space-8));
 }
 
+.legend-item { display: inline-flex; align-items: center; gap: var(--space-2); }
+.legend-dot--open {
+  background: white;
+  border: 2px dashed oklch(0.568 0.149 45.9);
+  box-sizing: border-box;
+}
+.coverage-note {
+  margin: var(--space-4) auto 0;
+  max-width: 560px;
+  text-align: center;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--color-muted);
+}
+.coverage-note strong { color: var(--color-ink); }
+.coverage-note a { color: var(--color-primary-deep); }
 .legend-dot {
   width: 10px;
   height: 10px;
