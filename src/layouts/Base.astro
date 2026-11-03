@@ -2,6 +2,7 @@
 import '../styles/global.css';
 import CookieBanner from '../components/CookieBanner.astro';
 import WhatsAppButton from '../components/WhatsAppButton.astro';
+import { SITE_DESCRIPTION } from '../lib/jsonld';
 
 interface Props {
   title?: string;
@@ -10,7 +11,7 @@ interface Props {
 
 const {
   title = 'Inca Import — Grossiste boissons, snacks & confiseries à La Réunion',
-  description = "Grossiste B2B à La Réunion pour stations-service et supérettes : boissons, snacks, confiseries. Livraison sous 48h dans l'Ouest (Saint-Paul, Saint-Gilles, Le Port, La Possession, Saint-Leu).",
+  description = SITE_DESCRIPTION,
 } = Astro.props;
 ---
 <!doctype html>

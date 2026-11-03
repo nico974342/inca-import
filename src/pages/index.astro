@@ -8,6 +8,7 @@ import WhyInca from '../components/WhyInca.astro';
 import FaqCta from '../components/FaqCta.astro';
 import Footer from '../components/Footer.astro';
 import { createAuthClient, supabaseAdmin } from '../lib/supabase';
+import { organizationJsonLd, jsonLdString, SITE_DESCRIPTION } from '../lib/jsonld';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -24,6 +25,7 @@ const categoryCounts = {
 };
 ---
 <Base>
+  <script slot="head" type="application/ld+json" set:html={jsonLdString(organizationJsonLd(SITE_DESCRIPTION))} />
   <Nav user={user} />
   <main>
     <Hero totalRefs={totalRefs} />

@@ -4,11 +4,13 @@ import Nav from '../components/Nav.astro';
 import DeliveryZones from '../components/DeliveryZones.astro';
 import Footer from '../components/Footer.astro';
 import { createAuthClient } from '../lib/supabase';
+import { organizationJsonLd, jsonLdString, SITE_DESCRIPTION } from '../lib/jsonld';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
 ---
 <Base title="À propos — Inca Import" description="L'histoire d'Inca Import, grossiste B2B familial réunionnais basé à La Possession. Livraison sous 48h dans l'Ouest de La Réunion.">
+  <script slot="head" type="application/ld+json" set:html={jsonLdString(organizationJsonLd(SITE_DESCRIPTION))} />
   <Nav user={user} />
   <main>
     <section class="about-hero">

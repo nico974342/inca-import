@@ -6,6 +6,7 @@ import { supabaseAdmin, createAuthClient } from '../../lib/supabase';
 import { fetchClientPriceOverrides, resolveClientPrice } from '../../lib/clients';
 import { isClientRole } from '../../lib/roles';
 import { fetchGrantedForUser, isProductVisibleTo } from '../../lib/catalogue';
+import { productJsonLd, jsonLdString } from '../../lib/jsonld';
 
 const { slug } = Astro.params;
 
@@ -71,6 +72,13 @@ const CAT_BG: Record<string, string> = {
   divers:      'oklch(0.74 0.10 275)',
 };
 
+// JSON-LD public : champs descriptifs seulement, jamais de prix ni de stock
+// (visibles uniquement une fois connecté).
+const productLd = productJsonLd({
+  name: product.name, slug: product.slug, description: product.description,
+  sku: product.sku, categoryLabel: CAT_LABEL[product.category] ?? null, imageUrl: product.image_url,
+});
+
 const fmtHT = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
 
 const unitPriceHT = (resolvedPrice != null && product.units_per_carton)
@@ -81,6 +89,7 @@ const unitPriceHT = (resolvedPrice != null && product.units_per_carton)
   title={`${product.name} — Inca Import`}
   description={product.description ?? `${product.name} disponible chez Inca Import, grossiste B2B à La Réunion.`}
 >
+  <script slot="head" type="application/ld+json" set:html={jsonLdString(productLd)} />
   <Nav user={user} />
   <main>
 

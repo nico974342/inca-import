@@ -23,8 +23,9 @@ const communes = [
   ...onRequest.map(c => ({ ...c, zone: 'demande' as const })),
 ];
 
-// Masse de l'Ouest, découpée sur le contour de l'île.
-const westZonePath = 'M0,40 L185,40 L172,120 L160,262 L0,262 Z';
+// Teinte de l'Ouest : dégradé radial centré sur la zone, qui s'estompe vers
+// l'intérieur de l'île au lieu de s'arrêter sur un bord net.
+const westCenter = { x: 95, y: 150, r: 165 };
 
 const islandPath =
   'M61.28,153.33 L65.62,162.51 L64.15,178 L83.01,197.2 L82.39,199.53 L92.74,210.59 ' +
@@ -70,6 +71,11 @@ function tooltipWidth(c: { name: string; zone: string }) {
         <title id="coverage-map-title">Carte de La Réunion — zone de livraison actuelle d'Inca Import (Ouest, 48h) et communes sur demande</title>
         <defs>
           <clipPath id="island-clip"><path d={islandPath} /></clipPath>
+          <radialGradient id="west-fade" gradientUnits="userSpaceOnUse" cx={westCenter.x} cy={westCenter.y} r={westCenter.r}>
+            <stop offset="0" stop-color="oklch(0.568 0.149 45.9)" stop-opacity="0.20" />
+            <stop offset="0.6" stop-color="oklch(0.568 0.149 45.9)" stop-opacity="0.13" />
+            <stop offset="1" stop-color="oklch(0.568 0.149 45.9)" stop-opacity="0" />
+          </radialGradient>
         </defs>
 
         <rect
@@ -83,7 +89,7 @@ function tooltipWidth(c: { name: string; zone: string }) {
         />
 
         <g clip-path="url(#island-clip)">
-          <path d={westZonePath} style="fill: oklch(0.568 0.149 45.9 / 0.16);" />
+          <rect x="0" y="0" width="480" height="420" fill="url(#west-fade)" />
         </g>
 
         {communes.map((c, i) => (
