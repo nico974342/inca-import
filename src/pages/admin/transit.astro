@@ -10,6 +10,7 @@ import {
   type ShipmentStatus, type ShipmentCostItem, type ShipmentCostLine,
 } from '../../lib/constants';
 import { formatDateReunion, todayReunionISO } from '../../lib/datetime';
+import { parseDlc } from '../../lib/dlc';
 import { isAdmin } from '../../lib/roles';
 
 if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
@@ -53,14 +54,15 @@ if (Astro.request.method === 'POST') {
     const productIds = data.getAll('product_id[]') as string[];
     const quantities = data.getAll('quantity[]') as string[];
     const costs      = data.getAll('unit_cost_ht[]') as string[];
+    const dlcs       = data.getAll('dlc[]') as string[];
 
-    const items: { shipment_id: string; product_id: string; quantity: number; unit_cost_ht: number | null }[] = [];
+    const items: { shipment_id: string; product_id: string; quantity: number; unit_cost_ht: number | null; dlc: string | null }[] = [];
     for (let i = 0; i < productIds.length; i++) {
       const pid = productIds[i]?.trim();
       const qty = parseInt(quantities[i] ?? '0', 10);
       const cost = costs[i]?.trim() === '' ? null : parseFloat(costs[i] ?? '0');
       if (!pid || !Number.isFinite(qty) || qty <= 0) continue;
-      items.push({ shipment_id: created.id, product_id: pid, quantity: qty, unit_cost_ht: cost != null && Number.isFinite(cost) ? cost : null });
+      items.push({ shipment_id: created.id, product_id: pid, quantity: qty, unit_cost_ht: cost != null && Number.isFinite(cost) ? cost : null, dlc: parseDlc(dlcs[i]) });
     }
 
     if (items.length > 0) {
@@ -113,7 +115,7 @@ const { data: shipmentsRaw, error: loadErr } = await supabaseAdmin
   .from('shipments')
   .select(`
     id, supplier_name, reference, departure_date, eta, status, notes, created_at,
-    shipment_items(id, quantity, unit_cost_ht, products(id, name, sku, unit, category, units_per_carton)),
+    shipment_items(id, quantity, unit_cost_ht, dlc, products(id, name, sku, unit, category, units_per_carton)),
     shipment_costs(id, product_id, amount_ht, is_estimated)
   `)
   .in('status', SHIPMENT_ACTIVE_STATUSES as readonly string[])
@@ -123,7 +125,7 @@ const tableMissing = loadErr?.code === 'PGRST205' || loadErr?.code === '42P01';
 
 const { data: products } = await supabaseAdmin
   .from('products')
-  .select('id, name, sku, prix_achat_moyen_ht, units_per_carton')
+  .select('id, name, sku, prix_achat_moyen_ht, units_per_carton, duree_conservation_mois')
   .order('name');
 
 const { data: supplierRows } = await supabaseAdmin.from('suppliers').select('name').order('name');
@@ -274,6 +276,7 @@ function fmtEUR2(n: number): string {
                   <th>Produit</th>
                   <th class="num">Quantité</th>
                   <th class="num">Prix fournisseur / carton HT</th>
+                  <th class="num">DLC <span class="th-sub">(prévue)</span></th>
                   <th class="num">Total</th>
                   <th></th>
                 </tr>
@@ -282,6 +285,10 @@ function fmtEUR2(n: number): string {
             </table>
           </div>
           <p class="items-hint" id="itemsHint">Ajoutez au moins un produit.</p>
+          <p class="items-hint">
+            <strong>DLC</strong> : prévisionnelle, pré-remplie depuis l'ETA et la durée de conservation du produit.
+            Elle sera reprise à la réception (modifiable) et ne déclenche aucune alerte avant l'arrivée.
+          </p>
 
           <div class="form-actions">
             <button type="submit" class="btn btn-primary">Enregistrer l'expédition</button>
@@ -343,7 +350,10 @@ function fmtEUR2(n: number): string {
                     <tbody>
                       {s.items.map((it: any) => (
                         <tr>
-                          <td class="it-name">{it.products?.name ?? 'Produit supprimé'}</td>
+                          <td class="it-name">
+                            {it.products?.name ?? 'Produit supprimé'}
+                            {it.dlc && <span class="it-dlc">DLC {formatDateReunion(it.dlc)}</span>}
+                          </td>
                           <td class="it-qty">
                             <span class="it-cartons">{it.cartons.toLocaleString('fr-FR')} cartons</span>
                             {it.unitsPerCarton != null && (
@@ -447,6 +457,27 @@ function fmtEUR2(n: number): string {
     }
   }
 
+  // DLC prévisionnelle = ETA + durée de conservation type du produit (la
+  // marchandise n'existera qu'à l'arrivée). Pré-remplissage seulement : une
+  // valeur saisie à la main (data-touched) n'est plus écrasée ; sans ETA ou
+  // sans durée connue, le champ reste vide.
+  function addMonthsISO(iso, months) {
+    const [y, m, d] = iso.split('-').map(Number);
+    const total = y * 12 + (m - 1) + months;
+    const ty = Math.floor(total / 12), tm = total % 12;
+    const last = new Date(Date.UTC(ty, tm + 1, 0)).getUTCDate();
+    return ty + '-' + String(tm + 1).padStart(2, '0') + '-' + String(Math.min(d, last)).padStart(2, '0');
+  }
+  function suggestDlc(tr) {
+    const input = tr.querySelector('[name="dlc[]"]');
+    if (!input || input.dataset.touched === '1') return;
+    const prod = PRODUCTS.find(x => x.id === tr.querySelector('[data-product-select]')?.value);
+    const eta = document.getElementById('sh-eta')?.value;
+    input.value = prod && prod.duree_conservation_mois && eta
+      ? addMonthsISO(eta, Number(prod.duree_conservation_mois))
+      : '';
+  }
+
   function addRow() {
     if (!body) return;
     const tr = document.createElement('tr');
@@ -460,10 +491,13 @@ function fmtEUR2(n: number): string {
         <input type="number" name="unit_cost_ht[]" min="0" step="0.01" placeholder="—" />
         <span class="cost-hint" data-cost-hint></span>
       </td>
+      <td class="num"><input type="date" name="dlc[]" /></td>
       <td class="num" data-total>—</td>
       <td class="num"><button type="button" class="remove-btn" title="Retirer">×</button></td>
     `;
     body.appendChild(tr);
+    const dlcIn = tr.querySelector('[name="dlc[]"]');
+    dlcIn.addEventListener('input', () => { dlcIn.dataset.touched = '1'; });
 
     tr.querySelector('[data-product-select]').addEventListener('change', () => {
       const p = PRODUCTS.find(x => x.id === tr.querySelector('[data-product-select]').value);
@@ -471,6 +505,7 @@ function fmtEUR2(n: number): string {
       // Pre-fill with the known average cost as a starting point; the real
       // invoice figure usually differs and stays editable.
       if (p && p.prix_achat_moyen_ht != null && !costIn.value) costIn.value = Number(p.prix_achat_moyen_ht).toFixed(2);
+      suggestDlc(tr);
       refreshSelects();
       updateRowTotal(tr);
     });
@@ -486,6 +521,7 @@ function fmtEUR2(n: number): string {
   }
 
   document.getElementById('addRowBtn')?.addEventListener('click', addRow);
+  document.getElementById('sh-eta')?.addEventListener('change', () => document.querySelectorAll('#itemsBody tr').forEach(suggestDlc));
   toggleHint();
 </script>
 
@@ -568,7 +604,9 @@ function fmtEUR2(n: number): string {
 }
 .items-table td { padding: var(--space-2); border-bottom: 1px solid var(--color-border); }
 .items-table .num { text-align: right; }
+.th-sub { font-weight: 400; text-transform: none; letter-spacing: 0; }
 .items-table input { width: 110px; text-align: right; font-family: var(--font-mono); }
+.items-table input[type="date"] { width: 9.5rem; }
 .items-table select { width: 100%; min-width: 200px; }
 .cost-hint { display: block; margin-top: 2px; font-size: var(--text-xs); color: var(--color-muted); white-space: nowrap; }
 .remove-btn {
@@ -622,6 +660,7 @@ function fmtEUR2(n: number): string {
   padding-left: var(--space-4) !important;
 }
 .it-cartons     { font-family: var(--font-mono); color: var(--color-ink); }
+.it-dlc         { display: block; font-size: var(--text-xs); color: var(--color-muted); font-family: var(--font-mono); }
 .it-pack        { font-size: var(--text-xs); color: var(--color-muted); }
 .it-price-unit  { font-size: var(--text-xs); color: var(--color-muted); font-family: var(--font-mono); }
 .it-price-carton { font-family: var(--font-mono); font-weight: 600; color: var(--color-ink); }

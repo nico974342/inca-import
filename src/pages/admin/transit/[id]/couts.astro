@@ -4,6 +4,7 @@ import { supabaseAdmin } from '../../../../lib/supabase';
 import { sanitizeText } from '../../../../lib/sanitize';
 import { logAdminAction } from '../../../../lib/audit';
 import { isAdmin } from '../../../../lib/roles';
+import { formatDateReunion } from '../../../../lib/datetime';
 import {
   IMPORT_COST_LABELS, computeLandedCosts,
   type ShipmentCostLine, type ShipmentCostItem,
@@ -61,7 +62,7 @@ const { data: shipment, error: loadErr } = await supabaseAdmin
   .from('shipments')
   .select(`
     id, supplier_name, reference,
-    shipment_items(product_id, quantity, unit_cost_ht, products(name, sku, units_per_carton)),
+    shipment_items(product_id, quantity, unit_cost_ht, dlc, products(name, sku, units_per_carton)),
     shipment_costs(id, product_id, label, amount_ht, is_estimated, products(name))
   `)
   .eq('id', id)
@@ -193,7 +194,10 @@ const productsForSelect = rawItems.map(it => ({ id: it.product_id, name: it.prod
                   const upc = p?.products?.units_per_carton ?? null;
                   return (
                     <tr>
-                      <td>{p?.products?.name ?? 'Produit supprimé'}</td>
+                      <td>
+                        {p?.products?.name ?? 'Produit supprimé'}
+                        {p?.dlc && <span class="dlc-note">DLC {formatDateReunion(p.dlc)}</span>}
+                      </td>
                       <td class="num">
                         <span class="qty-cartons">{it.quantity.toLocaleString('fr-FR')} cartons</span>
                         {upc != null && (
@@ -418,6 +422,7 @@ const productsForSelect = rawItems.map(it => ({ id: it.product_id, name: it.prod
   color: var(--color-ink);
   white-space: nowrap;
 }
+.dlc-note { display: block; font-size: var(--text-xs); color: var(--color-muted); font-family: var(--font-mono); }
 .qty-units, .price-unit {
   display: block;
   font-family: var(--font-mono);

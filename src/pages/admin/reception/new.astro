@@ -23,7 +23,7 @@ const preselectProductId = Astro.url.searchParams.get('product') ?? null;
 //    validation de ce formulaire appelle reception_create, qui applique le
 //    stock et recalcule le PUMP. Le transit lui-même n'a rien touché. ──
 const shipmentId = Astro.url.searchParams.get('shipment');
-let prefill: { supplierName: string; notes: string | null; items: { product_id: string; quantity: number; unit_cost_ht: number | null }[] } | null = null;
+let prefill: { supplierName: string; notes: string | null; items: { product_id: string; quantity: number; unit_cost_ht: number | null; dlc: string | null }[] } | null = null;
 let prefillEstimated = false;
 
 if (shipmentId) {
@@ -31,7 +31,7 @@ if (shipmentId) {
     .from('shipments')
     .select(`
       id, supplier_name, reference, notes,
-      shipment_items(product_id, quantity, unit_cost_ht),
+      shipment_items(product_id, quantity, unit_cost_ht, dlc),
       shipment_costs(product_id, amount_ht, is_estimated)
     `)
     .eq('id', shipmentId)
@@ -66,6 +66,8 @@ if (shipmentId) {
         product_id: it.product_id,
         quantity: it.quantity,
         unit_cost_ht: landedByProduct.get(it.product_id) ?? (it.unit_cost_ht != null ? Number(it.unit_cost_ht) : null),
+        // DLC prévue à l'expédition : simple pré-remplissage, la DLC lue sur les cartons prime.
+        dlc: it.dlc ?? null,
       })),
     };
   }
@@ -373,6 +375,12 @@ if (PREFILL_ITEMS.length > 0) {
     const costIn = tr.querySelector('[name="unit_cost_ht[]"]');
     if (qtyIn)  qtyIn.value  = it.quantity;
     if (costIn && it.unit_cost_ht != null) costIn.value = it.unit_cost_ht;
+    // DLC saisie sur l'expédition : elle remplace la suggestion « durée type »
+    // et est marquée touchée pour ne pas être recalculée si la date de
+    // réception change. Sans DLC d'expédition, addRow a déjà appliqué la
+    // suggestion habituelle (durée type du produit, ou vide).
+    const dlcIn = tr.querySelector('[name="dlc[]"]');
+    if (dlcIn && it.dlc) { dlcIn.value = it.dlc; dlcIn.dataset.touched = '1'; }
   });
   updateTotal();
 } else {

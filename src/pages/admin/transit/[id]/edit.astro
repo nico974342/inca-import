@@ -5,6 +5,7 @@ import { sanitizeText } from '../../../../lib/sanitize';
 import { logAdminAction } from '../../../../lib/audit';
 import { SHIPMENT_STATUSES, SHIPMENT_STATUS_LABEL, type ShipmentStatus } from '../../../../lib/constants';
 import { isAdmin } from '../../../../lib/roles';
+import { parseDlc } from '../../../../lib/dlc';
 
 if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
@@ -39,15 +40,16 @@ if (Astro.request.method === 'POST' && id) {
   const productIds = data.getAll('product_id[]') as string[];
   const quantities = data.getAll('quantity[]') as string[];
   const costs      = data.getAll('unit_cost_ht[]') as string[];
+  const dlcs       = data.getAll('dlc[]') as string[];
 
-  const items: { shipment_id: string; product_id: string; quantity: number; unit_cost_ht: number | null }[] = [];
+  const items: { shipment_id: string; product_id: string; quantity: number; unit_cost_ht: number | null; dlc: string | null }[] = [];
   for (let i = 0; i < productIds.length; i++) {
     const pid = productIds[i]?.trim();
     const qty = parseInt(quantities[i] ?? '0', 10);
     const raw = costs[i]?.trim();
     const cost = raw === '' || raw == null ? null : parseFloat(raw);
     if (!pid || !Number.isFinite(qty) || qty <= 0) continue;
-    items.push({ shipment_id: id, product_id: pid, quantity: qty, unit_cost_ht: cost != null && Number.isFinite(cost) ? cost : null });
+    items.push({ shipment_id: id, product_id: pid, quantity: qty, unit_cost_ht: cost != null && Number.isFinite(cost) ? cost : null, dlc: parseDlc(dlcs[i]) });
   }
 
   const { error: delErr } = await supabaseAdmin.from('shipment_items').delete().eq('shipment_id', id);
@@ -68,7 +70,7 @@ if (Astro.request.method === 'POST' && id) {
 
 const { data: shipment, error: loadErr } = await supabaseAdmin
   .from('shipments')
-  .select('id, supplier_name, reference, departure_date, eta, status, notes, shipment_items(id, product_id, quantity, unit_cost_ht)')
+  .select('id, supplier_name, reference, departure_date, eta, status, notes, shipment_items(id, product_id, quantity, unit_cost_ht, dlc)')
   .eq('id', id)
   .single();
 
@@ -77,7 +79,7 @@ if (!shipment && !tableMissing) return Astro.redirect('/admin/transit?err=introu
 
 const { data: products } = await supabaseAdmin
   .from('products')
-  .select('id, name, sku, prix_achat_moyen_ht, units_per_carton')
+  .select('id, name, sku, prix_achat_moyen_ht, units_per_carton, duree_conservation_mois')
   .order('name');
 
 const { data: supplierRows } = await supabaseAdmin.from('suppliers').select('name').order('name');
@@ -87,6 +89,7 @@ const existingItems = ((shipment as any)?.shipment_items ?? []).map((it: any) =>
   product_id: it.product_id,
   quantity: it.quantity,
   unit_cost_ht: it.unit_cost_ht != null ? Number(it.unit_cost_ht) : null,
+  dlc: it.dlc ?? null,
 }));
 
 const err = Astro.url.searchParams.get('err');
@@ -156,6 +159,7 @@ const ERR_MSG: Record<string, string> = {
                 <th>Produit</th>
                 <th class="num">Quantité</th>
                 <th class="num">Prix fournisseur / carton HT</th>
+                <th class="num">DLC <span class="th-sub">(prévue)</span></th>
                 <th class="num">Total</th>
                 <th></th>
               </tr>
@@ -164,6 +168,10 @@ const ERR_MSG: Record<string, string> = {
           </table>
         </div>
         <p class="items-hint" id="itemsHint" hidden>Aucune ligne — l'expédition sera enregistrée sans produits.</p>
+        <p class="items-hint">
+          <strong>DLC</strong> : prévisionnelle, reprise à la réception (modifiable) ; aucune alerte avant l'arrivée.
+          Les lignes déjà enregistrées gardent leur valeur, même vide ; seules les nouvelles lignes sont pré-remplies depuis l'ETA.
+        </p>
 
         <div class="form-actions">
           <a href="/admin/transit" class="btn btn-ghost">Annuler</a>
@@ -200,6 +208,24 @@ const ERR_MSG: Record<string, string> = {
       });
     });
   }
+  // DLC prévisionnelle = ETA + durée de conservation type du produit. Une ligne
+  // déjà enregistrée garde sa valeur (même vide) : elle est marquée touchée.
+  function addMonthsISO(iso, months) {
+    const [y, m, d] = iso.split('-').map(Number);
+    const total = y * 12 + (m - 1) + months;
+    const ty = Math.floor(total / 12), tm = total % 12;
+    const last = new Date(Date.UTC(ty, tm + 1, 0)).getUTCDate();
+    return ty + '-' + String(tm + 1).padStart(2, '0') + '-' + String(Math.min(d, last)).padStart(2, '0');
+  }
+  function suggestDlc(tr) {
+    const input = tr.querySelector('[name="dlc[]"]');
+    if (!input || input.dataset.touched === '1') return;
+    const prod = PRODUCTS.find(x => x.id === tr.querySelector('[data-product-select]')?.value);
+    const eta = document.getElementById('eta')?.value;
+    input.value = prod && prod.duree_conservation_mois && eta
+      ? addMonthsISO(eta, Number(prod.duree_conservation_mois))
+      : '';
+  }
   function updateRowTotal(tr) {
     const qty  = parseFloat(tr.querySelector('[name="quantity[]"]')?.value) || 0;
     const cost = parseFloat(tr.querySelector('[name="unit_cost_ht[]"]')?.value) || 0;
@@ -235,12 +261,15 @@ const ERR_MSG: Record<string, string> = {
         <input type="number" name="unit_cost_ht[]" min="0" step="0.01" placeholder="—" value="${item && item.unit_cost_ht != null ? item.unit_cost_ht : ''}" />
         <span class="cost-hint" data-cost-hint></span>
       </td>
+      <td class="num"><input type="date" name="dlc[]" value="${item && item.dlc ? item.dlc : ''}" ${item ? 'data-touched="1"' : ''} /></td>
       <td class="num" data-total>—</td>
       <td class="num"><button type="button" class="remove-btn" title="Retirer">×</button></td>
     `;
     body.appendChild(tr);
+    const dlcIn = tr.querySelector('[name="dlc[]"]');
+    dlcIn.addEventListener('input', () => { dlcIn.dataset.touched = '1'; });
 
-    tr.querySelector('[data-product-select]').addEventListener('change', () => { refreshSelects(); updateRowTotal(tr); });
+    tr.querySelector('[data-product-select]').addEventListener('change', () => { suggestDlc(tr); refreshSelects(); updateRowTotal(tr); });
     tr.querySelectorAll('input').forEach(i => i.addEventListener('input', () => updateRowTotal(tr)));
     tr.querySelector('.remove-btn').addEventListener('click', () => { tr.remove(); refreshSelects(); toggleHint(); });
 
@@ -252,6 +281,7 @@ const ERR_MSG: Record<string, string> = {
   (existingItems ?? []).forEach(it => addRow(it));
   toggleHint();
   document.getElementById('addRowBtn')?.addEventListener('click', () => addRow(null));
+  document.getElementById('eta')?.addEventListener('change', () => document.querySelectorAll('#itemsBody tr').forEach(suggestDlc));
 </script>
 
 <style>
@@ -318,7 +348,9 @@ const ERR_MSG: Record<string, string> = {
 .items-table td { padding: var(--space-2); border-bottom: 1px solid var(--color-border); }
 .items-table .num { text-align: right; }
 .items-table input { width: 110px; text-align: right; font-family: var(--font-mono); }
+.items-table input[type="date"] { width: 9.5rem; }
 .items-table select { width: 100%; min-width: 200px; }
+.th-sub { font-weight: 400; text-transform: none; letter-spacing: 0; }
 .cost-hint { display: block; margin-top: 2px; font-size: var(--text-xs); color: var(--color-muted); white-space: nowrap; }
 .remove-btn {
   padding: 0.2rem 0.5rem;
