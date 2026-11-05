@@ -7,6 +7,7 @@ import { fetchAvailability, sellableQty } from '../lib/stock';
 import { fetchClientPriceOverrides, resolveClientPrice } from '../lib/clients';
 import { isClientRole } from '../lib/roles';
 import { fetchGrantedForUser, whereVisibleTo } from '../lib/catalogue';
+import { estNouveau } from '../lib/nouveau';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -104,7 +105,15 @@ const CAT_BG: Record<string, string> = {
   divers:      'oklch(0.74 0.10 275)',
 };
 
-const initialCat = Astro.url.searchParams.get('cat') ?? 'tous';
+// Badge « Nouveau » : lecture séparée et tolérante. Si les colonnes n'existent pas encore (migration products_nouveau.sql
+// pas appliquée), le catalogue s'affiche normalement, sans badge ni onglet. L'expiration se calcule ici, à chaque requête.
+const { data: nouveauRows, error: nouveauErr } = await supabaseAdmin.from('products').select('id, nouveau_mode, nouveau_debut, nouveau_fin');
+const maintenant = new Date();
+const nouveauIds = new Set<string>(nouveauErr ? [] : (nouveauRows ?? []).filter(r => estNouveau(r, maintenant)).map(r => r.id));
+const nbNouveautes = (products ?? []).filter(p => nouveauIds.has(p.id)).length;
+
+const catDemandee = Astro.url.searchParams.get('cat') ?? 'tous';
+const initialCat = catDemandee === 'nouveautes' && nbNouveautes === 0 ? 'tous' : catDemandee;
 
 // Safe JSON for product metadata (used by cart drawer JS)
 const productsMetaJSON = JSON.stringify(
@@ -187,6 +196,9 @@ const productsMetaJSON = JSON.stringify(
           <div class="filter-tabs" role="group" aria-label="Filtrer par catégorie" data-initial-cat={initialCat}>
             <div class="tab-indicator" aria-hidden="true"></div>
             <button class={`filter-tab${initialCat === 'tous' ? ' is-active' : ''}`} data-cat="tous">Tous</button>
+            {nbNouveautes > 0 && (
+              <button class={`filter-tab${initialCat === 'nouveautes' ? ' is-active' : ''}`} data-cat="nouveautes" data-testid="filtre-nouveautes">Nouveautés</button>
+            )}
             <button class={`filter-tab${initialCat === 'boissons' ? ' is-active' : ''}`} data-cat="boissons">Boissons</button>
             <button class={`filter-tab${initialCat === 'snacks' ? ' is-active' : ''}`} data-cat="snacks">Snacks</button>
             <button class={`filter-tab${initialCat === 'chips' ? ' is-active' : ''}`} data-cat="chips">Chips</button>
@@ -235,6 +247,7 @@ const productsMetaJSON = JSON.stringify(
               <article
                 class={`product-card${dispo(p.id) === 0 ? ' product-card--oos' : ''}`}
                 data-cat={p.category}
+                data-nouveau={nouveauIds.has(p.id) ? '1' : undefined}
                 data-search={`${p.name} ${p.description ?? ''}`.toLowerCase()}
               >
                 <a
@@ -249,6 +262,7 @@ const productsMetaJSON = JSON.stringify(
                   ) : (
                     <span class="img-letter" aria-hidden="true">{p.name[0].toUpperCase()}</span>
                   )}
+                  {nouveauIds.has(p.id) && <span class="new-badge" data-testid="badge-nouveau">Nouveau</span>}
                   {dispo(p.id) === 0 && (
                     <span class="oos-badge" aria-label="Disponible prochainement">Disponible prochainement</span>
                   )}
@@ -480,7 +494,8 @@ const productsMetaJSON = JSON.stringify(
   function applyFilters() {
     let visible = 0;
     cards.forEach(card => {
-      const catMatch    = activeCat === 'tous' || card.dataset.cat === activeCat;
+      const catMatch    = activeCat === 'tous'
+        || (activeCat === 'nouveautes' ? card.dataset.nouveau === '1' : card.dataset.cat === activeCat);
       const searchMatch = (card.dataset.search ?? '').includes(searchQuery);
       const show = catMatch && searchMatch;
       card.hidden = !show;
@@ -1318,6 +1333,22 @@ const productsMetaJSON = JSON.stringify(
   user-select: none;
 }
 
+.new-badge {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-3);
+  z-index: 1;
+  background: var(--color-primary);
+  color: white;
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  box-shadow: 0 1px 4px oklch(0.14 0.02 45 / 0.25);
+}
 .oos-badge {
   position: absolute;
   bottom: var(--space-3);

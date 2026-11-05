@@ -8,6 +8,7 @@ import {
 } from '../../../../lib/constants';
 import { formatDateReunion } from '../../../../lib/datetime';
 import { isAdmin } from '../../../../lib/roles';
+import { estNouveau, decider, finAffichee } from '../../../../lib/nouveau';
 
 if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
@@ -75,6 +76,26 @@ const commandeMultipleCartons = (product as any).commande_multiple_cartons as nu
 const suggestedReorderQty = computeSuggestedReorderQty(vitesseVente, delaiLivraisonJours, product.stock_quantity);
 const showSuggestion = isApproachingOrBelowSeuil(product.stock_quantity, seuilReappro, joursAvantRupture, delaiLivraisonJours);
 
+// Badge « Nouveau » : lecture séparée. Colonnes absentes (migration products_nouveau.sql pas appliquée) → section masquée.
+const { data: nouveauRow, error: nouveauErr } = await supabaseAdmin
+  .from('products')
+  .select('nouveau_mode, nouveau_debut, nouveau_fin, nouveau_eligible, premiere_entree_stock_le')
+  .eq('id', id)
+  .maybeSingle();
+const nouveauDispo = !nouveauErr && !!nouveauRow;
+const nouveau = (nouveauRow ?? {}) as { nouveau_mode?: string; nouveau_debut?: string | null; nouveau_fin?: string | null; nouveau_eligible?: boolean; premiere_entree_stock_le?: string | null };
+const maintenant = new Date();
+const nouveauAffiche = nouveauDispo && estNouveau(nouveau, maintenant);
+const nouveauFinForm = finAffichee(nouveau, maintenant);
+const jourFr = (iso: string | null | undefined) => iso ? new Date(iso).toLocaleDateString('fr-FR', { timeZone: 'Indian/Reunion', day: '2-digit', month: '2-digit', year: 'numeric' }) : null;
+const nouveauEtat =
+  nouveau.nouveau_mode === 'desactive' ? 'Désactivé manuellement : le badge ne se réactivera jamais tout seul.'
+  : nouveauAffiche && nouveau.nouveau_mode === 'auto' ? `Badge automatique (première entrée en stock le ${jourFr(nouveau.premiere_entree_stock_le) ?? jourFr(nouveau.nouveau_debut)}).`
+  : nouveauAffiche ? 'Badge activé manuellement.'
+  : nouveau.nouveau_debut ? 'Badge expiré.'
+  : nouveau.nouveau_eligible === false ? 'Produit historique : jamais « nouveau » automatiquement. Vous pouvez l\'activer à la main.'
+  : 'Le badge s\'activera automatiquement à la première entrée en stock.';
+
 if (Astro.request.method === 'POST') {
   const data = await Astro.request.formData();
   const name        = (data.get('name')        as string)?.trim();
@@ -128,6 +149,22 @@ if (Astro.request.method === 'POST') {
         ? 'Ce slug existe déjà. Choisissez-en un autre.'
         : `Erreur : ${error.message}`;
     } else {
+      // Badge « Nouveau » : seule une action volontaire sur la section « Nouveauté » modifie ces champs.
+      if (nouveauDispo && data.get('nouveau_present') === '1') {
+        const d = decider(nouveau, data.get('nouveau_actif') === 'on', (data.get('nouveau_fin') as string) ?? '', new Date());
+        if (d.change) {
+          const { error: nErr } = await supabaseAdmin.from('products')
+            .update({ nouveau_mode: d.mode, nouveau_debut: d.debut?.toISOString() ?? null, nouveau_fin: d.fin?.toISOString() ?? null })
+            .eq('id', id);
+          if (nErr) console.error('[produit] badge nouveau :', nErr.message);
+          else await logAdminAction({
+            adminEmail: (Astro.locals as any).user?.email ?? 'inconnu',
+            action: d.mode === 'desactive' ? 'produit.nouveau_desactive' : 'produit.nouveau_active',
+            targetType: 'produit', targetId: id!, targetLabel: name,
+            details: { mode: d.mode, debut: d.debut?.toISOString() ?? null, fin: d.fin?.toISOString() ?? null },
+          });
+        }
+      }
       await logAdminAction({
         adminEmail: (Astro.locals as any).user?.email ?? 'inconnu',
         action: 'produit.modification',
@@ -263,6 +300,28 @@ if (Astro.request.method === 'POST') {
             <p class="field-computed-hint">Décochez pour retirer ce produit du catalogue, du panier et du catalogue PDF. Il reste géré normalement en administration.</p>
           </div>
         </div>
+
+        {nouveauDispo && (
+          <fieldset class="field-group nouveau-section" data-testid="section-nouveau">
+            <div class="field">
+              <input type="hidden" name="nouveau_present" value="1" />
+              <label class="field-checkbox">
+                <input type="checkbox" name="nouveau_actif" checked={nouveauAffiche} data-testid="nouveau-actif" />
+                Afficher comme nouveau
+              </label>
+              <p class="field-computed-hint" data-testid="nouveau-etat">{nouveauEtat}</p>
+            </div>
+            <div class="field">
+              <label for="nouveau_debut_aff">Début</label>
+              <input type="text" id="nouveau_debut_aff" value={nouveau.nouveau_debut ? (jourFr(nouveau.nouveau_debut) ?? '') : ''} placeholder="Renseigné à l'activation" readonly />
+            </div>
+            <div class="field">
+              <label for="nouveau_fin">Fin d'affichage (jour inclus)</label>
+              <input type="date" id="nouveau_fin" name="nouveau_fin" value={nouveauFinForm} data-testid="nouveau-fin" />
+              <p class="field-computed-hint">Par défaut 30 jours après l'activation. Décochez la case puis enregistrez pour retirer le badge immédiatement.</p>
+            </div>
+          </fieldset>
+        )}
 
         <div class="field-group">
           <div class="field">
@@ -683,6 +742,7 @@ input:focus, select:focus, textarea:focus {
 }
 
 .field-group--3 { grid-template-columns: 1fr 1fr 1fr; }
+.nouveau-section { border: 0; padding: 0; margin: 0; min-width: 0; }
 .tva-row { grid-template-columns: 1fr 1fr; }
 .tva-manual-hidden { display: none; }
 
