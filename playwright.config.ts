@@ -5,6 +5,8 @@ loadEnv({ path: '.env' });
 
 export default defineConfig({
   testDir: './tests',
+  // Les tests qui ÉCRIVENT sont exclus ici : ils ne tournent que via playwright.ecriture.config.ts (base de test dédiée).
+  testIgnore: ['**/ecriture/**'],
   timeout: 60_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
