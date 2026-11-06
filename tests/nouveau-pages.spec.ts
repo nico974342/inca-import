@@ -17,7 +17,7 @@ test.describe('Catalogue client', () => {
   test('lecture tolérante : une erreur (migration pas appliquée) ne casse pas le catalogue', () => {
     expect(catalogue).toMatch(/nouveauErr \? \[\]/);
     // la requête principale du catalogue ne dépend pas des nouvelles colonnes
-    const principale = catalogue.slice(catalogue.indexOf("const { data: products }"), catalogue.indexOf('.order(\'position\''));
+    const principale = catalogue.slice(catalogue.indexOf("const { data: products }"), catalogue.indexOf(".order('name'"));
     expect(principale).not.toMatch(/nouveau/);
   });
   test('l\'affichage passe par estNouveau (expiration calculée à la lecture, pas de tâche planifiée)', () => {
