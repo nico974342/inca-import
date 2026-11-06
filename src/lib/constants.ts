@@ -1409,3 +1409,10 @@ export function computeLandedCosts(
 
   return { items: outItems, totalSupplierValue, totalGeneralFees, totalSpecificFees, totalImportFees, totalLanded, costsStatus };
 }
+
+// ── Catalogue client ────────────────────────────────────────────────────
+/** Durée par défaut du badge « Nouveau », en jours (activation automatique ou manuelle). */
+export const NOUVEAU_DUREE_JOURS = 30;
+
+/** Ordre métier des catégories dans le catalogue client. Une catégorie inconnue passe après. */
+export const CATALOGUE_ORDRE_CATEGORIES = ['boissons', 'snacks', 'chips', 'confiseries', 'divers'] as const;

@@ -2,7 +2,8 @@
  * Badge « Nouveau » : règles pures, sans accès base. Voir supabase/migrations/products_nouveau.sql.
  * L'expiration est calculée à la lecture (aucune tâche planifiée).
  */
-export const NOUVEAU_DUREE_JOURS = 30;
+import { NOUVEAU_DUREE_JOURS } from './constants';
+export { NOUVEAU_DUREE_JOURS };
 const JOUR_MS = 86_400_000;
 const FUSEAU_REUNION_MS = 4 * 3_600_000;   // UTC+4, sans heure d'été
 

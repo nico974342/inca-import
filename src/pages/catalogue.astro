@@ -6,7 +6,8 @@ import { supabaseAdmin, createAuthClient } from '../lib/supabase';
 import { fetchAvailability, sellableQty } from '../lib/stock';
 import { fetchClientPriceOverrides, resolveClientPrice } from '../lib/clients';
 import { isClientRole } from '../lib/roles';
-import { fetchGrantedForUser, whereVisibleTo } from '../lib/catalogue';
+import { fetchGrantedForUser, whereVisibleTo, fetchVentesParProduit } from '../lib/catalogue';
+import { ordonnerCatalogue } from '../lib/ordreCatalogue';
 import { estNouveau } from '../lib/nouveau';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
@@ -25,7 +26,6 @@ const { data: products } = await whereVisibleTo(
     .select('id, name, slug, category, description, image_url, unit, units_per_carton, price_ht, tva_rate, stock_quantity'),
   granted,
 )
-  .order('position', { ascending: true })
   .order('name', { ascending: true });
 
 // Côté client, « disponible » veut dire commandable : physique − réservé,
@@ -82,13 +82,6 @@ const totalCartTTC = Object.entries(cartMap).reduce(
 const total   = products?.length ?? 0;
 const inStock = products?.filter(p => dispo(p.id) > 0).length ?? 0;
 
-// Côté client, les indisponibles descendent en fin de liste sans perturber
-// l'ordre (position, nom) au sein de chaque groupe : Array.sort est stable
-// depuis ES2019, donc un simple partitionnement suffit.
-const displayProducts = [...(products ?? [])].sort(
-  (a, b) => (dispo(a.id) > 0 ? 0 : 1) - (dispo(b.id) > 0 ? 0 : 1)
-);
-
 const CAT_LABEL: Record<string, string> = {
   boissons:    'Boissons',
   snacks:      'Snacks',
@@ -111,6 +104,20 @@ const { data: nouveauRows, error: nouveauErr } = await supabaseAdmin.from('produ
 const maintenant = new Date();
 const nouveauIds = new Set<string>(nouveauErr ? [] : (nouveauRows ?? []).filter(r => estNouveau(r, maintenant)).map(r => r.id));
 const nbNouveautes = (products ?? []).filter(p => nouveauIds.has(p.id)).length;
+
+// Ordre d'affichage (voir lib/ordreCatalogue.ts) : nouveautés, catégories dans l'ordre métier, plus vendus d'abord,
+// indisponibles en dernier. `position` n'est plus utilisé côté client. Une seule lecture des ventes pour toute la page.
+const ventes = await fetchVentesParProduit(maintenant);
+const ordre = ordonnerCatalogue(products ?? [], {
+  ventes,
+  estDisponible: id => dispo(id) > 0,
+  estNouveau: id => nouveauIds.has(id),
+});
+const produitParId = new Map((products ?? []).map(p => [p.id, p]));
+const elementsGrille = ordre.sections.flatMap(sec => [
+  { titre: sec.titre, cle: sec.cle, rang: ordre.rang.tous.get(sec.ids[0]) ?? 0 },
+  ...sec.ids.map(id => produitParId.get(id)!),
+]);
 
 const catDemandee = Astro.url.searchParams.get('cat') ?? 'tous';
 const initialCat = catDemandee === 'nouveautes' && nbNouveautes === 0 ? 'tous' : catDemandee;
@@ -235,7 +242,10 @@ const productsMetaJSON = JSON.stringify(
       <div class="container">
         {products && products.length > 0 ? (
           <div class="products-grid" id="productsGrid">
-            {displayProducts.map(p => {
+            {elementsGrille.map(p => {
+              if ('titre' in p) {
+                return <h2 class="section-title" data-section={p.cle} data-r-tous={p.rang - 0.5}>{p.titre}</h2>;
+              }
               const resolvedPrice = priceMap[p.id] || null;
               const priceFormatted = resolvedPrice
                 ? resolvedPrice.toFixed(2).replace('.', ',')
@@ -248,6 +258,9 @@ const productsMetaJSON = JSON.stringify(
                 class={`product-card${dispo(p.id) === 0 ? ' product-card--oos' : ''}`}
                 data-cat={p.category}
                 data-nouveau={nouveauIds.has(p.id) ? '1' : undefined}
+                data-r-tous={ordre.rang.tous.get(p.id)}
+                data-r-cat={ordre.rang.categorie.get(p.id)}
+                data-r-recherche={ordre.rang.recherche.get(p.id)}
                 data-search={`${p.name} ${p.description ?? ''}`.toLowerCase()}
               >
                 <a
@@ -491,7 +504,22 @@ const productsMetaJSON = JSON.stringify(
   let activeCat   = tabsEl?.dataset.initialCat ?? 'tous';
   let searchQuery = '';
 
+  const sectionTitles = document.querySelectorAll<HTMLElement>('.section-title');
+
+  // Vue « Tous » sans recherche : sections avec en-têtes. Catégorie choisie (ou onglet Nouveautés) : plus vendus d'abord,
+  // sans en-tête. Recherche sur toutes les catégories : nouveautés, puis plus vendus, indisponibles en dernier.
+  // Les rangs viennent du serveur (lib/ordreCatalogue.ts) ; CSS `order` réordonne sans toucher au DOM.
+  function applyOrder() {
+    const vue = activeCat !== 'tous' ? 'rCat' : searchQuery ? 'rRecherche' : 'rTous';
+    cards.forEach(card => { card.style.order = String(Math.round(Number(card.dataset[vue] ?? 0) * 2)); });
+    sectionTitles.forEach(t => {
+      t.hidden = vue !== 'rTous';
+      t.style.order = String(Math.round(Number(t.dataset.rTous ?? 0) * 2));
+    });
+  }
+
   function applyFilters() {
+    applyOrder();
     let visible = 0;
     cards.forEach(card => {
       const catMatch    = activeCat === 'tous'
@@ -1290,6 +1318,20 @@ const productsMetaJSON = JSON.stringify(
   transition: opacity var(--dur-fast) var(--ease-out-quart);
 }
 .products-grid.is-updating { opacity: 0.35; }
+
+/* En-tête de section (vue « Tous ») : pleine largeur, sobre. */
+.section-title {
+  grid-column: 1 / -1;
+  margin: var(--space-4) 0 0;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+  font-family: var(--font-display, var(--font-body));
+  font-size: var(--text-lg, 1.125rem);
+  font-weight: 700;
+  color: var(--color-text, inherit);
+}
+.section-title:first-child { margin-top: 0; }
+.section-title[hidden] { display: none; }
 
 /* ── Product card ─────────────────────────────────── */
 .product-card {
