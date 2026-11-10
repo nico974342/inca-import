@@ -8,7 +8,8 @@
 --        1 BL <-> 1 commande, 1 BL regroupé <-> n commandes, n BL <-> 1 commande (livraison en plusieurs fois).
 --   delivery_notes.cle_operation = clé d'idempotence : une même opération de livraison ne produit jamais deux BL
 --        (double clic, rafraîchissement, renvoi du formulaire : la 2e demande retrouve le BL existant, sans nouveau numéro).
--- Les 77 anciens BL (orders.bl_number, signés sur papier) n'ont aucune ligne ici : ils restent tels quels.
+-- Les 77 anciens BL (orders.bl_number, signés sur papier) n'ont aucune ligne ici : ils restent tels quels, et il devient
+-- IMPOSSIBLE de les recréer (bl_creer refuse leurs commandes) ou de modifier leur numéro (déclencheur sur orders.bl_number).
 
 -- 1. Clé d'opération (idempotence)
 ALTER TABLE delivery_notes ADD COLUMN IF NOT EXISTS cle_operation text;
@@ -71,10 +72,11 @@ LANGUAGE plpgsql
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-  v_note   delivery_notes%ROWTYPE;
-  v_num    text;
-  v_cmd    jsonb;
-  v_statut text;
+  v_note    delivery_notes%ROWTYPE;
+  v_num     text;
+  v_cmd     jsonb;
+  v_statut  text;
+  v_ancien  text;
 BEGIN
   IF p_cle IS NULL OR length(btrim(p_cle)) = 0 THEN RAISE EXCEPTION 'Clé d''opération obligatoire.'; END IF;
   IF p_contenu IS NULL OR p_contenu->'pdv' IS NULL THEN RAISE EXCEPTION 'Contenu du BL obligatoire.'; END IF;
@@ -88,10 +90,21 @@ BEGIN
   END IF;
 
   FOR v_cmd IN SELECT * FROM jsonb_array_elements(coalesce(p_commandes, '[]'::jsonb)) LOOP
-    SELECT o.status INTO v_statut FROM orders o WHERE o.id = (v_cmd->>'order_id')::uuid;
+    SELECT o.status, o.bl_number INTO v_statut, v_ancien FROM orders o WHERE o.id = (v_cmd->>'order_id')::uuid;
     IF NOT FOUND THEN RAISE EXCEPTION 'Commande introuvable : %', v_cmd->>'order_id'; END IF;
     IF v_statut = 'annulee' THEN RAISE EXCEPTION 'Commande annulée : aucun BL possible (%).', v_cmd->>'order_id'; END IF;
+    -- Ancien BL (numéro porté par la commande, signé sur papier et archivé) : jamais recréé, quelle que soit la route utilisée
+    IF v_ancien IS NOT NULL THEN
+      RAISE EXCEPTION 'La commande % a déjà un ancien BL (%), signé sur papier : aucun nouveau BL possible.', v_cmd->>'order_id', v_ancien;
+    END IF;
   END LOOP;
+
+  -- Un BL regroupé ne mélange jamais les comptes de deux clients (contrôle de fond ; l'application contrôle aussi le point de vente)
+  IF (SELECT count(DISTINCT o.user_id) FROM orders o
+      WHERE o.user_id IS NOT NULL
+        AND o.id IN (SELECT (e->>'order_id')::uuid FROM jsonb_array_elements(coalesce(p_commandes, '[]'::jsonb)) e)) > 1 THEN
+    RAISE EXCEPTION 'Les commandes d''un BL regroupé doivent appartenir au même compte client.';
+  END IF;
 
   v_num := next_bl_number();
   INSERT INTO delivery_notes (delivery_id, client_id, pdv_key, pdv_name, storage_path, contenu, cle_operation)
@@ -104,19 +117,40 @@ BEGIN
   RETURN QUERY SELECT v_note.id, v_note.delivery_id, v_note.storage_path, true;
 END $$;
 
--- 5. Accès : uniquement le serveur de l'application (service_role) ; ni modification ni suppression directes de la liaison
+-- 5. Le numéro d'un ancien BL (orders.bl_number, signé sur papier et archivé) ne peut plus être modifié ni effacé.
+--    Le déclencheur ne s'active que si la colonne bl_number est modifiée : aucune autre mise à jour de commande n'est concernée.
+CREATE OR REPLACE FUNCTION orders_bl_number_proteger() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF OLD.bl_number IS NOT NULL AND NEW.bl_number IS DISTINCT FROM OLD.bl_number THEN
+    RAISE EXCEPTION 'Le numéro de BL de cette commande (ancien BL signé sur papier) ne peut pas être modifié.' USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_orders_bl_number_proteger ON orders;
+CREATE TRIGGER trg_orders_bl_number_proteger
+  BEFORE UPDATE OF bl_number ON orders
+  FOR EACH ROW EXECUTE FUNCTION orders_bl_number_proteger();
+
+-- 6. Accès : uniquement le serveur de l'application (service_role) ; ni modification ni suppression directes de la liaison
 ALTER TABLE delivery_note_orders ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON delivery_note_orders FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT, INSERT ON delivery_note_orders TO service_role;
 REVOKE ALL ON FUNCTION bl_creer(text, uuid, text, text, jsonb, jsonb) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION bl_creer(text, uuid, text, text, jsonb, jsonb) TO service_role;
 REVOKE ALL ON FUNCTION delivery_note_orders_proteger() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION orders_bl_number_proteger() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION delivery_notes_figer() FROM PUBLIC, anon, authenticated;
 
 -- Retour arrière — UNIQUEMENT avant tout usage réel (aucune liaison créée) :
 --   DROP FUNCTION IF EXISTS bl_creer(text, uuid, text, text, jsonb, jsonb);
 --   DROP TABLE IF EXISTS delivery_note_orders;
 --   DROP FUNCTION IF EXISTS delivery_note_orders_proteger();
+--   DROP TRIGGER IF EXISTS trg_orders_bl_number_proteger ON orders;
+--   DROP FUNCTION IF EXISTS orders_bl_number_proteger();
 --   DROP INDEX IF EXISTS delivery_notes_cle_operation_uniq;
 --   ALTER TABLE delivery_notes DROP COLUMN IF EXISTS cle_operation;
 --   (delivery_notes_figer() peut rester : sa version précédente ignorait seulement cle_operation, qui n'existerait plus)

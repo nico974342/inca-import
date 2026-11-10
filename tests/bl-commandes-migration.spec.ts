@@ -181,3 +181,59 @@ test.describe.serial('Migration bl_commandes.sql (base locale)', () => {
     expect(code).toMatch(/ON DELETE RESTRICT/);
   });
 });
+
+// ── Verrous ajoutés : anciens BL impossibles à recréer ou à renuméroter, aucun mélange de clients dans un BL ──────────────
+test.describe.serial('Migration bl_commandes.sql : anciens BL et clients (base locale)', () => {
+  let db: PGlite; let ancien1: string, ancien2: string, a1: string, a2: string, b1: string, sansCompte1: string, sansCompte2: string;
+  const compteA = '00000000-0000-0000-0000-0000000000aa', compteB = '00000000-0000-0000-0000-0000000000bb';
+  const commande = async (statut: string, bl: string | null, userId: string | null) =>
+    (await un(db, `INSERT INTO orders (nom, status, bl_number, user_id) VALUES ('c', $1, $2, $3) RETURNING id`, [statut, bl, userId])).id;
+  const bl = (cle: string, ids: string[]) => refus(db, `SELECT * FROM bl_creer($1, NULL, 'k', 'P', $2::jsonb, $3::jsonb)`, [cle, CONTENU('P'), JSON.stringify(ids.map(order_id => ({ order_id, empreinte: 'h' })))]);
+
+  test.beforeAll(async () => {
+    db = new PGlite(); await db.exec(ENV); await db.exec(SEQ); await db.exec(`SELECT setval('bl_number_seq', 90)`);
+    await db.exec(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS user_id uuid`);
+    await db.exec(SIG);
+    ancien1 = await commande('livree', 'BL-0012', compteA); ancien2 = await commande('livree', 'BL-0090', null);
+    a1 = await commande('confirmee', null, compteA); a2 = await commande('en_preparation', null, compteA);
+    b1 = await commande('confirmee', null, compteB); sansCompte1 = await commande('confirmee', null, null); sansCompte2 = await commande('confirmee', null, null);
+    await db.exec(SQL);
+  });
+  test.afterAll(async () => { await db.close(); });
+
+  test('un ancien BL (commande avec numéro de BL) ne peut JAMAIS être recréé : refus par la base, aucun numéro consommé', async () => {
+    const s = await seq(db);
+    for (const o of [ancien1, ancien2]) expect(await bl('x-ancien-' + o, [o])).toMatch(/ancien BL.*signé sur papier/);
+    expect(await bl('x-melange-ancien', [a1, ancien1])).toMatch(/ancien BL/);          // même mêlé à une commande valide
+    expect(await seq(db)).toBe(s);
+    expect((await un(db, `SELECT count(*)::int n FROM delivery_notes`)).n).toBe(0);
+    expect((await un(db, `SELECT count(*)::int n FROM delivery_note_orders`)).n).toBe(0);
+  });
+
+  test('le numéro d\'un ancien BL ne peut ni être modifié, ni effacé, ni réattribué ; les autres mises à jour de commande restent libres', async () => {
+    expect(await refus(db, `UPDATE orders SET bl_number = 'BL-9999' WHERE id=$1`, [ancien1])).toMatch(/ne peut pas être modifié/);
+    expect(await refus(db, `UPDATE orders SET bl_number = NULL WHERE id=$1`, [ancien1])).toMatch(/ne peut pas être modifié/);
+    expect(await refus(db, `UPDATE orders SET bl_number = bl_number, status = 'annulee' WHERE id=$1`, [ancien1])).toBeNull();   // inchangé : autorisé
+    await db.query(`UPDATE orders SET status = 'livree', nom = 'autre' WHERE id=$1`, [ancien1]);                                  // statut, nom… : libres
+    await db.query(`UPDATE orders SET status = 'en_preparation' WHERE id=$1`, [a1]);
+    expect((await un(db, `SELECT bl_number FROM orders WHERE id=$1`, [ancien1])).bl_number).toBe('BL-0012');
+    expect((await un(db, `SELECT bl_number FROM orders WHERE id=$1`, [ancien2])).bl_number).toBe('BL-0090');
+  });
+
+  test('un BL regroupé ne mélange jamais deux comptes clients ; même compte ou commandes sans compte : accepté', async () => {
+    const s = await seq(db);
+    expect(await bl('x-mix', [a1, b1])).toMatch(/même compte client/);
+    expect(await bl('x-mix2', [a1, a2, b1])).toMatch(/même compte client/);
+    expect(await seq(db)).toBe(s);
+    expect(await bl('ok-A', [a1, a2])).toBeNull();                       // deux commandes du même compte
+    expect(await bl('ok-0', [sansCompte1, sansCompte2])).toBeNull();     // commandes sans compte (saisies par l'équipe)
+    expect(await bl('ok-A0', [a1, sansCompte1])).toBeNull();             // un compte + une commande sans compte : le contrôle du point de vente est fait par l'application
+    expect(await seq(db)).toBe(s + 3);
+  });
+
+  test('statique : les anciens BL sont protégés sans que la migration ne modifie aucun numéro', () => {
+    const code = SQL.split(/\r?\n/).filter(l => !l.trim().startsWith('--')).join('\n');
+    expect(code).toMatch(/ancien BL/); expect(code).toMatch(/BEFORE UPDATE OF bl_number ON orders/);
+    expect(code).not.toMatch(/UPDATE\s+orders\s+SET|setval|bl_number\s*=\s*/i);
+  });
+});

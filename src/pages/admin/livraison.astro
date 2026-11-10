@@ -7,7 +7,7 @@ import { COMPANY, RESEND_DEFAULT_FROM } from '../../lib/constants';
 import { todayReunion } from '../../lib/datetime';
 import { depotBl, fetchEmpreintesCommandes } from '../../lib/blSignatures';
 import { verifierStockageBl, creerBons, type SpecBl } from '../../lib/blStockage';
-import { cleOperationLivraison, estUuid, jetonValide } from '../../lib/blCommande';
+import { cleOperationLivraison, estUuid, jetonValide, validerCommandesDuBl, type CommandeLue } from '../../lib/blCommande';
 import { randomUUID } from 'node:crypto';
 import { Resend } from 'resend';
 
@@ -56,6 +56,35 @@ const nomToClientKey = new Map(
     .filter(c => c.nom)
     .map(c => [(c.nom as string).trim().toLowerCase(), `client_${c.id}`])
 );
+// societe fallback — some orders store the company name in societe, not nom
+const societeToClientKey = new Map(
+  (clients ?? [])
+    .filter(c => c.societe)
+    .map(c => [(c.societe as string).trim().toLowerCase(), `client_${c.id}`])
+);
+
+// Point de vente (donc client) d'une commande : UNE seule règle, utilisée pour pré-remplir le formulaire ET pour contrôler,
+// côté serveur, les commandes rattachées à un BL au moment de l'enregistrement.
+function pdvKeyDeCommande(o: { email?: string | null; nom?: string | null; societe?: string | null }): string | null {
+  const byEmail   = o.email   ? emailToClientKey.get(normalizeEmail(o.email))          : undefined;
+  const byNom     = o.nom     ? nomToClientKey.get(o.nom.trim().toLowerCase())         : undefined;
+  const bySociete = o.societe ? societeToClientKey.get(o.societe.trim().toLowerCase()) : undefined;
+  return byEmail ?? byNom ?? bySociete ?? null;
+}
+
+/** Relit les commandes réellement rattachées et vérifie chacune (voir validerCommandesDuBl). null = tout est conforme. */
+async function verifierCommandesDesBl(pdvKeys: string[], idsParPdv: string[][]): Promise<string | null> {
+  const tous = [...new Set(idsParPdv.flat())];
+  if (tous.length === 0) return null;
+  const { data, error } = await supabaseAdmin.from('orders').select('id, status, email, nom, societe, user_id, bl_number').in('id', tous);
+  if (error) return `Contrôle des commandes impossible (${error.message}) : aucun BL généré.`;
+  const trouvees = new Map<string, CommandeLue>((data ?? []).map((o: any) => [o.id, { id: o.id, status: o.status, bl_number: o.bl_number ?? null, user_id: o.user_id ?? null, pdvKey: pdvKeyDeCommande(o) }]));
+  for (let i = 0; i < pdvKeys.length; i++) {
+    const v = validerCommandesDuBl(pdvKeys[i], idsParPdv[i], trouvees);
+    if (!v.ok) return v.message;
+  }
+  return null;
+}
 
 const allPDVs = clientPDVs;
 const products = productsRaw ?? [];
@@ -132,6 +161,7 @@ if (Astro.request.method === 'POST') {
     // 1. Le stockage des BL est-il prêt ? Vérifié AVANT de consommer le moindre numéro : s'il ne l'est pas,
     //    rien n'est généré ni envoyé.
     const pret = await verifierStockageBl(depotBl);
+    let erreurCommandes: string | null = null;
     const jeton = form.get('operation_id');
     // Commandes rattachées à chaque point de vente : identifiants RÉELS choisis au chargement du formulaire (jamais déduits d'un e-mail ici).
     const idsParPdv = pdvMeta.map(m => String(form.get(`loaded_orders_${m.key}`) ?? '').split(',').map(x => x.trim()).filter(Boolean));
@@ -141,6 +171,9 @@ if (Astro.request.method === 'POST') {
       errorMessage = 'Formulaire expiré : rechargez la page avant de générer les bons.';
     } else if (idsParPdv.some(ids => ids.some(id => !estUuid(id)))) {
       errorMessage = 'Commandes rattachées invalides : rechargez la page et rechargez les commandes dans le formulaire.';
+    } else if ((erreurCommandes = await verifierCommandesDesBl(pdvMeta.map(m => m.key), idsParPdv)) !== null) {
+      // Contrôle SERVEUR : chaque commande rattachée doit appartenir au point de vente et au client du BL, être livrable et sans ancien BL.
+      errorMessage = erreurCommandes;
     } else {
       // 2. Création commune : numéro + BL + contenu figé + liaisons aux commandes, en une transaction par BL. La clé d'opération
       //    (jeton du formulaire + point de vente) rend le renvoi, le rafraîchissement et le double clic inoffensifs.
@@ -239,19 +272,9 @@ const { data: confirmedItems } = confirmedOrderIds.length > 0
       .not('product_id', 'is', null)
   : { data: [] as { order_id: string; product_id: string; quantity: number }[] };
 
-// societe fallback — some orders store the company name in societe, not nom
-const societeToClientKey = new Map(
-  (clients ?? [])
-    .filter(c => c.societe)
-    .map(c => [(c.societe as string).trim().toLowerCase(), `client_${c.id}`])
-);
-
 const orderToPdvKey = new Map<string, string>();
 for (const order of confirmedOrders ?? []) {
-  const byEmail   = order.email   ? emailToClientKey.get(normalizeEmail(order.email))          : undefined;
-  const byNom     = order.nom     ? nomToClientKey.get(order.nom.trim().toLowerCase())         : undefined;
-  const bySociete = (order as any).societe ? societeToClientKey.get((order as any).societe.trim().toLowerCase()) : undefined;
-  const key = byEmail ?? byNom ?? bySociete;
+  const key = pdvKeyDeCommande(order as any);
   if (key) orderToPdvKey.set(order.id, key);
 }
 

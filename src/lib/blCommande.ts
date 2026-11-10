@@ -76,3 +76,42 @@ export function construireContenuCommande(commande: CommandePourBl, lignes: read
 
 /** Clé de point de vente d'un BL de commande (sert au nom du fichier : « BL-0091/commande_<id>.pdf »). */
 export const pdvKeyCommande = (orderId: string) => `commande_${orderId}`;
+
+/** Statuts dans lesquels une commande peut entrer dans un BL de Livraison (ni annulée, ni déjà livrée). */
+export const STATUTS_LIVRABLES = ['confirmee', 'en_preparation', 'expediee'] as const;
+
+export interface CommandeLue {
+  id: string;
+  status: string | null;
+  /** Numéro d'un ancien BL porté par la commande (signé sur papier) : la commande ne peut plus entrer dans un nouveau BL. */
+  bl_number: string | null;
+  /** Point de vente (donc client) auquel la commande correspond, recalculé CÔTÉ SERVEUR au moment de l'enregistrement. */
+  pdvKey: string | null;
+  /** Compte (auth) propriétaire de la commande, si elle en a un. */
+  user_id: string | null;
+}
+
+/**
+ * Contrôle serveur d'un BL qui rattache des commandes : on ne fait JAMAIS confiance aux identifiants reçus du navigateur.
+ *  - chaque commande existe et n'est listée qu'une fois ;
+ *  - elle est livrable (ni annulée, ni livrée) ;
+ *  - elle n'a pas d'ancien BL (signé sur papier) : impossible de le recréer ;
+ *  - elle correspond bien au point de vente et au client du BL ;
+ *  - les comptes propriétaires des commandes sont tous le même (aucun mélange de clients dans un BL regroupé).
+ */
+export function validerCommandesDuBl(pdvKey: string, ids: readonly string[], trouvees: ReadonlyMap<string, CommandeLue>): { ok: true } | { ok: false; message: string } {
+  const vus = new Set<string>();
+  const comptes = new Set<string>();
+  for (const id of ids) {
+    if (vus.has(id)) return { ok: false, message: `Commande listée deux fois (${id.slice(0, 8)}) : aucun BL généré.` };
+    vus.add(id);
+    const c = trouvees.get(id);
+    if (!c) return { ok: false, message: `Commande introuvable (${id.slice(0, 8)}) : aucun BL généré.` };
+    if (c.bl_number) return { ok: false, message: `La commande ${id.slice(0, 8)} a déjà un ancien BL (${c.bl_number}), signé sur papier : elle ne peut pas entrer dans un nouveau BL.` };
+    if (!(STATUTS_LIVRABLES as readonly string[]).includes(c.status ?? '')) return { ok: false, message: `La commande ${id.slice(0, 8)} est « ${c.status ?? 'sans statut'} » : elle ne peut pas être livrée par un nouveau BL.` };
+    if (c.pdvKey !== pdvKey) return { ok: false, message: `La commande ${id.slice(0, 8)} n'appartient pas à ce point de vente / ce client : aucun BL généré.` };
+    if (c.user_id) comptes.add(c.user_id);
+  }
+  if (comptes.size > 1) return { ok: false, message: 'Les commandes d\'un BL regroupé doivent appartenir au même compte client : aucun BL généré.' };
+  return { ok: true };
+}

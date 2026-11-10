@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { empreinteCommande, construireContenuCommande, cleOperationCommande, cleOperationLivraison, estUuid, jetonValide } from '../src/lib/blCommande';
 import { clientPeutConsulterBl } from '../src/lib/blAcces';
+import { validerCommandesDuBl, type CommandeLue } from '../src/lib/blCommande';
 
 const lire = (f: string) => readFileSync(f, 'utf8');
 const UUID = '11111111-1111-1111-1111-111111111111';
@@ -174,5 +175,54 @@ test.describe('Contrôles de code : routes et pages', () => {
     expect(f).toEqual(['src/lib/blSignatures.ts', 'src/pages/admin/bl/[id]/signer.astro', 'src/pages/api/admin/clients/[id]/delete.ts',
       'src/pages/api/admin/orders/[id]/delete.ts', 'src/pages/mes-livraisons.astro'].sort());
     for (const p of f) expect(lire(p), p).not.toMatch(/from\('delivery_note_orders'\)\s*\.(insert|update|delete|upsert)/);
+  });
+});
+
+test.describe('Contrôle SERVEUR des commandes d\'un BL (jamais les identifiants du navigateur tels quels)', () => {
+  const c = (id: string, extra: Partial<CommandeLue> = {}): [string, CommandeLue] => [id, { id, status: 'confirmee', bl_number: null, pdvKey: 'client_A', user_id: null, ...extra }];
+  const base = (...l: [string, CommandeLue][]) => new Map(l);
+  const A = 'aaaaaaaa-0000-0000-0000-000000000001', B = 'aaaaaaaa-0000-0000-0000-000000000002', C = 'aaaaaaaa-0000-0000-0000-000000000003';
+
+  test('commandes du même point de vente et du même client : accepté (regroupement, livraison partielle)', () => {
+    expect(validerCommandesDuBl('client_A', [A, B], base(c(A), c(B)))).toEqual({ ok: true });
+    expect(validerCommandesDuBl('client_A', [A], base(c(A, { status: 'en_preparation' })))).toEqual({ ok: true });
+    expect(validerCommandesDuBl('client_A', [A, B], base(c(A, { user_id: 'u1' }), c(B, { user_id: 'u1' })))).toEqual({ ok: true });
+    expect(validerCommandesDuBl('client_A', [], base())).toEqual({ ok: true });                          // BL libre : rien à rattacher
+  });
+  test('commande d\'un AUTRE point de vente / client : refusé, même si l\'identifiant est valide', () => {
+    const r = validerCommandesDuBl('client_A', [A, B], base(c(A), c(B, { pdvKey: 'client_B' })));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toMatch(/n'appartient pas à ce point de vente/);
+    expect(validerCommandesDuBl('client_A', [A], base(c(A, { pdvKey: null }))).ok).toBe(false);          // commande non rattachable à un client : refusée
+  });
+  test('deux comptes clients différents dans un BL regroupé : refusé', () => {
+    const r = validerCommandesDuBl('client_A', [A, B], base(c(A, { user_id: 'u1' }), c(B, { user_id: 'u2' })));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toMatch(/même compte client/);
+  });
+  test('ancien BL (signé sur papier) : refusé, jamais recréé', () => {
+    const r = validerCommandesDuBl('client_A', [A], base(c(A, { bl_number: 'BL-0050' })));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toMatch(/ancien BL \(BL-0050\), signé sur papier/);
+  });
+  test('commande annulée, livrée ou inconnue : refusé ; identifiant en double : refusé', () => {
+    for (const statut of ['annulee', 'livree', null]) expect(validerCommandesDuBl('client_A', [A], base(c(A, { status: statut }))).ok, String(statut)).toBe(false);
+    expect(validerCommandesDuBl('client_A', [A, C], base(c(A))).ok).toBe(false);
+    expect(validerCommandesDuBl('client_A', [A, A], base(c(A))).ok).toBe(false);
+  });
+  test('un seul refus suffit : aucune commande valide ne « sauve » le lot', () => {
+    expect(validerCommandesDuBl('client_A', [A, B, C], base(c(A), c(B), c(C, { bl_number: 'BL-0001' }))).ok).toBe(false);
+  });
+  test('Livraison : le contrôle serveur a lieu AVANT toute création, avec la MÊME correspondance commande → point de vente que le chargement', () => {
+    const l = lire('src/pages/admin/livraison.astro');
+    expect(l).toMatch(/verifierCommandesDesBl\(pdvMeta\.map\(m => m\.key\), idsParPdv\)/);
+    expect(l.indexOf('verifierCommandesDesBl(pdvMeta')).toBeLessThan(l.indexOf('creerBons(depotBl, specs)'));
+    expect(l.match(/function pdvKeyDeCommande/g)).toHaveLength(1);
+    expect(l).toMatch(/const key = pdvKeyDeCommande\(order as any\)/);                      // le préremplissage utilise la même règle
+    expect(l).not.toMatch(/const byEmail\s+=.*\n.*const byNom[\s\S]{0,300}orderToPdvKey/);   // plus de seconde copie de la règle
+  });
+  test('la route « Générer le BL » refuse déjà un ancien BL ; la base le refuse aussi quel que soit le chemin', () => {
+    expect(lire('src/pages/api/admin/orders/[id]/bl.ts')).toMatch(/bl_number/);
+    expect(lire('supabase/migrations/bl_commandes.sql')).toMatch(/IF v_ancien IS NOT NULL THEN/);
   });
 });
