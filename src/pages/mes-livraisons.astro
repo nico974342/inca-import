@@ -6,6 +6,7 @@ import { supabaseAdmin, createAuthClient } from '../lib/supabase';
 import { findClientByEmail } from '../lib/clients';
 import { formatDateReunion } from '../lib/datetime';
 import { isClientRole } from '../lib/roles';
+import { fetchSignaturesActives, etatDuBl } from '../lib/blSignatures';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -23,6 +24,10 @@ const { data: notes } = clientAccount
       .eq('client_id', clientAccount.id)
       .order('created_at', { ascending: false })
   : { data: [] as { id: string; delivery_id: string; pdv_name: string; created_at: string }[] };
+
+// Le client ne voit que le résultat : bon signé disponible quand les deux signatures sont recueillies.
+const signaturesParBl = await fetchSignaturesActives((notes ?? []).map(n => n.id));
+const signes = new Set((notes ?? []).filter(n => etatDuBl(signaturesParBl.get(n.id)) === 'signe').map(n => n.id));
 
 function formatDate(iso: string): string {
   return formatDateReunion(iso, { month: 'long' });
@@ -86,6 +91,16 @@ function formatDate(iso: string): string {
                 </svg>
                 Télécharger PDF
               </a>
+              {signes.has(note.id) && (
+                <a
+                  href={`/api/delivery-notes/${note.id}/signe`}
+                  class="btn-download btn-download--signe"
+                  data-testid="bl-signe-client"
+                  aria-label={`Télécharger le bon de livraison ${note.delivery_id} signé`}
+                >
+                  Bon signé ✓
+                </a>
+              )}
             </li>
           ))}
         </ul>
@@ -239,6 +254,7 @@ function formatDate(iso: string): string {
   white-space: nowrap;
 }
 
+.btn-download--signe { margin-left: var(--space-2); }
 .btn-download:hover {
   background: oklch(0.95 0.04 45.9);
   border-color: var(--color-primary-light);

@@ -9,6 +9,8 @@ import {
   ORDER_STATUS_LABEL as SHARED_ORDER_STATUS_LABEL, ORDER_STATUS_COLOR as SHARED_ORDER_STATUS_COLOR,
 } from '../../../lib/constants';
 import { formatDateReunion, reunionMonthStart } from '../../../lib/datetime';
+import { fetchSignaturesActives, etatDuBl } from '../../../lib/blSignatures';
+import { LIBELLE_ETAT } from '../../../lib/signatureBl';
 import { isAdmin, getRole, ROLE_LABEL, type UserRole } from '../../../lib/roles';
 
 const viewerIsAdmin = isAdmin((Astro.locals as any).user);
@@ -233,6 +235,8 @@ const { data: deliveryNotes } = await supabaseAdmin
   .select('id, delivery_id, pdv_name, created_at')
   .eq('client_id', id)
   .order('created_at', { ascending: false });
+
+const signaturesParBl = await fetchSignaturesActives((deliveryNotes ?? []).map(n => n.id));
 
 // Resolve auth user and current role — app_metadata is the source of truth
 // (see lib/roles.ts), not user_metadata, which the account holder can write.
@@ -652,6 +656,7 @@ const grantedMaskedCount = (maskedProducts ?? []).filter(m => grantedIds.has(m.i
               <th>Date</th>
               <th>Livraison</th>
               <th>Point de vente</th>
+              <th>Signature</th>
               <th></th>
             </tr>
           </thead>
@@ -661,6 +666,7 @@ const grantedMaskedCount = (maskedProducts ?? []).filter(m => grantedIds.has(m.i
                 <td class="td-muted">{formatDate(note.created_at)}</td>
                 <td class="td-mono">{note.delivery_id}</td>
                 <td>{note.pdv_name}</td>
+                <td data-testid="bl-etat-client">{LIBELLE_ETAT[etatDuBl(signaturesParBl.get(note.id))]}</td>
                 <td class="td-r">
                   <a
                     href={`/api/delivery-notes/${note.id}/download`}
@@ -672,6 +678,9 @@ const grantedMaskedCount = (maskedProducts ?? []).filter(m => grantedIds.has(m.i
                     </svg>
                     PDF
                   </a>
+                  {etatDuBl(signaturesParBl.get(note.id)) === 'signe' && (
+                    <a href={`/api/delivery-notes/${note.id}/signe`} class="btn-dl" target="_blank" rel="noopener" aria-label={`Télécharger ${note.delivery_id} signé`}>PDF signé ✓</a>
+                  )}
                 </td>
               </tr>
             ))}
