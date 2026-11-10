@@ -8,11 +8,16 @@ import { formatDateTimeReunion } from '../../../../lib/datetime';
 // Écran terrain : admin et commercial (le middleware exige déjà un compte staff). Le client ne peut pas y accéder.
 const user = (Astro.locals as any).user;
 const id = Astro.params.id ?? '';
-if (!/^[0-9a-f-]{36}$/i.test(id)) return Astro.redirect('/admin/livraison?sig_err=' + encodeURIComponent('Bon de livraison introuvable.'));
+if (!/^[0-9a-f-]{36}$/i.test(id)) return Astro.redirect('/admin/commandes?bl_err=' + encodeURIComponent('Bon de livraison introuvable.'));
 
 const { data: note } = await supabaseAdmin
   .from('delivery_notes').select('id, delivery_id, pdv_name, contenu, created_at').eq('id', id).maybeSingle();
-if (!note) return Astro.redirect('/admin/livraison?sig_err=' + encodeURIComponent('Bon de livraison introuvable.'));
+if (!note) return Astro.redirect('/admin/commandes?bl_err=' + encodeURIComponent('Bon de livraison introuvable.'));
+
+// Retour vers la fiche de la commande rattachée (la première si le BL regroupe plusieurs commandes)
+const { data: liens } = await supabaseAdmin.from('delivery_note_orders').select('order_id').eq('delivery_note_id', id).limit(1);
+const premiereCommande = (liens?.[0] as any)?.order_id as string | undefined;
+const retourCommande = premiereCommande ? `/admin/commandes?ouvrir=${premiereCommande}#cmd-${premiereCommande}` : '/admin/commandes';
 
 const contenu = (note as any).contenu as ContenuBl | null;
 const pdv = contenu?.pdv;
@@ -53,7 +58,7 @@ const titre = `Faire signer ${(note as any).delivery_id}`;
         <p class="sg-etiquette">Bon de livraison</p>
         <h1 class="sg-numero" data-testid="sg-numero">{(note as any).delivery_id}</h1>
       </div>
-      <a class="sg-retour" href="/admin/livraison#bons-de-livraison">← Livraisons</a>
+      <a class="sg-retour" href={retourCommande}>← Commande</a>
     </header>
 
     <section class="sg-recap" aria-label="Rappel du bon de livraison">
@@ -107,7 +112,7 @@ const titre = `Faire signer ${(note as any).delivery_id}`;
           <p class="sg-fin-titre"><span class="sg-gros-v" aria-hidden="true">✓</span> Bon de livraison signé</p>
           <p class="sg-fin-texte">Le transporteur et le destinataire ont signé. Le PDF signé est disponible.</p>
           <a class="sg-btn sg-btn--prim" href={`/api/delivery-notes/${id}/signe`} target="_blank" rel="noopener" data-testid="sg-telecharger">Télécharger le BL signé</a>
-          <a class="sg-btn sg-btn--sec" href="/admin/livraison#bons-de-livraison">Retour aux livraisons</a>
+          <a class="sg-btn sg-btn--sec" href={retourCommande}>Retour à la commande</a>
         </section>
       </>
     )}

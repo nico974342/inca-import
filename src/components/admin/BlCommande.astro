@@ -1,0 +1,99 @@
+---
+/**
+ * Bons de livraison d'une commande, sur la fiche détaillée de Commandes. Tous les cas :
+ *  - aucun BL, commande non annulée      → bouton « Générer le BL » (action EXPLICITE, POST) ;
+ *  - ancien BL (numéro sur la commande)  → « Bon de livraison » inchangé + « Signé sur papier » (jamais « non signé ») ;
+ *  - un ou plusieurs BL enregistrés      → pour chacun : BL original, « Faire signer » / « Terminer la signature » / « BL signé (PDF) »,
+ *                                           statut, noms et dates des signataires, avertissement si la commande a changé depuis.
+ * « Faire signer » ne fait que OUVRIR l'écran de signature : il ne génère aucun document, ne consomme aucun numéro, n'envoie aucun e-mail.
+ */
+import { LIBELLE_ETAT, LIBELLE_ROLE } from '../../lib/signatureBl';
+import { etatDuBl, type BlDeCommande } from '../../lib/blSignatures';
+import { formatDateTimeReunion } from '../../lib/datetime';
+
+interface Props {
+  orderId: string;
+  status: string;
+  /** Numéro d'un ancien BL porté par la commande (orders.bl_number), signé sur papier. */
+  ancienNumero: string | null;
+  bls: BlDeCommande[];
+  /** Empreinte actuelle des lignes de la commande (pour détecter une modification après l'émission du BL). */
+  empreinteActuelle: string;
+}
+const { orderId, status, ancienNumero, bls, empreinteActuelle } = Astro.props;
+const annulee = status === 'annulee';
+const lignes = bls.map(bl => {
+  const etat = etatDuBl(bl.signatures);
+  const parRole = Object.fromEntries(bl.signatures.map(s => [s.role, s]));
+  return { bl, etat, parRole, modifiee: bl.empreinte_commande !== empreinteActuelle };
+});
+---
+<div class="blc-bloc" data-testid="bl-bloc">
+  {lignes.length === 0 && ancienNumero && (
+    <div class="blc-ligne" data-testid="bl-ligne" data-etat="papier">
+      <a href={`/api/admin/orders/${orderId}/bon-livraison`} target="_blank" rel="noopener noreferrer" class="btn-accuse">Bon de livraison</a>
+      <span class="blc-etat blc-etat--papier" data-testid="bl-etat" title="BL antérieur à la signature électronique : signé sur papier et archivé dans Pennylane">{ancienNumero} · Signé sur papier</span>
+    </div>
+  )}
+
+  {lignes.length === 0 && !ancienNumero && !annulee && (
+    <form method="post" action={`/api/admin/orders/${orderId}/bl`} class="blc-form" data-bl-form>
+      <button type="submit" class="btn-accuse blc-generer" data-testid="bl-generer">Générer le BL</button>
+      <span class="blc-aide">Crée et enregistre le BL de cette commande (un numéro). Aucun e-mail n'est envoyé.</span>
+    </form>
+  )}
+
+  {lignes.length === 0 && !ancienNumero && annulee && (
+    <span class="blc-aide" data-testid="bl-aucun">Commande annulée : pas de BL.</span>
+  )}
+
+  {lignes.map(({ bl, etat, parRole, modifiee }) => (
+    <div class="blc-ligne" data-testid="bl-ligne" data-etat={etat}>
+      <a href={`/api/delivery-notes/${bl.id}/download`} target="_blank" rel="noopener noreferrer" class="btn-accuse" data-testid="bl-original">Bon de livraison {bl.numero}</a>
+      {etat === 'signe' ? (
+        <a href={`/api/delivery-notes/${bl.id}/signe`} target="_blank" rel="noopener noreferrer" class="btn-accuse blc-signe" data-testid="bl-signe">BL signé (PDF)</a>
+      ) : bl.signable && !annulee ? (
+        <a href={`/admin/bl/${bl.id}/signer`} class="btn-accuse blc-signer" data-testid="bl-faire-signer">{etat === 'partiel' ? 'Terminer la signature' : 'Faire signer'}</a>
+      ) : null}
+      <span class={`blc-etat blc-etat--${etat}`} data-testid="bl-etat">{LIBELLE_ETAT[etat]}</span>
+      {bl.nb_commandes > 1 && <span class="blc-aide">BL regroupé : {bl.nb_commandes} commandes</span>}
+      {(parRole.transporteur || parRole.destinataire) && (
+        <p class="blc-signataires" data-testid="bl-signataires">
+          {(['transporteur', 'destinataire'] as const).filter(r => parRole[r]).map(r => (
+            <span>{LIBELLE_ROLE[r]} : <strong>{parRole[r].signataire_nom}</strong> — {formatDateTimeReunion(parRole[r].signed_at)}</span>
+          ))}
+        </p>
+      )}
+      {modifiee && <p class="blc-alerte" data-testid="bl-modifiee">⚠ Commande modifiée depuis l'émission du BL : le BL reste celui qui a été établi.</p>}
+    </div>
+  ))}
+</div>
+
+<script>
+  // Un double clic ne peut pas envoyer deux fois la demande (le serveur est de toute façon idempotent).
+  document.querySelectorAll<HTMLFormElement>('form[data-bl-form]').forEach(f => {
+    f.addEventListener('submit', e => {
+      const b = f.querySelector<HTMLButtonElement>('button[type="submit"]');
+      if (b?.dataset.envoye === '1') { e.preventDefault(); return; }
+      if (b) { b.dataset.envoye = '1'; b.textContent = 'Génération…'; b.setAttribute('aria-disabled', 'true'); }
+    });
+  });
+</script>
+
+<style>
+  .blc-bloc { display: grid; gap: var(--space-2); margin-top: var(--space-2); }
+  .blc-ligne { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; border-top: 1px solid var(--color-border); }
+  .blc-form { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+  .blc-ligne :global(.btn-accuse), .blc-form :global(.btn-accuse) { min-height: 40px; }
+  .blc-generer { cursor: pointer; }
+  .blc-signer { background: var(--color-primary); color: white; border-color: var(--color-primary); }
+  .blc-signe { border-color: oklch(0.52 0.17 145); color: oklch(0.35 0.13 145); }
+  .blc-etat { font-size: var(--text-xs); font-weight: 700; padding: 2px 10px; border-radius: 999px; border: 1px solid transparent; }
+  .blc-etat--non_signe { background: oklch(0.95 0.01 60); color: oklch(0.40 0.02 60); border-color: oklch(0.85 0.01 60); }
+  .blc-etat--partiel { background: oklch(0.95 0.07 85); color: oklch(0.42 0.12 70); border-color: oklch(0.85 0.09 85); }
+  .blc-etat--signe { background: oklch(0.94 0.07 145); color: oklch(0.35 0.13 145); border-color: oklch(0.82 0.09 145); }
+  .blc-etat--papier { background: oklch(0.95 0.01 250); color: oklch(0.40 0.03 250); border-color: oklch(0.85 0.02 250); }
+  .blc-aide { font-size: var(--text-xs); color: var(--color-muted); }
+  .blc-signataires { flex-basis: 100%; margin: 0; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); font-size: var(--text-xs); color: var(--color-muted); }
+  .blc-alerte { flex-basis: 100%; margin: 0; font-size: var(--text-xs); font-weight: 600; color: oklch(0.46 0.14 60); }
+</style>

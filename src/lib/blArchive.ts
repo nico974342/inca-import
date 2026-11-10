@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import { generatePDVDeliveryPDF, type BlSignaturesPdf, type DeliveryPDV } from './pdf';
 import { ROLES_SIGNATURE, type RoleSignature } from './signatureBl';
 
-export interface NoteBl { delivery_id: string; contenu: { pdv: DeliveryPDV; date: string } | null }
+export interface NoteBl { delivery_id: string; contenu: { pdv: DeliveryPDV; date: string } | null; storage_path?: string | null }
 export interface SignatureComplete { id: string; role: string; signature_data: string; signataire_nom: string; signed_at: string }
 
 export interface DepotArchive {
@@ -56,5 +56,25 @@ export async function blSigne(depot: DepotArchive, noteId: string): Promise<BlSi
   const buffer = await generatePDVDeliveryPDF(note.contenu.pdv, note.delivery_id, note.contenu.date, signatures);
   const erreur = await depot.ecrireFichier(cle, buffer).catch(e => (e instanceof Error ? e.message : String(e)));
   if (erreur) console.error(`[bl] archivage du BL signé ${note.delivery_id} impossible : ${erreur}`);
+  return { buffer, blNumber: note.delivery_id, source: 'regenere' };
+}
+
+/**
+ * BL ORIGINAL (non signé) : le fichier archivé à la création s'il existe, sinon reconstruit à l'identique depuis le contenu figé
+ * puis archivé (jamais d'écrasement). null si ni fichier ni contenu figé (ancienne ligne : l'appelant garde son comportement historique).
+ */
+export async function blOriginal(depot: DepotArchive, noteId: string): Promise<BlSigne | null> {
+  const note = await depot.lireNote(noteId);
+  if (!note) return null;
+  if (note.storage_path) {
+    const archive = await depot.lireFichier(note.storage_path);
+    if (archive) return { buffer: archive, blNumber: note.delivery_id, source: 'archive' };
+  }
+  if (!note.contenu?.pdv || !note.contenu.date) return null;
+  const buffer = await generatePDVDeliveryPDF(note.contenu.pdv, note.delivery_id, note.contenu.date);
+  if (note.storage_path) {
+    const erreur = await depot.ecrireFichier(note.storage_path, buffer).catch(e => (e instanceof Error ? e.message : String(e)));
+    if (erreur) console.error(`[bl] archivage du BL ${note.delivery_id} impossible : ${erreur}`);
+  }
   return { buffer, blNumber: note.delivery_id, source: 'regenere' };
 }

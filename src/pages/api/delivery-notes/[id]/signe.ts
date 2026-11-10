@@ -2,7 +2,8 @@ import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../lib/supabase';
 import { findClientByEmail } from '../../../../lib/clients';
 import { isClientRole } from '../../../../lib/roles';
-import { construireBlSigne } from '../../../../lib/blSignatures';
+import { construireBlSigne, fetchLiensBl } from '../../../../lib/blSignatures';
+import { clientPeutConsulterBl } from '../../../../lib/blAcces';
 
 // BL signé (PDF avec les deux signatures). Le BL non signé reste servi par /download, inchangé.
 // Staff : tout BL. Client : uniquement les siens, en lecture — il ne peut pas signer.
@@ -16,8 +17,12 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
 
   if (isClientRole(user)) {
     const { data: note } = await supabaseAdmin.from('delivery_notes').select('client_id').eq('id', id).maybeSingle();
+    if (!note) return new Response('Interdit', { status: 403 });
     const account = await findClientByEmail<{ id: string }>(user.email, 'id');
-    if (!note || !account || (note as any).client_id !== account.id) return new Response('Interdit', { status: 403 });
+    const liens = (await fetchLiensBl([id])).get(id) ?? [];
+    if (!clientPeutConsulterBl({ userId: user.id, accountId: account?.id ?? null, noteClientId: (note as any).client_id ?? null, liens })) {
+      return new Response('Interdit', { status: 403 });
+    }
   }
 
   const signe = await construireBlSigne(id);

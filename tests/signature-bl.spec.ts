@@ -127,7 +127,7 @@ test.describe('Contrôles de code : accès et preuve non modifiable', () => {
     expect(lib).not.toMatch(/\.update\(|\.upsert\(/);
     expect(lib).not.toMatch(/from\('bl_signatures'\)\s*\.(delete|update|upsert)\(/);   // jamais sur les signatures
     expect(lib.match(/\.delete\(\)/g)).toHaveLength(1);                                // seul retrait : les lignes delivery_notes d'un lot raté…
-    expect(lib).toMatch(/from\('delivery_notes'\)\.delete\(\)\.in\('delivery_id'/);    // …par numéro de BL, avant tout e-mail
+    expect(lib).toMatch(/from\('delivery_notes'\)\.delete\(\)\.eq\('id', id\)/);        // …par identifiant, et seulement un BL neuf non signé du lot, avant tout e-mail
     const maj = annuler.slice(annuler.indexOf('.update('), annuler.indexOf('.update(') + 200);
     expect(maj).toMatch(/annulee_le.*annulee_par.*annulation_motif/s);
     expect(maj).not.toMatch(/signature_data|signataire_nom|signed_by|signed_at/);
@@ -154,14 +154,17 @@ test.describe('Contrôles de code : accès et preuve non modifiable', () => {
   });
   test('le client ne peut qu\'obtenir SON bon signé en lecture ; aucune route de signature côté client', () => {
     expect(signe).toMatch(/isClientRole\(user\)/);
-    expect(signe).toMatch(/client_id !== account\.id/);
+    expect(signe).toMatch(/clientPeutConsulterBl\(/);   // règle commune : toutes les commandes du BL doivent être celles du compte (voir bl-commande.spec.ts)
     expect(signe).not.toMatch(/\.insert\(|\.update\(/);
     const f = execSync('git ls-files --others --cached "src/pages/**/*.ts" "src/pages/**/*.astro"', { encoding: 'utf8' }).split('\n').filter(Boolean);
     const clientSigne = f.filter(p => !p.includes('/admin/') && /sign/i.test(p));
     expect(clientSigne).toEqual(['src/pages/api/delivery-notes/[id]/signe.ts']);
   });
-  test('le BL non signé reste servi par la route existante, inchangée', () => {
-    expect(execSync('git diff --name-only', { encoding: 'utf8' })).not.toContain('delivery-notes/[id]/download.ts');
+  test('le BL non signé reste téléchargeable par la même route : archive figée, mêmes droits, aucune écriture', () => {
+    const dl = lire('src/pages/api/delivery-notes/[id]/download.ts');
+    expect(dl).toMatch(/lireBlOriginal\(id\)/);
+    expect(dl).toMatch(/clientPeutConsulterBl\(/);
+    expect(dl).not.toMatch(/\.insert\(|\.update\(|\.delete\(|rpc\(/);
   });
   test('enregistrement immédiat sans réussite simulée : « enregistrée » n\'est affiché qu\'après la réponse ok du serveur', () => {
     const js = lire('public/js/signer-bl.js');
