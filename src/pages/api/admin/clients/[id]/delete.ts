@@ -70,6 +70,14 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
 
   const orderIds = [...new Set([...(ordersByEmail ?? []), ...(ordersByUser ?? [])].map(o => o.id))];
 
+  // Une commande rattachée à un bon de livraison ne se supprime pas : contrôle AVANT toute suppression.
+  if (orderIds.length > 0) {
+    const { data: blLies } = await supabaseAdmin.from('delivery_note_orders').select('delivery_note_id').in('order_id', orderIds).limit(1);
+    if (blLies && blLies.length > 0) {
+      return fail('bl_commande', 'Une commande de ce client est rattachée à un bon de livraison : suppression impossible. Rien n\'a été supprimé.');
+    }
+  }
+
   // CA/margin impact for the audit trail. Archivage administratif : le stock
   // ne bouge jamais ici, y compris pour les commandes livrées — la
   // marchandise est physiquement chez le client, pas de retour réel.

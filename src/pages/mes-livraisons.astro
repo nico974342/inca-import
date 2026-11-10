@@ -6,7 +6,8 @@ import { supabaseAdmin, createAuthClient } from '../lib/supabase';
 import { findClientByEmail } from '../lib/clients';
 import { formatDateReunion } from '../lib/datetime';
 import { isClientRole } from '../lib/roles';
-import { fetchSignaturesActives, etatDuBl } from '../lib/blSignatures';
+import { fetchSignaturesActives, etatDuBl, fetchLiensBl } from '../lib/blSignatures';
+import { clientPeutConsulterBl } from '../lib/blAcces';
 
 const supabase = createAuthClient(Astro.request, Astro.cookies);
 const { data: { user } } = await supabase.auth.getUser();
@@ -17,13 +18,23 @@ if (!user || !isClientRole(user)) {
 
 const clientAccount = await findClientByEmail<{ id: string }>(user.email, 'id');
 
-const { data: notes } = clientAccount
-  ? await supabaseAdmin
-      .from('delivery_notes')
-      .select('id, delivery_id, pdv_name, created_at')
-      .eq('client_id', clientAccount.id)
-      .order('created_at', { ascending: false })
-  : { data: [] as { id: string; delivery_id: string; pdv_name: string; created_at: string }[] };
+// BL candidats : rattachés à la fiche client (historique) OU à une commande du compte (identifiant de compte). Chacun est ensuite
+// vérifié avec la règle commune (lib/blAcces.ts) : un BL qui touche la commande d'un autre compte n'apparaît jamais.
+type NoteClient = { id: string; delivery_id: string; pdv_name: string; created_at: string; client_id: string | null };
+const parFiche: NoteClient[] = clientAccount
+  ? ((await supabaseAdmin.from('delivery_notes').select('id, delivery_id, pdv_name, created_at, client_id').eq('client_id', clientAccount.id)).data ?? []) as NoteClient[]
+  : [];
+const { data: liensCompte } = await supabaseAdmin
+  .from('delivery_note_orders').select('delivery_note_id, orders!inner(user_id)').eq('orders.user_id', user.id);
+const idsViaCommandes = [...new Set((liensCompte ?? []).map((l: any) => l.delivery_note_id as string))].filter(i => !parFiche.some(n => n.id === i));
+const parCommandes: NoteClient[] = idsViaCommandes.length
+  ? ((await supabaseAdmin.from('delivery_notes').select('id, delivery_id, pdv_name, created_at, client_id').in('id', idsViaCommandes)).data ?? []) as NoteClient[]
+  : [];
+const candidats = [...parFiche, ...parCommandes];
+const liensParNote = await fetchLiensBl(candidats.map(n => n.id));
+const notes = candidats
+  .filter(n => clientPeutConsulterBl({ userId: user.id, accountId: clientAccount?.id ?? null, noteClientId: n.client_id, liens: liensParNote.get(n.id) ?? [] }))
+  .sort((a, b) => b.created_at.localeCompare(a.created_at));
 
 // Le client ne voit que le résultat : bon signé disponible quand les deux signatures sont recueillies.
 const signaturesParBl = await fetchSignaturesActives((notes ?? []).map(n => n.id));

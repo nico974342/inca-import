@@ -14,6 +14,13 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
   const { id } = params;
   if (!id) return new Response('Non trouvé', { status: 404 });
 
+  // Une commande rattachée à un bon de livraison (preuve de livraison) ne se supprime pas. Contrôle AVANT toute suppression,
+  // pour ne jamais laisser une suppression à moitié faite (la base le refuse aussi : clé étrangère RESTRICT).
+  const { data: blLies } = await supabaseAdmin.from('delivery_note_orders').select('delivery_note_id').eq('order_id', id).limit(1);
+  if (blLies && blLies.length > 0) {
+    return Response.redirect(new URL('/admin/commandes?edit_error=bl_rattache', request.url).toString(), 303);
+  }
+
   const { data: order } = await supabaseAdmin.from('orders').select('nom, societe, status').eq('id', id).single();
 
   const { data: items } = await supabaseAdmin

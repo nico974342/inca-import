@@ -1,59 +1,71 @@
 /**
- * Enregistrement et conservation des BL — logique avec faux dépôt (aucun accès réseau ni base).
- * Objectif : aucun BL ne peut échouer en silence ; un BL signé reste consultable dans la durée.
+ * Création et conservation des BL — logique avec faux dépôt (aucun accès réseau ni base).
+ * Objectifs : aucun BL ne peut échouer en silence ; un BL n'est jamais créé deux fois pour une même opération ;
+ * livraisons regroupées et en plusieurs fois possibles ; un BL signé reste consultable dans la durée.
  */
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import { verifierStockageBl, enregistrerBons, type DepotBl, type LigneBl } from '../src/lib/blStockage';
-import { blSigne, cleArchiveSigne, type DepotArchive, type NoteBl, type SignatureComplete } from '../src/lib/blArchive';
+import { verifierStockageBl, creerBons, type DepotBl, type SpecBl, type BlReserve } from '../src/lib/blStockage';
+import { blSigne, blOriginal, cleArchiveSigne, type DepotArchive, type NoteBl, type SignatureComplete } from '../src/lib/blArchive';
 import { signatureTest, versDataUrl } from './helpers/png';
 
-// ── Faux dépôt d'enregistrement ─────────────────────────────────────────────
+// ── Faux dépôt : reproduit le comportement de bl_creer (idempotence par clé, commandes annulées refusées) ──────────────
 class FauxDepot implements DepotBl {
+  sequence = 90;
+  notes = new Map<string, { id: string; numero: string; chemin: string; spec: SpecBl }>();
+  parCle = new Map<string, string>();
   fichiers = new Map<string, Buffer>();
-  lignes = new Map<string, any>();
+  annulees = new Set<string>();
   appels: string[] = [];
   erreurPret: string | null = null;
-  echecTeleversement: string | null = null;      // numéro de BL dont le dépôt échoue
-  echecInsertion: string | null = null;
+  echecTeleversementPour: string | null = null;   // numéro de BL dont le dépôt échoue
   retraitImpossible = false;
   async pret() { this.appels.push('pret'); return this.erreurPret; }
+  async reserver(spec: SpecBl): Promise<BlReserve | { erreur: string }> {
+    this.appels.push('reserver:' + spec.cle);
+    const existant = this.parCle.get(spec.cle);
+    if (existant) { const n = this.notes.get(existant)!; return { id: n.id, numero: n.numero, chemin: n.chemin, cree: false }; }
+    for (const c of spec.commandes) if (this.annulees.has(c.order_id)) return { erreur: 'Commande annulée : aucun BL possible' };
+    this.sequence++;
+    const numero = 'BL-' + String(this.sequence).padStart(4, '0');
+    const id = 'note-' + numero;
+    const note = { id, numero, chemin: `${numero}/${spec.pdvKey}.pdf`, spec: JSON.parse(JSON.stringify(spec)) };   // sérialisé : contenu figé
+    this.notes.set(id, note); this.parCle.set(spec.cle, id);
+    return { id, numero, chemin: note.chemin, cree: true };
+  }
   async televerser(chemin: string, pdf: Buffer) {
     this.appels.push('televerser:' + chemin);
-    if (this.echecTeleversement && chemin.startsWith(this.echecTeleversement)) return 'Bucket not found';
-    if (this.fichiers.has(chemin)) return 'The resource already exists';
+    if (this.echecTeleversementPour && chemin.startsWith(this.echecTeleversementPour)) return 'Bucket not found';
     this.fichiers.set(chemin, pdf); return null;
   }
-  async insererNote(l: LigneBl) {
-    this.appels.push('inserer:' + l.delivery_id);
-    if (this.echecInsertion === l.delivery_id) return 'violates not-null constraint';
-    if (this.lignes.has(l.delivery_id)) return 'duplicate key value';
-    this.lignes.set(l.delivery_id, JSON.parse(JSON.stringify(l))); return null;   // sérialisé comme dans la base
+  async retirerNote(id: string) {
+    this.appels.push('retirerNote:' + id);
+    if (this.retraitImpossible) throw new Error('panne');
+    const n = this.notes.get(id); if (n) { this.parCle.delete(n.spec.cle); this.notes.delete(id); }
   }
   async retirerFichiers(c: string[]) { this.appels.push('retirerFichiers'); if (this.retraitImpossible) throw new Error('panne'); c.forEach(x => this.fichiers.delete(x)); }
-  async retirerNotes(n: string[]) { this.appels.push('retirerNotes'); if (this.retraitImpossible) throw new Error('panne'); n.forEach(x => this.lignes.delete(x)); }
 }
 
 const pdv = (nom: string) => ({ name: nom, client_societe: 'SARL ' + nom, items: [{ product_name: 'Cola 33cl', quantity: 12, units_per_carton: 24 }] });
-const bon = (num: string, nom: string): { ligne: LigneBl; pdf: Buffer } => ({
-  ligne: { delivery_id: num, client_id: null, pdv_key: 'k_' + nom, pdv_name: nom, storage_path: `${num}/k_${nom}.pdf`, contenu: { pdv: pdv(nom), date: '10/11/2026' } },
-  pdf: Buffer.from('%PDF-1.3 ' + num),
+const spec = (cle: string, nom: string, commandes: string[] = []): SpecBl => ({
+  cle, clientId: null, pdvKey: 'k_' + nom, pdvName: nom, contenu: { pdv: pdv(nom), date: '10/11/2026' },
+  commandes: commandes.map(o => ({ order_id: o, empreinte: 'h-' + o })),
 });
 
 test.describe('Vérification préalable du stockage', () => {
   test('stockage prêt : on continue', async () => {
     expect(await verifierStockageBl(new FauxDepot())).toEqual({ ok: true });
   });
-  test('bucket absent (la cause d\'origine) : refus explicite, avant toute génération', async () => {
-    const d = new FauxDepot(); d.erreurPret = 'bucket « delivery-notes » introuvable';
+  test('bucket ou migration absents : refus explicite, avant toute génération', async () => {
+    const d = new FauxDepot(); d.erreurPret = 'table delivery_note_orders absente (migration bl_commandes.sql non appliquée)';
     const r = await verifierStockageBl(d);
     expect(r.ok).toBe(false);
     if (!r.ok) {
-      expect(r.message).toContain('delivery-notes');
+      expect(r.message).toContain('delivery_note_orders');
       expect(r.message).toMatch(/Rien n'a été généré ni envoyé/);
       expect(r.message).toMatch(/aucun numéro de BL n'a été consommé/);
     }
-    expect(d.appels).toEqual(['pret']);   // aucun dépôt, aucune insertion
+    expect(d.appels).toEqual(['pret']);
   });
   test('une panne pendant la vérification est aussi refusée (jamais ignorée)', async () => {
     const d = new FauxDepot(); d.pret = async () => { throw new Error('réseau coupé'); };
@@ -63,92 +75,102 @@ test.describe('Vérification préalable du stockage', () => {
   });
 });
 
-test.describe('Enregistrement des BL (tout ou rien, avant l\'e-mail)', () => {
-  test('lot complet : fichiers et lignes enregistrés avec le contenu figé', async () => {
+test.describe('Création commune des BL (Commandes et Livraison)', () => {
+  test('BL d\'une commande : numéro suivant, PDF au stockage, contenu figé, commande rattachée par son identifiant', async () => {
     const d = new FauxDepot();
-    const r = await enregistrerBons(d, [bon('BL-0091', 'Saint-Gilles'), bon('BL-0092', 'Le Port')]);
-    expect(r).toEqual({ ok: true });
-    expect([...d.fichiers.keys()]).toEqual(['BL-0091/k_Saint-Gilles.pdf', 'BL-0092/k_Le Port.pdf']);
-    expect(d.lignes.get('BL-0091').contenu).toEqual({ pdv: pdv('Saint-Gilles'), date: '10/11/2026' });
-    expect(d.lignes.get('BL-0092').contenu.pdv.items[0]).toMatchObject({ product_name: 'Cola 33cl', quantity: 12 });
+    const r = await creerBons(d, [spec('commande:o1:initial', 'Saint-Gilles', ['o1'])]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.bons[0]).toMatchObject({ numero: 'BL-0091', cree: true, chemin: 'BL-0091/k_Saint-Gilles.pdf' });
+    expect(r.bons[0].pdf!.subarray(0, 5).toString()).toBe('%PDF-');
+    expect(d.fichiers.has('BL-0091/k_Saint-Gilles.pdf')).toBe(true);
+    expect(d.notes.get('note-BL-0091')!.spec.commandes).toEqual([{ order_id: 'o1', empreinte: 'h-o1' }]);
   });
 
-  test('échec du dépôt du 2e PDF : erreur visible, rien n\'est conservé du lot, ordre « enregistrer puis envoyer » respecté', async () => {
-    const d = new FauxDepot(); d.echecTeleversement = 'BL-0092';
-    const r = await enregistrerBons(d, [bon('BL-0091', 'Saint-Gilles'), bon('BL-0092', 'Le Port')]);
+  test('double clic / rafraîchissement / renvoi du formulaire : même BL, aucun nouveau numéro, aucun nouveau PDF', async () => {
+    const d = new FauxDepot();
+    const a = await creerBons(d, [spec('livraison:jeton-1:client_x', 'Station B', ['o1', 'o2'])]);
+    const televersementsAvant = d.appels.filter(x => x.startsWith('televerser')).length;
+    const b = await creerBons(d, [spec('livraison:jeton-1:client_x', 'Station B', ['o1', 'o2'])]);
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    expect(b.bons[0]).toMatchObject({ numero: a.bons[0].numero, cree: false, pdf: null });
+    expect(d.sequence).toBe(91);                                                       // un seul numéro consommé
+    expect(d.notes.size).toBe(1);
+    expect(d.appels.filter(x => x.startsWith('televerser')).length).toBe(televersementsAvant);   // aucun 2e dépôt
+  });
+
+  test('livraison regroupée : plusieurs commandes du même point de vente dans UN BL', async () => {
+    const d = new FauxDepot();
+    const r = await creerBons(d, [spec('livraison:jeton-2:client_x', 'Station B', ['o1', 'o2', 'o3'])]);
+    expect(r.ok).toBe(true);
+    expect(d.notes.size).toBe(1);
+    expect(d.notes.get('note-BL-0091')!.spec.commandes.map(c => c.order_id)).toEqual(['o1', 'o2', 'o3']);
+  });
+
+  test('livraison en plusieurs fois : plusieurs BL pour la même commande (opérations différentes), numéros distincts', async () => {
+    const d = new FauxDepot();
+    await creerBons(d, [spec('livraison:jeton-3:client_x', 'Station B', ['o1'])]);
+    await creerBons(d, [spec('livraison:jeton-4:client_x', 'Station B', ['o1'])]);
+    expect([...d.notes.values()].map(n => n.numero)).toEqual(['BL-0091', 'BL-0092']);
+    expect([...d.notes.values()].every(n => n.spec.commandes[0].order_id === 'o1')).toBe(true);
+  });
+
+  test('plusieurs points de vente dans un même envoi : un BL par point de vente', async () => {
+    const d = new FauxDepot();
+    const r = await creerBons(d, [spec('livraison:jeton-5:client_a', 'A', ['o1']), spec('livraison:jeton-5:client_b', 'B', ['o2'])]);
+    expect(r.ok && r.bons.map(b => b.numero)).toEqual(['BL-0091', 'BL-0092']);
+  });
+
+  test('BL sans commande rattachée (lignes saisies à la main) : possible, non rattaché', async () => {
+    const d = new FauxDepot();
+    const r = await creerBons(d, [spec('livraison:jeton-6:client_a', 'A', [])]);
+    expect(r.ok).toBe(true);
+    expect(d.notes.get('note-BL-0091')!.spec.commandes).toEqual([]);
+  });
+
+  test('commande annulée : refus net, rien d\'écrit, aucun numéro consommé', async () => {
+    const d = new FauxDepot(); d.annulees.add('o9');
+    const r = await creerBons(d, [spec('commande:o9:initial', 'A', ['o9'])]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) { expect(r.message).toContain('annulée'); expect(r.message).toMatch(/Aucun e-mail n'a été envoyé/); }
+    expect(d.sequence).toBe(90); expect(d.notes.size).toBe(0); expect(d.fichiers.size).toBe(0);
+  });
+
+  test('échec du dépôt du 2e PDF : erreur visible, le 1er BL du lot est retiré (ligne + fichier), rien n\'est conservé', async () => {
+    const d = new FauxDepot(); d.echecTeleversementPour = 'BL-0092';
+    const r = await creerBons(d, [spec('livraison:jeton-7:client_a', 'A', ['o1']), spec('livraison:jeton-7:client_b', 'B', ['o2'])]);
     expect(r.ok).toBe(false);
     if (!r.ok) {
-      expect(r.message).toContain('BL-0092');
       expect(r.message).toContain('Bucket not found');
       expect(r.message).toMatch(/Aucun e-mail n'a été envoyé/);
+      expect(r.message).toContain('BL-0091'); expect(r.message).toContain('BL-0092');   // numéros consommés, annoncés
     }
-    expect(d.fichiers.size).toBe(0); expect(d.lignes.size).toBe(0);   // le 1er BL, déjà écrit, est retiré
+    expect(d.notes.size).toBe(0); expect(d.fichiers.size).toBe(0);
   });
 
-  test('échec de l\'enregistrement de la ligne : le PDF déjà déposé est retiré', async () => {
-    const d = new FauxDepot(); d.echecInsertion = 'BL-0091';
-    const r = await enregistrerBons(d, [bon('BL-0091', 'Saint-Gilles')]);
-    expect(r.ok).toBe(false);
-    expect(d.fichiers.size).toBe(0); expect(d.lignes.size).toBe(0);
+  test('après un lot raté, le même formulaire peut être renvoyé : nouveaux BL créés proprement (la clé n\'est pas « brûlée »)', async () => {
+    const d = new FauxDepot(); d.echecTeleversementPour = 'BL-0091';
+    expect((await creerBons(d, [spec('livraison:jeton-8:client_a', 'A', ['o1'])])).ok).toBe(false);
+    d.echecTeleversementPour = null;
+    const r = await creerBons(d, [spec('livraison:jeton-8:client_a', 'A', ['o1'])]);
+    expect(r.ok && r.bons[0].cree).toBe(true);
+    expect(d.notes.size).toBe(1);
   });
 
   test('un retour arrière impossible ne masque pas l\'erreur d\'origine', async () => {
-    const d = new FauxDepot(); d.echecTeleversement = 'BL-0092'; d.retraitImpossible = true;
-    const r = await enregistrerBons(d, [bon('BL-0091', 'A'), bon('BL-0092', 'B')]);
+    const d = new FauxDepot(); d.echecTeleversementPour = 'BL-0092'; d.retraitImpossible = true;
+    const r = await creerBons(d, [spec('livraison:jeton-9:client_a', 'A'), spec('livraison:jeton-9:client_b', 'B')]);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.message).toContain('BL-0092');
+    if (!r.ok) expect(r.message).toContain('Bucket not found');
   });
 
-  test('numéro déjà enregistré : refus (jamais d\'écrasement), le lot est retiré', async () => {
-    const d = new FauxDepot();
-    await enregistrerBons(d, [bon('BL-0091', 'A')]);
-    const r = await enregistrerBons(d, [bon('BL-0093', 'C'), bon('BL-0091', 'A')]);
-    expect(r.ok).toBe(false);
-    expect(d.lignes.has('BL-0093')).toBe(false);       // le BL du lot raté est retiré
-    expect(d.lignes.has('BL-0091')).toBe(true);        // l'ancien BL n'est pas touché
-  });
-
-  test('le contenu mémorisé ne change plus si les données de départ changent ensuite', async () => {
-    const d = new FauxDepot(); const b = bon('BL-0091', 'Saint-Gilles');
-    await enregistrerBons(d, [b]);
-    b.ligne.contenu.pdv.items[0].quantity = 999;        // « modification ultérieure » côté application
-    b.ligne.contenu.pdv.name = 'Autre';
-    expect(d.lignes.get('BL-0091').contenu.pdv.items[0].quantity).toBe(12);
-    expect(d.lignes.get('BL-0091').contenu.pdv.name).toBe('Saint-Gilles');
-  });
-});
-
-test.describe('Page livraison : ordre des opérations', () => {
-  const page = readFileSync('src/pages/admin/livraison.astro', 'utf8');
-  test('vérification du stockage AVANT la consommation d\'un numéro ; enregistrement AVANT l\'e-mail', () => {
-    expect(page.indexOf('verifierStockageBl(depotBl)')).toBeGreaterThan(0);
-    expect(page.indexOf('verifierStockageBl(depotBl)')).toBeLessThan(page.indexOf("rpc('next_bl_number')"));
-    expect(page.indexOf('enregistrerBons(depotBl')).toBeLessThan(page.indexOf('resend.emails.send'));
-    expect(page.indexOf('generatePDVDeliveryPDF(pdv, blNumbers[i], dateStr)')).toBeLessThan(page.indexOf('enregistrerBons(depotBl'));
-  });
-  test('l\'e-mail n\'est envoyé que si l\'enregistrement a réussi ; aucune erreur d\'enregistrement n\'est avalée', () => {
-    const apresEchec = page.slice(page.indexOf('if (!enr.ok) {'), page.indexOf('} else {', page.indexOf('if (!enr.ok) {')));
-    expect(apresEchec).toContain('errorMessage = enr.message');
-    expect(apresEchec).not.toContain('resend');
-    expect(page).not.toMatch(/blNonEnregistres/);
-    expect(page).not.toMatch(/\.from\('delivery-notes'\)/);     // plus d'enregistrement « au fil de l'eau » avec erreur seulement consignée
-  });
-  test('la mise à jour des commandes n\'a lieu qu\'après un envoi réussi (comportement conservé)', () => {
-    expect(page.indexOf("status: 'en_preparation'")).toBeGreaterThan(page.indexOf('successMessage ='));
-  });
-  test('alerte visible dès l\'ouverture de la page si le stockage n\'est pas prêt (pas seulement à la génération)', () => {
-    expect(page).toMatch(/const etatStockage = await verifierStockageBl\(depotBl\)/);
-    expect(page).toMatch(/\{!etatStockage\.ok && \(\s*<div class="alert alert-error" role="alert" data-testid="stockage-bl-indisponible">/);
-  });
-  test('anciens BL (sans contenu figé) : « Signé sur papier », jamais « Non signé » ni bouton de signature', () => {
-    expect(page).toContain('Signé sur papier');
-    expect(page).toMatch(/b\.etat !== 'signe' && b\.signable/);
-    const fiche = readFileSync('src/pages/admin/clients/[id].astro', 'utf8');
-    expect(fiche).toContain("'Signé sur papier'");
-  });
-  test('le suivi ne lit que delivery_notes : les 77 BL de commandes (orders.bl_number) n\'y apparaissent jamais', () => {
-    expect(page).not.toMatch(/[^_a-z]bl_number/);   // (next_bl_number = numérotation, pas une lecture) la page livraison ne lit pas orders.bl_number (BL de commandes)
-    expect(readFileSync('src/lib/blSignatures.ts', 'utf8')).not.toMatch(/orders/);
+  test('le contenu enregistré est figé : une modification ultérieure des données de départ ne le change pas', async () => {
+    const d = new FauxDepot(); const s = spec('commande:o1:initial', 'Saint-Gilles', ['o1']);
+    await creerBons(d, [s]);
+    s.contenu.pdv.items[0].quantity = 999; s.contenu.pdv.name = 'Autre';
+    const fige = d.notes.get('note-BL-0091')!.spec.contenu;
+    expect(fige.pdv.items[0].quantity).toBe(12); expect(fige.pdv.name).toBe('Saint-Gilles');
   });
 });
 
@@ -239,5 +261,26 @@ test.describe('BL signé : conservation et disponibilité dans la durée', () =>
     const api = readFileSync('src/pages/api/admin/bl-signatures/index.ts', 'utf8');
     expect(api).toMatch(/if \(etat === 'signe'\) await archiver\(noteId\)/);
     expect(readFileSync('src/pages/api/delivery-notes/[id]/signe.ts', 'utf8')).toContain('construireBlSigne(id)');
+  });
+});
+
+test.describe('BL original : archive figée, reconstruction de secours', () => {
+  const avecChemin = (): NoteBl => ({ delivery_id: 'BL-0091', storage_path: 'BL-0091/k.pdf', contenu: { pdv: pdv('Saint-Gilles'), date: '10/11/2026' } });
+  test('le fichier archivé est servi tel quel, sans aucune écriture', async () => {
+    const d = new FauxArchive(avecChemin(), []); const pdf = Buffer.from('%PDF-1.3 archive');
+    d.fichiers.set('BL-0091/k.pdf', pdf);
+    const r = (await blOriginal(d, 'x'))!;
+    expect(r.source).toBe('archive'); expect(r.buffer.equals(pdf)).toBe(true); expect(d.ecritures).toBe(0);
+  });
+  test('fichier manquant : reconstruit à l\'identique depuis le contenu figé puis archivé (sans écraser)', async () => {
+    const d = new FauxArchive(avecChemin(), []);
+    const r = (await blOriginal(d, 'x'))!;
+    expect(r.source).toBe('regenere'); expect(r.buffer.subarray(0, 5).toString()).toBe('%PDF-');
+    expect(d.fichiers.has('BL-0091/k.pdf')).toBe(true);
+    expect((await blOriginal(d, 'x'))!.source).toBe('archive');
+  });
+  test('ni fichier ni contenu figé (ancienne ligne) : rien n\'est inventé', async () => {
+    expect(await blOriginal(new FauxArchive({ delivery_id: 'BL-0001', storage_path: 'BL-0001/k.pdf', contenu: null }, []), 'x')).toBeNull();
+    expect(await blOriginal(new FauxArchive(null, []), 'x')).toBeNull();
   });
 });

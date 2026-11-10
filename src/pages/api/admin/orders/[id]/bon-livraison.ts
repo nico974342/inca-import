@@ -4,6 +4,8 @@ import { generatePDVDeliveryPDF } from '../../../../../lib/pdf';
 import { findClientByEmail } from '../../../../../lib/clients';
 import { formatDateReunion } from '../../../../../lib/datetime';
 import { isStaff } from '../../../../../lib/roles';
+import { fetchBlsDesCommandes, lireBlOriginal } from '../../../../../lib/blSignatures';
+import { estUuid } from '../../../../../lib/blCommande';
 
 export const GET: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -14,7 +16,24 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
   }
 
   const { id } = params;
-  if (!id) return new Response('Non trouvé', { status: 404 });
+  if (!id || !estUuid(id)) return new Response('Non trouvé', { status: 404 });
+
+  // BL enregistré pour cette commande (système commun Commandes / Livraison) : on sert l'archive FIGÉE, jamais régénérée
+  // d'après la commande, et sans aucune écriture (ni numéro, ni e-mail).
+  const enregistres = (await fetchBlsDesCommandes([id])).get(id) ?? [];
+  if (enregistres.length > 0) {
+    const bl = await lireBlOriginal(enregistres[0].id);
+    if (bl) {
+      return new Response(bl.buffer, {
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `inline; filename="${bl.blNumber}.pdf"`,
+          'Content-Length': String(bl.buffer.length),
+          'Cache-Control': 'private, no-store',
+        },
+      });
+    }
+  }
 
   const { data: order } = await supabaseAdmin
     .from('orders')
@@ -29,12 +48,12 @@ export const GET: APIRoute = async ({ params, request, cookies }) => {
     .select('product_name, quantity, unit, price_ht_snapshot, tva_rate_snapshot, products(sku, units_per_carton)')
     .eq('order_id', id);
 
-  // Reuse existing BL number or generate and persist a new one
-  let blNumber = (order as any).bl_number as string | null;
+  // ANCIEN BL (numéro porté par la commande, signé sur papier et archivé dans Pennylane) : reconstruit à la volée comme avant,
+  // sans aucune écriture. Une commande SANS BL n'en reçoit plus un par simple lien (GET) : la création est une action
+  // explicite (« Générer le BL », POST /api/admin/orders/[id]/bl) — un clic, un rafraîchissement ou un double clic ne consomme jamais de numéro.
+  const blNumber = (order as any).bl_number as string | null;
   if (!blNumber) {
-    const { data: newBl } = await supabaseAdmin.rpc('next_bl_number');
-    blNumber = newBl as string;
-    await supabaseAdmin.from('orders').update({ bl_number: blNumber }).eq('id', id);
+    return new Response(null, { status: 303, headers: { Location: `/admin/commandes?bl_err=${encodeURIComponent("Aucun BL établi pour cette commande : utilisez « Générer le BL » sur la fiche commande.")}&ouvrir=${id}#cmd-${id}` } });
   }
 
   // Robust client lookup: email (normalized, case-insensitive) → nom → societe
