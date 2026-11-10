@@ -12,7 +12,10 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
 // Environnement minimal qui ressemble à Supabase : rôles, schéma storage, table delivery_notes existante.
 const ENV = `
   CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS;
-  CREATE SCHEMA storage; CREATE TABLE storage.buckets (id text PRIMARY KEY, name text NOT NULL, public boolean DEFAULT false);
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;   -- comme Supabase : droits par défaut sur toute nouvelle table
+  CREATE SCHEMA storage; CREATE TABLE storage.buckets (id text PRIMARY KEY, name text NOT NULL, public boolean DEFAULT false, file_size_limit bigint, allowed_mime_types text[]);
+  CREATE TABLE admin_audit_logs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), admin_email text NOT NULL, action text NOT NULL, target_type text,
+    target_id text, target_label text, details jsonb, created_at timestamptz NOT NULL DEFAULT now());
   CREATE TABLE delivery_notes (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), delivery_id text NOT NULL, client_id uuid,
     pdv_key text NOT NULL, pdv_name text NOT NULL, storage_path text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
   ALTER TABLE delivery_notes ENABLE ROW LEVEL SECURITY;

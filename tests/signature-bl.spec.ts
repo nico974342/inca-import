@@ -132,10 +132,14 @@ test.describe('Contrôles de code : accès et preuve non modifiable', () => {
     expect(annuler).toMatch(/isAdmin\(user\)/);
     expect(annuler.indexOf('isAdmin(user)')).toBeLessThan(annuler.indexOf('.update('));
     expect(annuler).toMatch(/motif\.length < 3/);
-    expect(annuler).toContain("action: 'bl.signature_annulee'");
+    // la trace est écrite par la base (trigger), pas par l'application : voir bl-signatures-audit.spec.ts
+    const sql = readFileSync('supabase/migrations/bl_signatures.sql', 'utf8');
+    expect(sql).toContain("'bl.signature_annulee'");
+    expect(annuler).not.toMatch(/logAdminAction/);
   });
   test('signature : journalisée, signataire et date jamais pris dans la requête du navigateur', () => {
-    expect(index).toContain("action: 'bl.signature'");
+    expect(readFileSync('supabase/migrations/bl_signatures.sql', 'utf8')).toMatch(/AFTER INSERT OR UPDATE ON bl_signatures[\s\S]*bl_signatures_journal/);
+    expect(index).not.toMatch(/logAdminAction/);   // une seule trace, écrite par la base dans la même transaction
     expect(index).toMatch(/signed_by: user\.email/);
     expect(index).not.toMatch(/corps\??\.(signed_by|signed_at|annulee)/);
     expect(index).toMatch(/validerImageSignature\(corps\?\.signature_data\)/);

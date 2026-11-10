@@ -172,7 +172,7 @@ test.describe.serial('Migration products_nouveau.sql (base locale)', () => {
   });
 
   test('statique : migration additive (aucune suppression, aucune écriture de stock ou de prix, aucune date fictive)', () => {
-    const code = SQL.split('\n').map(l => l.replace(/--.*$/, '')).join('\n');
+    const code = SQL.split(/\r?\n/).map(l => l.replace(/--.*$/, '')).join('\n');
     expect(code).not.toMatch(/\b(DROP TABLE|DELETE FROM|TRUNCATE|UPDATE\s+products)\b/i);
     expect(code).not.toMatch(/\bINSERT\s+INTO\b/i);
     expect(code).not.toMatch(/NEW\.(stock_quantity|price_ht)\s*:=/);

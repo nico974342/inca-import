@@ -1,6 +1,5 @@
 import type { APIRoute } from 'astro';
 import { supabaseAdmin } from '../../../../../lib/supabase';
-import { logAdminAction } from '../../../../../lib/audit';
 import { isAdmin } from '../../../../../lib/roles';
 
 // Annulation EXPLICITE d'une signature (admin uniquement) : motif obligatoire, signature d'origine conservée en base,
@@ -34,14 +33,6 @@ export const POST: APIRoute = async ({ params, request, locals }) => {
     return retour("L'annulation a échoué.", false);
   }
 
-  const bl = (sig as any).delivery_notes;
-  await logAdminAction({
-    adminEmail: user.email,
-    action: 'bl.signature_annulee',
-    targetType: 'bl',
-    targetId: (sig as any).delivery_note_id,
-    targetLabel: bl ? `${bl.delivery_id} — ${bl.pdv_name}` : undefined,
-    details: { role: (sig as any).role, signataire_nom: (sig as any).signataire_nom, signature_id: id, motif },
-  });
+  // Journal : écrit par la base (trigger bl_signatures_journal) dans la même transaction que l'annulation.
   return retour('Signature annulée. Le bon de livraison peut être signé à nouveau.', true);
 };

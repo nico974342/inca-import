@@ -69,7 +69,7 @@ test.describe.serial('Correctifs de sécurité proposés', () => {
   test('rejouable sans erreur', async () => { await db.exec(SQL); });
 
   test('statique : aucune suppression de donnée dans la proposition', () => {
-    const code = SQL.split('\n').map(l => l.replace(/--.*$/, '')).join('\n');
+    const code = SQL.split(/\r?\n/).map(l => l.replace(/--.*$/, '')).join('\n');
     expect(code).not.toMatch(/\b(DROP|DELETE FROM|TRUNCATE|UPDATE)\b/i);
   });
 });

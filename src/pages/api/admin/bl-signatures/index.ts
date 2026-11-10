@@ -1,6 +1,5 @@
 import type { APIRoute } from 'astro';
 import { supabaseAdmin } from '../../../../lib/supabase';
-import { logAdminAction } from '../../../../lib/audit';
 import { fetchSignaturesActives, etatDuBl } from '../../../../lib/blSignatures';
 import { estRoleSignature, validerImageSignature, validerNom, LIBELLE_ROLE } from '../../../../lib/signatureBl';
 
@@ -60,15 +59,8 @@ export const POST: APIRoute = async ({ request, locals }) => {
     return json({ ok: false, erreur: "La signature n'a pas pu être enregistrée. Réessayez." }, 500);
   }
 
-  await logAdminAction({
-    adminEmail: user.email,
-    action: 'bl.signature',
-    targetType: 'bl',
-    targetId: noteId,
-    targetLabel: `${(note as any).delivery_id} — ${(note as any).pdv_name}`,
-    details: { role, signataire_nom: nom.nom, signature_id: (cree as any).id },
-  });
-
+  // Journal : écrit par la base (trigger bl_signatures_journal) dans la même transaction que la signature,
+  // donc impossible d'avoir une signature sans trace dans admin_audit_logs.
   const etat = etatDuBl((await fetchSignaturesActives([noteId])).get(noteId));
   return json({ ok: true, etat, signed_at: (cree as any).signed_at });
 };
