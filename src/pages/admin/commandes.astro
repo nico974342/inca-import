@@ -482,6 +482,7 @@ const ouvrirId = Astro.url.searchParams.get('ouvrir');
                   ancienNumero={(order as any).bl_number ?? null}
                   bls={blsParCommande.get(order.id) ?? []}
                   empreinteActuelle={empreinteCommande(items as any[])}
+                  peutAnnuler={viewerIsAdmin}
                 />
 
                 <div class="invoice-upload-row">

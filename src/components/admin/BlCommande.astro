@@ -6,6 +6,9 @@
  *  - un ou plusieurs BL enregistrés      → pour chacun : BL original, « Faire signer » / « Terminer la signature » / « BL signé (PDF) »,
  *                                           statut, noms et dates des signataires, avertissement si la commande a changé depuis.
  * « Faire signer » ne fait que OUVRIR l'écran de signature : il ne génère aucun document, ne consomme aucun numéro, n'envoie aucun e-mail.
+ * « Annuler une signature » (ADMINISTRATEUR seulement, et seulement s'il existe une signature active) ouvre une fenêtre : on choisit la
+ * signature à annuler (transporteur ou destinataire, DE CE BL uniquement), on saisit un motif obligatoire et on coche une confirmation
+ * explicite. La signature n'est jamais supprimée : elle reste en base avec son auteur, sa date, le motif et l'administrateur.
  */
 import { LIBELLE_ETAT, LIBELLE_ROLE } from '../../lib/signatureBl';
 import { etatDuBl, type BlDeCommande } from '../../lib/blSignatures';
@@ -19,8 +22,12 @@ interface Props {
   bls: BlDeCommande[];
   /** Empreinte actuelle des lignes de la commande (pour détecter une modification après l'émission du BL). */
   empreinteActuelle: string;
+  /** Vrai pour un administrateur : le bouton d'annulation n'existe pas pour les autres rôles (la route le refuse aussi). */
+  peutAnnuler?: boolean;
 }
-const { orderId, status, ancienNumero, bls, empreinteActuelle } = Astro.props;
+const { orderId, status, ancienNumero, bls, empreinteActuelle, peutAnnuler = false } = Astro.props;
+// Action par défaut du formulaire : volontairement sans effet. Chaque bouton d'annulation porte son propre formaction (signature désignée).
+const ACTION_NEUTRE = '/api/admin/bl-signatures/00000000-0000-0000-0000-000000000000/annuler';
 const annulee = status === 'annulee';
 const lignes = bls.map(bl => {
   const etat = etatDuBl(bl.signatures);
@@ -65,11 +72,50 @@ const lignes = bls.map(bl => {
         </p>
       )}
       {modifiee && <p class="blc-alerte" data-testid="bl-modifiee">⚠ Commande modifiée depuis l'émission du BL : le BL reste celui qui a été établi.</p>}
+      {peutAnnuler && bl.signatures.length > 0 && (
+        <div class="blc-annuler">
+          <button type="button" class="btn-accuse blc-annuler-btn" data-ouvre={`blc-dlg-${bl.id}`} data-testid="bl-annuler-ouvrir">Annuler une signature</button>
+          <dialog id={`blc-dlg-${bl.id}`} class="blc-dialogue" aria-labelledby={`blc-dlg-titre-${bl.id}`} data-testid="bl-annuler-dialogue">
+            <form method="post" action={ACTION_NEUTRE} class="blc-dialogue-form">
+              <h4 id={`blc-dlg-titre-${bl.id}`} class="blc-dialogue-titre">Annuler une signature — {bl.numero}</h4>
+              <p class="blc-dialogue-texte">Signatures actuellement valides de ce BL :</p>
+              <ul class="blc-dialogue-liste">
+                {(['transporteur', 'destinataire'] as const).filter(r => parRole[r]).map(r => (
+                  <li><strong>{LIBELLE_ROLE[r]}</strong> : {parRole[r].signataire_nom} — {formatDateTimeReunion(parRole[r].signed_at)}</li>
+                ))}
+              </ul>
+              <p class="blc-dialogue-texte">La signature annulée <strong>n'est pas supprimée</strong> : elle reste conservée avec son auteur, sa date, votre nom et le motif. Le BL pourra ensuite être signé à nouveau.</p>
+              <input type="hidden" name="retour" value={orderId} />
+              <label class="blc-champ">Motif de l'annulation (obligatoire)
+                <textarea name="motif" required minlength="3" maxlength="300" rows="3" placeholder="Ex. : signature faite par la mauvaise personne" data-testid="bl-annuler-motif"></textarea>
+              </label>
+              <label class="blc-confirme">
+                <input type="checkbox" name="confirme" value="oui" required data-testid="bl-annuler-confirme" />
+                <span>Je confirme l'annulation de la signature choisie ci-dessous.</span>
+              </label>
+              <div class="blc-dialogue-actions">
+                <button type="button" class="blc-btn-sec" data-ferme data-testid="bl-annuler-fermer">Ne pas annuler</button>
+                {(['transporteur', 'destinataire'] as const).filter(r => parRole[r]).map(r => (
+                  <button type="submit" class="blc-btn-danger" formaction={`/api/admin/bl-signatures/${parRole[r].id}/annuler`} data-testid={`bl-annuler-${r}`}>Annuler la signature du {LIBELLE_ROLE[r].toLowerCase()}</button>
+                ))}
+              </div>
+            </form>
+          </dialog>
+        </div>
+      )}
     </div>
   ))}
 </div>
 
 <script>
+  // Fenêtre d'annulation d'une signature : ouverture, fermeture (bouton ou clic hors de la fenêtre).
+  document.querySelectorAll<HTMLButtonElement>('button[data-ouvre]').forEach(b => {
+    b.addEventListener('click', () => (document.getElementById(b.dataset.ouvre ?? '') as HTMLDialogElement | null)?.showModal());
+  });
+  document.querySelectorAll<HTMLDialogElement>('dialog.blc-dialogue').forEach(d => {
+    d.querySelector('[data-ferme]')?.addEventListener('click', () => d.close());
+    d.addEventListener('click', e => { if (e.target === d) d.close(); });
+  });
   // Un double clic ne peut pas envoyer deux fois la demande (le serveur est de toute façon idempotent).
   document.querySelectorAll<HTMLFormElement>('form[data-bl-form]').forEach(f => {
     f.addEventListener('submit', e => {
@@ -95,5 +141,22 @@ const lignes = bls.map(bl => {
   .blc-etat--papier { background: oklch(0.95 0.01 250); color: oklch(0.40 0.03 250); border-color: oklch(0.85 0.02 250); }
   .blc-aide { font-size: var(--text-xs); color: var(--color-muted); }
   .blc-signataires { flex-basis: 100%; margin: 0; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); font-size: var(--text-xs); color: var(--color-muted); }
+  .blc-annuler { flex-basis: 100%; }
+  .blc-annuler-btn { cursor: pointer; border-color: oklch(0.55 0.19 25); color: oklch(0.42 0.19 25); background: transparent; }
+  .blc-dialogue { margin: auto; max-height: 92vh; overflow-y: auto; width: min(92vw, 520px); border: 2px solid var(--color-border-strong, #888); border-radius: var(--radius-md); padding: 0; background: var(--color-bg, #fff); color: var(--color-text, inherit); }
+  .blc-dialogue::backdrop { background: rgba(0, 0, 0, 0.45); }
+  .blc-dialogue-form { display: grid; gap: var(--space-3); padding: var(--space-5); }
+  .blc-dialogue-titre { margin: 0; font-size: var(--text-lg, 1.1rem); }
+  .blc-dialogue-texte { margin: 0; font-size: var(--text-sm); color: var(--color-muted); }
+  .blc-dialogue-liste { margin: 0; padding-left: 1.1rem; font-size: var(--text-sm); }
+  .blc-champ { display: grid; gap: var(--space-1); font-size: var(--text-sm); font-weight: 600; }
+  .blc-champ textarea { width: 100%; box-sizing: border-box; padding: 10px 12px; font: inherit; border: 2px solid var(--color-border-strong, #888); border-radius: var(--radius-md); resize: vertical; }
+  .blc-confirme { display: flex; align-items: flex-start; gap: var(--space-2); font-size: var(--text-sm); font-weight: 600; }
+  .blc-confirme input { width: 22px; height: 22px; flex: none; margin-top: 1px; }
+  .blc-dialogue-actions { display: grid; gap: var(--space-2); }
+  .blc-dialogue-actions button { min-height: 48px; padding: 10px 14px; font: inherit; font-weight: 700; border-radius: var(--radius-md); cursor: pointer; border: 2px solid currentColor; }
+  .blc-btn-sec { background: transparent; color: var(--color-text, inherit); }
+  .blc-btn-danger { background: oklch(0.45 0.19 25); color: white; border-color: oklch(0.45 0.19 25) !important; }
+  @media (min-width: 560px) { .blc-dialogue-actions { grid-template-columns: 1fr 1fr; } .blc-btn-sec { grid-column: 1 / -1; } }
   .blc-alerte { flex-basis: 100%; margin: 0; font-size: var(--text-xs); font-weight: 600; color: oklch(0.46 0.14 60); }
 </style>
