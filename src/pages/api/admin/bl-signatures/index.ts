@@ -1,12 +1,18 @@
 import type { APIRoute } from 'astro';
 import { supabaseAdmin } from '../../../../lib/supabase';
-import { fetchSignaturesActives, etatDuBl } from '../../../../lib/blSignatures';
+import { fetchSignaturesActives, etatDuBl, construireBlSigne } from '../../../../lib/blSignatures';
 import { estRoleSignature, validerImageSignature, validerNom, LIBELLE_ROLE } from '../../../../lib/signatureBl';
 
 // Admin ET commercial (le middleware filtre déjà /api/admin sur isStaff). Un client ne peut jamais signer.
 // Enregistre UNE signature ; jamais de modification ni de suppression (voir la migration bl_signatures.sql).
 const json = (corps: unknown, status = 200) =>
   new Response(JSON.stringify(corps), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+
+// Les deux signatures sont là : le BL signé est produit et archivé dans le stockage (conservation durable).
+// Un échec d'archivage n'annule pas la signature (le PDF est reconstructible à l'identique) : il est consigné.
+async function archiver(noteId: string) {
+  try { await construireBlSigne(noteId); } catch (e) { console.error('[bl] archivage du BL signé:', e); }
+}
 
 export const POST: APIRoute = async ({ request, locals }) => {
   const user = (locals as any).user;
@@ -51,6 +57,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
         .from('bl_signatures').select('signature_data, signataire_nom').eq('delivery_note_id', noteId).eq('role', role).is('annulee_le', null).maybeSingle();
       if (existante && (existante as any).signature_data === image.data && (existante as any).signataire_nom === nom.nom) {
         const etat = etatDuBl((await fetchSignaturesActives([noteId])).get(noteId));
+        if (etat === 'signe') await archiver(noteId);
         return json({ ok: true, deja_enregistree: true, etat });
       }
       return json({ ok: false, erreur: `Le ${LIBELLE_ROLE[role].toLowerCase()} a déjà signé ce bon de livraison.` }, 409);
@@ -62,5 +69,6 @@ export const POST: APIRoute = async ({ request, locals }) => {
   // Journal : écrit par la base (trigger bl_signatures_journal) dans la même transaction que la signature,
   // donc impossible d'avoir une signature sans trace dans admin_audit_logs.
   const etat = etatDuBl((await fetchSignaturesActives([noteId])).get(noteId));
+  if (etat === 'signe') await archiver(noteId);
   return json({ ok: true, etat, signed_at: (cree as any).signed_at });
 };

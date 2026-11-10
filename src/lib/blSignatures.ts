@@ -1,7 +1,8 @@
 import { supabaseAdmin } from './supabase';
-import { generatePDVDeliveryPDF, type BlSignaturesPdf, type DeliveryPDV } from './pdf';
 import { formatDateTimeReunion } from './datetime';
-import { etatSignature, ROLES_SIGNATURE, type EtatSignature, type RoleSignature } from './signatureBl';
+import { etatSignature, type EtatSignature, type RoleSignature } from './signatureBl';
+import { blSigne, type BlSigne, type DepotArchive } from './blArchive';
+import { BUCKET_BL, type DepotBl } from './blStockage';
 
 /** Signature SANS l'image (listes, états) : l'image n'est lue que pour afficher ou produire le PDF. */
 export interface SignatureResume {
@@ -15,7 +16,7 @@ export interface SignatureResume {
 }
 
 /** Contenu du BL mémorisé à sa génération (delivery_notes.contenu). */
-export interface ContenuBl { pdv: DeliveryPDV; date: string }
+export type { ContenuBl } from './blStockage';
 
 /** Signatures ACTIVES (non annulées) de plusieurs BL, regroupées par BL. */
 export async function fetchSignaturesActives(noteIds: string[]): Promise<Map<string, SignatureResume[]>> {
@@ -40,31 +41,59 @@ export async function fetchSignaturesActives(noteIds: string[]): Promise<Map<str
 
 export const etatDuBl = (signatures: SignatureResume[] | undefined): EtatSignature => etatSignature(signatures ?? []);
 
-/**
- * PDF du BL avec les deux signatures intégrées, reproduit à l'identique depuis le contenu mémorisé.
- * Renvoie null si le BL n'est pas entièrement signé ou n'a pas de contenu mémorisé. Le PDF non signé stocké n'est jamais modifié.
- */
-export async function construireBlSigne(noteId: string): Promise<{ buffer: Buffer; blNumber: string } | null> {
-  const { data: note } = await supabaseAdmin
-    .from('delivery_notes').select('id, delivery_id, contenu').eq('id', noteId).maybeSingle();
-  const contenu = (note as any)?.contenu as ContenuBl | null | undefined;
-  if (!note || !contenu?.pdv || !contenu.date) return null;
+// ── Branchements Supabase des dépôts (la logique est dans blStockage.ts et blArchive.ts, testée hors ligne) ──
+const dejaPresent = (e: { message?: string; statusCode?: string | number } | null) =>
+  !!e && (String(e.statusCode) === '409' || /already exists|Duplicate/i.test(e.message ?? ''));
 
-  const { data: lignes, error } = await supabaseAdmin
-    .from('bl_signatures')
-    .select('role, signature_data, signataire_nom, signed_at')
-    .eq('delivery_note_id', noteId)
-    .is('annulee_le', null);
-  if (error || !lignes) return null;
+export const depotBl: DepotBl = {
+  async pret() {
+    const { error: eb } = await supabaseAdmin.storage.getBucket(BUCKET_BL);
+    if (eb) return `bucket « ${BUCKET_BL} » introuvable`;
+    const { error: ec } = await supabaseAdmin.from('delivery_notes').select('contenu').limit(1);
+    if (ec) return 'colonne delivery_notes.contenu absente (migration bl_signatures.sql non appliquée)';
+    const { error: es } = await supabaseAdmin.from('bl_signatures').select('id').limit(1);
+    if (es) return 'table bl_signatures absente (migration bl_signatures.sql non appliquée)';
+    return null;
+  },
+  async televerser(chemin, pdf) {
+    const { error } = await supabaseAdmin.storage.from(BUCKET_BL).upload(chemin, pdf, { contentType: 'application/pdf', upsert: false });
+    return error ? error.message : null;
+  },
+  async insererNote(ligne) {
+    const { error } = await supabaseAdmin.from('delivery_notes').insert(ligne);
+    return error ? error.message : null;
+  },
+  async retirerFichiers(chemins) {
+    if (chemins.length) await supabaseAdmin.storage.from(BUCKET_BL).remove(chemins);
+  },
+  async retirerNotes(numeros) {
+    if (numeros.length) await supabaseAdmin.from('delivery_notes').delete().in('delivery_id', numeros);
+  },
+};
 
-  const signatures: BlSignaturesPdf = {};
-  for (const l of lignes as any[]) {
-    if ((ROLES_SIGNATURE as readonly string[]).includes(l.role)) {
-      signatures[l.role as RoleSignature] = { data: l.signature_data, nom: l.signataire_nom, dateLabel: formatDateTimeReunion(l.signed_at) };
-    }
-  }
-  if (!signatures.transporteur || !signatures.destinataire) return null;
+const depotArchive: DepotArchive = {
+  async lireNote(noteId) {
+    const { data } = await supabaseAdmin.from('delivery_notes').select('delivery_id, contenu').eq('id', noteId).maybeSingle();
+    return (data as any) ?? null;
+  },
+  async lireSignaturesActives(noteId) {
+    const { data, error } = await supabaseAdmin
+      .from('bl_signatures')
+      .select('id, role, signature_data, signataire_nom, signed_at')
+      .eq('delivery_note_id', noteId)
+      .is('annulee_le', null);
+    return error ? null : ((data ?? []) as any[]);
+  },
+  async lireFichier(chemin) {
+    const { data, error } = await supabaseAdmin.storage.from(BUCKET_BL).download(chemin);
+    return error || !data ? null : Buffer.from(await data.arrayBuffer());
+  },
+  async ecrireFichier(chemin, pdf) {
+    const { error } = await supabaseAdmin.storage.from(BUCKET_BL).upload(chemin, pdf, { contentType: 'application/pdf', upsert: false });
+    return error && !dejaPresent(error as any) ? error.message : null;
+  },
+  formaterDate: iso => formatDateTimeReunion(iso),
+};
 
-  const blNumber = (note as any).delivery_id as string;
-  return { buffer: await generatePDVDeliveryPDF(contenu.pdv, blNumber, contenu.date, signatures), blNumber };
-}
+/** BL signé (archive du stockage, sinon reconstruit à l'identique depuis le contenu figé, puis archivé). */
+export const construireBlSigne = (noteId: string): Promise<BlSigne | null> => blSigne(depotArchive, noteId);

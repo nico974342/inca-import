@@ -232,7 +232,7 @@ const facturationAddr = client.facturation_same
 
 const { data: deliveryNotes } = await supabaseAdmin
   .from('delivery_notes')
-  .select('id, delivery_id, pdv_name, created_at')
+  .select('id, delivery_id, pdv_name, created_at, contenu')
   .eq('client_id', id)
   .order('created_at', { ascending: false });
 
@@ -666,7 +666,7 @@ const grantedMaskedCount = (maskedProducts ?? []).filter(m => grantedIds.has(m.i
                 <td class="td-muted">{formatDate(note.created_at)}</td>
                 <td class="td-mono">{note.delivery_id}</td>
                 <td>{note.pdv_name}</td>
-                <td data-testid="bl-etat-client">{LIBELLE_ETAT[etatDuBl(signaturesParBl.get(note.id))]}</td>
+                <td data-testid="bl-etat-client">{(note as any).contenu ? LIBELLE_ETAT[etatDuBl(signaturesParBl.get(note.id))] : 'Signé sur papier'}</td>
                 <td class="td-r">
                   <a
                     href={`/api/delivery-notes/${note.id}/download`}

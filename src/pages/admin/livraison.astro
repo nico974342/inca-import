@@ -6,7 +6,8 @@ import { normalizeEmail } from '../../lib/clients';
 import { COMPANY, RESEND_DEFAULT_FROM } from '../../lib/constants';
 import { todayReunion, formatDateTimeReunion } from '../../lib/datetime';
 import { isAdmin } from '../../lib/roles';
-import { fetchSignaturesActives, etatDuBl, type ContenuBl } from '../../lib/blSignatures';
+import { fetchSignaturesActives, etatDuBl, depotBl, type ContenuBl } from '../../lib/blSignatures';
+import { verifierStockageBl, enregistrerBons } from '../../lib/blStockage';
 import { LIBELLE_ETAT, LIBELLE_ROLE } from '../../lib/signatureBl';
 import { Resend } from 'resend';
 
@@ -69,7 +70,6 @@ const productsByCategory = products.reduce<Record<string, Product[]>>((acc, p) =
 
 let successMessage = '';
 let errorMessage = '';
-let blNonEnregistres = 0;   // BL générés et envoyés mais pas mémorisés : ils ne pourront pas être signés
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
@@ -129,88 +129,90 @@ if (Astro.request.method === 'POST') {
   if (deliveryPDVs.length === 0) {
     errorMessage = 'Sélectionnez au moins un point de vente avec des produits.';
   } else {
-    // One unique BL number per PDV
-    const blResults = await Promise.all(deliveryPDVs.map(() => supabaseAdmin.rpc('next_bl_number')));
-    const blErr = blResults.find(r => r.error);
-    if (blErr) {
-      errorMessage = `Erreur lors de la génération des numéros de BL : ${blErr.error!.message}`;
+    // 1. Le stockage des BL est-il prêt ? Vérifié AVANT de consommer le moindre numéro : s'il ne l'est pas,
+    //    rien n'est généré ni envoyé (c'était la cause des BL jamais enregistrés : bucket absent, échec silencieux).
+    const pret = await verifierStockageBl(depotBl);
+    if (!pret.ok) {
+      errorMessage = pret.message;
     } else {
-      const blNumbers = blResults.map(r => r.data as string);
-      try {
-        const deliveryData = { id: batchId, date: dateStr, pdvs: deliveryPDVs, notes };
+      // 2. Un numéro de BL unique par point de vente
+      const blResults = await Promise.all(deliveryPDVs.map(() => supabaseAdmin.rpc('next_bl_number')));
+      const blErr = blResults.find(r => r.error);
+      if (blErr) {
+        errorMessage = `Erreur lors de la génération des numéros de BL : ${blErr.error!.message}`;
+      } else {
+        const blNumbers = blResults.map(r => r.data as string);
+        try {
+          const deliveryData = { id: batchId, date: dateStr, pdvs: deliveryPDVs, notes };
 
-        const [summaryBuffer, ...pdvBuffers] = await Promise.all([
-          generateDeliverySummaryPDF(deliveryData),
-          ...deliveryPDVs.map((pdv, i) => generatePDVDeliveryPDF(pdv, blNumbers[i], dateStr)),
-        ]);
+          const [summaryBuffer, ...pdvBuffers] = await Promise.all([
+            generateDeliverySummaryPDF(deliveryData),
+            ...deliveryPDVs.map((pdv, i) => generatePDVDeliveryPDF(pdv, blNumbers[i], dateStr)),
+          ]);
 
-        const attachments = [
-          { filename: `recapitulatif-${batchId}.pdf`, content: summaryBuffer },
-          ...deliveryPDVs.map((pdv, i) => ({
-            filename: `${blNumbers[i]}-${slugPDV(pdv.name)}.pdf`,
-            content: pdvBuffers[i],
-          })),
-        ];
+          // 3. Enregistrement AVANT l'envoi : PDF au stockage + ligne delivery_notes avec le contenu figé.
+          //    Tout ou rien : au premier échec, ce qui a été écrit est retiré, l'erreur est affichée et RIEN n'est envoyé.
+          const enr = await enregistrerBons(depotBl, pdvMeta.map((meta, i) => ({
+            ligne: {
+              delivery_id: blNumbers[i],
+              client_id: meta.clientId,
+              pdv_key: meta.key,
+              pdv_name: meta.name,
+              storage_path: `${blNumbers[i]}/${meta.key}.pdf`,
+              contenu: { pdv: deliveryPDVs[i], date: dateStr },
+            },
+            pdf: pdvBuffers[i],
+          })));
 
-        const pdvListHtml = deliveryPDVs.map((p, i) => `&bull; <strong>${blNumbers[i]}</strong> &mdash; ${p.name}`).join('<br/>');
-        const attachListHtml = [
-          `&bull; <strong>R&eacute;capitulatif</strong> &mdash; bilan consolid&eacute;`,
-          ...deliveryPDVs.map((p, i) => `&bull; <strong>${blNumbers[i]}</strong> &mdash; ${p.name}`),
-        ].join('<br/>');
+          if (!enr.ok) {
+            console.error('[livraison] enregistrement des BL:', enr.message);
+            errorMessage = enr.message;
+          } else {
+            const attachments = [
+              { filename: `recapitulatif-${batchId}.pdf`, content: summaryBuffer },
+              ...deliveryPDVs.map((pdv, i) => ({
+                filename: `${blNumbers[i]}-${slugPDV(pdv.name)}.pdf`,
+                content: pdvBuffers[i],
+              })),
+            ];
 
-        const resend = new Resend(import.meta.env.RESEND_API_KEY);
-        const { error: sendError } = await resend.emails.send({
-          from: FROM,
-          to: [COMPANY.contactEmail],
-          subject: `${blNumbers.join(', ')} · ${dateStr}`,
-          html: `<p>Bonjour,</p>
+            const pdvListHtml = deliveryPDVs.map((p, i) => `&bull; <strong>${blNumbers[i]}</strong> &mdash; ${p.name}`).join('<br/>');
+            const attachListHtml = [
+              `&bull; <strong>R&eacute;capitulatif</strong> &mdash; bilan consolid&eacute;`,
+              ...deliveryPDVs.map((p, i) => `&bull; <strong>${blNumbers[i]}</strong> &mdash; ${p.name}`),
+            ].join('<br/>');
+
+            // 4. Envoi par e-mail (les BL sont déjà enregistrés et signables, quoi qu'il arrive ici)
+            const resend = new Resend(import.meta.env.RESEND_API_KEY);
+            const { error: sendError } = await resend.emails.send({
+              from: FROM,
+              to: [COMPANY.contactEmail],
+              subject: `${blNumbers.join(', ')} · ${dateStr}`,
+              html: `<p>Bonjour,</p>
 <p>${deliveryPDVs.length} bon${deliveryPDVs.length > 1 ? 's' : ''} de livraison du ${dateStr}.</p>
 <p><strong>Points de vente :</strong><br/>${pdvListHtml}</p>
 <p><strong>Pi&egrave;ces jointes (${attachments.length}) :</strong><br/>${attachListHtml}</p>
 <p>Cordialement,<br/>Inca Import</p>`,
-          attachments,
-        });
+              attachments,
+            });
 
-        if (sendError) {
-          console.error('[livraison] Resend error:', sendError);
-          errorMessage = `PDF générés mais l'envoi a échoué : ${sendError.message}`;
-        } else {
-          successMessage = `${attachments.length} PDF envoyés (${blNumbers.join(', ')}) → ${COMPANY.contactEmail}`;
-          if (loadedOrderIds.length > 0) {
-            await supabaseAdmin
-              .from('orders')
-              .update({ status: 'en_preparation' })
-              .in('id', loadedOrderIds);
+            if (sendError) {
+              console.error('[livraison] Resend error:', sendError);
+              errorMessage = `Les bons ${blNumbers.join(', ')} sont enregistrés (liste « Bons de livraison à signer » plus bas, PDF téléchargeables) mais l'envoi par e-mail a échoué : ${sendError.message}. Ne les régénérez pas : de nouveaux numéros seraient consommés.`;
+            } else {
+              successMessage = `${attachments.length} PDF envoyés et ${blNumbers.length} bon${blNumbers.length > 1 ? 's' : ''} enregistré${blNumbers.length > 1 ? 's' : ''} (${blNumbers.join(', ')}) → ${COMPANY.contactEmail}`;
+              if (loadedOrderIds.length > 0) {
+                await supabaseAdmin
+                  .from('orders')
+                  .update({ status: 'en_preparation' })
+                  .in('id', loadedOrderIds);
+              }
+            }
           }
-          try {
-            await Promise.all(
-              pdvMeta.map(async (meta, i) => {
-                const storagePath = `${blNumbers[i]}/${meta.key}.pdf`;
-                const { error: upErr } = await supabaseAdmin.storage
-                  .from('delivery-notes')
-                  .upload(storagePath, pdvBuffers[i], { contentType: 'application/pdf', upsert: false });
-                if (upErr) { console.error('[livraison] upload error', meta.key, upErr.message); blNonEnregistres++; return; }
-                const ligne = {
-                  delivery_id: blNumbers[i],
-                  client_id: meta.clientId,
-                  pdv_key: meta.key,
-                  pdv_name: meta.name,
-                  storage_path: storagePath,
-                };
-                // « contenu » = le BL tel qu'il a été généré : permet de produire plus tard le PDF signé à l'identique.
-                let { error: dbErr } = await supabaseAdmin.from('delivery_notes').insert({ ...ligne, contenu: { pdv: deliveryPDVs[i], date: dateStr } });
-                if (dbErr && /contenu/i.test(dbErr.message)) ({ error: dbErr } = await supabaseAdmin.from('delivery_notes').insert(ligne));   // migration pas encore appliquée
-                if (dbErr) { console.error('[livraison] delivery_notes insert error:', dbErr.message); blNonEnregistres++; }
-              })
-            );
-          } catch (e) {
-            console.error('[livraison] delivery_notes save failed:', e);
-            blNonEnregistres = pdvMeta.length;
-          }
+        } catch (e) {
+          console.error(e);
+          errorMessage = "Une erreur est survenue lors de la génération ou de l'enregistrement. Rien n'a été envoyé par e-mail : vérifiez la liste des bons avant de réessayer.";
         }
-      } catch (e) {
-        console.error(e);
-        errorMessage = "Une erreur est survenue lors de la génération ou de l'envoi.";
       }
     }
   }
@@ -314,11 +316,6 @@ const bonsLivraison = notes.map(n => {
         <path d="M4.5 8l2.5 2.5 4-4" stroke="oklch(0.52 0.17 145)" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       {successMessage}
-    </div>
-  )}
-  {blNonEnregistres > 0 && (
-    <div class="alert alert-error" role="alert">
-      {blNonEnregistres} bon{blNonEnregistres > 1 ? 's' : ''} de livraison envoyé{blNonEnregistres > 1 ? 's' : ''} par e-mail mais non enregistré{blNonEnregistres > 1 ? 's' : ''} sur le serveur : {blNonEnregistres > 1 ? 'ils ne pourront' : 'il ne pourra'} pas être signé{blNonEnregistres > 1 ? 's' : ''} depuis le téléphone. Prévenez le support.
     </div>
   )}
   {sigOk && <div class="alert alert-success" role="status">{sigOk}</div>}
@@ -481,7 +478,9 @@ const bonsLivraison = notes.map(n => {
         {bonsLivraison.map(b => (
           <li class="bl-ligne" data-testid="bl-ligne" data-etat={b.etat}>
             <div class="bl-infos">
-              <p class="bl-numero">{b.numero} <span class={`bl-etat bl-etat--${b.etat}`} data-testid="bl-etat">{LIBELLE_ETAT[b.etat]}</span></p>
+              <p class="bl-numero">{b.numero} {b.signable
+                ? <span class={`bl-etat bl-etat--${b.etat}`} data-testid="bl-etat">{LIBELLE_ETAT[b.etat]}</span>
+                : <span class="bl-etat bl-etat--papier" data-testid="bl-etat" title="BL antérieur à la signature électronique : signé sur papier">Signé sur papier</span>}</p>
               <p class="bl-detail">{b.client ? `${b.client} · ` : ''}{b.pdv} · {b.date}</p>
               {b.signatures.length > 0 && (
                 <p class="bl-detail">
@@ -694,6 +693,7 @@ const bonsLivraison = notes.map(n => {
 .bl-etat { font-size: var(--text-xs); font-weight: 700; padding: 2px 10px; border-radius: 999px; border: 1px solid transparent; }
 .bl-etat--non_signe { background: oklch(0.95 0.01 60); color: oklch(0.40 0.02 60); border-color: oklch(0.85 0.01 60); }
 .bl-etat--partiel { background: oklch(0.95 0.07 85); color: oklch(0.42 0.12 70); border-color: oklch(0.85 0.09 85); }
+.bl-etat--papier { background: oklch(0.95 0.01 250); color: oklch(0.40 0.03 250); border-color: oklch(0.85 0.02 250); }
 .bl-etat--signe { background: oklch(0.94 0.07 145); color: oklch(0.35 0.13 145); border-color: oklch(0.82 0.09 145); }
 .bl-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .bl-btn { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
