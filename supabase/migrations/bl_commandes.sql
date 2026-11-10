@@ -8,6 +8,7 @@
 --        1 BL <-> 1 commande, 1 BL regroupé <-> n commandes, n BL <-> 1 commande (livraison en plusieurs fois).
 --   delivery_notes.cle_operation = clé d'idempotence : une même opération de livraison ne produit jamais deux BL
 --        (double clic, rafraîchissement, renvoi du formulaire : la 2e demande retrouve le BL existant, sans nouveau numéro).
+-- Verrou de la numérotation : next_bl_number() et la séquence ne sont plus accessibles à anon / authenticated (voir section 7).
 -- Les 77 anciens BL (orders.bl_number, signés sur papier) n'ont aucune ligne ici : ils restent tels quels, et il devient
 -- IMPOSSIBLE de les recréer (bl_creer refuse leurs commandes) ou de modifier leur numéro (déclencheur sur orders.bl_number).
 
@@ -145,6 +146,17 @@ REVOKE ALL ON FUNCTION delivery_note_orders_proteger() FROM PUBLIC, anon, authen
 REVOKE ALL ON FUNCTION orders_bl_number_proteger() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION delivery_notes_figer() FROM PUBLIC, anon, authenticated;
 
+-- 7. NUMÉROTATION DES BL : plus personne, hors serveur, ne peut consommer un numéro.
+--    Constat en production : next_bl_number() (SECURITY DEFINER, sans search_path) était exécutable par PUBLIC, anon et authenticated
+--    (donc appelable via /rest/v1/rpc/next_bl_number avec la clé publique), et la séquence accordait lecture/écriture à anon et authenticated.
+--    Désormais seul le serveur (service_role) l'appelle, via bl_creer ; l'application n'appelle plus next_bl_number directement.
+--    La fonction s'exécute toujours avec les droits de son propriétaire : service_role n'a pas besoin d'accéder à la séquence.
+REVOKE ALL ON FUNCTION next_bl_number() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION next_bl_number() TO service_role;
+ALTER FUNCTION next_bl_number() SET search_path = public, pg_temp;
+REVOKE ALL ON SEQUENCE bl_number_seq FROM PUBLIC, anon, authenticated;
+-- La séquence elle-même n'est ni modifiée ni réinitialisée : la numérotation continue exactement où elle en est (aucun numéro réutilisé).
+
 -- Retour arrière — UNIQUEMENT avant tout usage réel (aucune liaison créée) :
 --   DROP FUNCTION IF EXISTS bl_creer(text, uuid, text, text, jsonb, jsonb);
 --   DROP TABLE IF EXISTS delivery_note_orders;
@@ -153,5 +165,6 @@ REVOKE ALL ON FUNCTION delivery_notes_figer() FROM PUBLIC, anon, authenticated;
 --   DROP FUNCTION IF EXISTS orders_bl_number_proteger();
 --   DROP INDEX IF EXISTS delivery_notes_cle_operation_uniq;
 --   ALTER TABLE delivery_notes DROP COLUMN IF EXISTS cle_operation;
+--   (déconseillé : rouvrirait l'accès aux numéros) GRANT EXECUTE ON FUNCTION next_bl_number() TO anon, authenticated;
 --   (delivery_notes_figer() peut rester : sa version précédente ignorait seulement cle_operation, qui n'existerait plus)
 -- Après usage réel : revenir en arrière = rétablir la version précédente du code (Vercel) ; on garde les tables.
