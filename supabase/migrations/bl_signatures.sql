@@ -146,7 +146,7 @@ REVOKE ALL ON FUNCTION bl_signatures_proteger() FROM PUBLIC, anon, authenticated
 REVOKE ALL ON FUNCTION bl_signatures_journal() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION delivery_notes_figer() FROM PUBLIC, anon, authenticated;
 
--- Contrôles après application (lecture seule) : voir docs ou la procédure de mise en production.
+-- Contrôles après application : requêtes de lecture seule de la procédure de mise en production.
 --
 -- Retour arrière — UNIQUEMENT avant tout usage réel (la suppression de la table détruirait des signatures) :
 --   DROP TRIGGER IF EXISTS trg_bl_signatures_journal ON bl_signatures;
