@@ -4,7 +4,11 @@ import { supabaseAdmin } from '../../lib/supabase';
 import { generateDeliverySummaryPDF, generatePDVDeliveryPDF } from '../../lib/pdf';
 import { normalizeEmail } from '../../lib/clients';
 import { COMPANY, RESEND_DEFAULT_FROM } from '../../lib/constants';
-import { todayReunion } from '../../lib/datetime';
+import { todayReunion, formatDateTimeReunion } from '../../lib/datetime';
+import { isAdmin } from '../../lib/roles';
+import { fetchSignaturesActives, etatDuBl, depotBl, type ContenuBl } from '../../lib/blSignatures';
+import { verifierStockageBl, enregistrerBons } from '../../lib/blStockage';
+import { LIBELLE_ETAT, LIBELLE_ROLE } from '../../lib/signatureBl';
 import { Resend } from 'resend';
 
 const FROM = (import.meta.env.RESEND_FROM as string | undefined) ?? RESEND_DEFAULT_FROM;
@@ -125,88 +129,97 @@ if (Astro.request.method === 'POST') {
   if (deliveryPDVs.length === 0) {
     errorMessage = 'Sélectionnez au moins un point de vente avec des produits.';
   } else {
-    // One unique BL number per PDV
-    const blResults = await Promise.all(deliveryPDVs.map(() => supabaseAdmin.rpc('next_bl_number')));
-    const blErr = blResults.find(r => r.error);
-    if (blErr) {
-      errorMessage = `Erreur lors de la génération des numéros de BL : ${blErr.error!.message}`;
+    // 1. Le stockage des BL est-il prêt ? Vérifié AVANT de consommer le moindre numéro : s'il ne l'est pas,
+    //    rien n'est généré ni envoyé (c'était la cause des BL jamais enregistrés : bucket absent, échec silencieux).
+    const pret = await verifierStockageBl(depotBl);
+    if (!pret.ok) {
+      errorMessage = pret.message;
     } else {
-      const blNumbers = blResults.map(r => r.data as string);
-      try {
-        const deliveryData = { id: batchId, date: dateStr, pdvs: deliveryPDVs, notes };
+      // 2. Un numéro de BL unique par point de vente
+      const blResults = await Promise.all(deliveryPDVs.map(() => supabaseAdmin.rpc('next_bl_number')));
+      const blErr = blResults.find(r => r.error);
+      if (blErr) {
+        errorMessage = `Erreur lors de la génération des numéros de BL : ${blErr.error!.message}`;
+      } else {
+        const blNumbers = blResults.map(r => r.data as string);
+        try {
+          const deliveryData = { id: batchId, date: dateStr, pdvs: deliveryPDVs, notes };
 
-        const [summaryBuffer, ...pdvBuffers] = await Promise.all([
-          generateDeliverySummaryPDF(deliveryData),
-          ...deliveryPDVs.map((pdv, i) => generatePDVDeliveryPDF(pdv, blNumbers[i], dateStr)),
-        ]);
+          const [summaryBuffer, ...pdvBuffers] = await Promise.all([
+            generateDeliverySummaryPDF(deliveryData),
+            ...deliveryPDVs.map((pdv, i) => generatePDVDeliveryPDF(pdv, blNumbers[i], dateStr)),
+          ]);
 
-        const attachments = [
-          { filename: `recapitulatif-${batchId}.pdf`, content: summaryBuffer },
-          ...deliveryPDVs.map((pdv, i) => ({
-            filename: `${blNumbers[i]}-${slugPDV(pdv.name)}.pdf`,
-            content: pdvBuffers[i],
-          })),
-        ];
+          // 3. Enregistrement AVANT l'envoi : PDF au stockage + ligne delivery_notes avec le contenu figé.
+          //    Tout ou rien : au premier échec, ce qui a été écrit est retiré, l'erreur est affichée et RIEN n'est envoyé.
+          const enr = await enregistrerBons(depotBl, pdvMeta.map((meta, i) => ({
+            ligne: {
+              delivery_id: blNumbers[i],
+              client_id: meta.clientId,
+              pdv_key: meta.key,
+              pdv_name: meta.name,
+              storage_path: `${blNumbers[i]}/${meta.key}.pdf`,
+              contenu: { pdv: deliveryPDVs[i], date: dateStr },
+            },
+            pdf: pdvBuffers[i],
+          })));
 
-        const pdvListHtml = deliveryPDVs.map((p, i) => `&bull; <strong>${blNumbers[i]}</strong> &mdash; ${p.name}`).join('<br/>');
-        const attachListHtml = [
-          `&bull; <strong>R&eacute;capitulatif</strong> &mdash; bilan consolid&eacute;`,
-          ...deliveryPDVs.map((p, i) => `&bull; <strong>${blNumbers[i]}</strong> &mdash; ${p.name}`),
-        ].join('<br/>');
+          if (!enr.ok) {
+            console.error('[livraison] enregistrement des BL:', enr.message);
+            errorMessage = enr.message;
+          } else {
+            const attachments = [
+              { filename: `recapitulatif-${batchId}.pdf`, content: summaryBuffer },
+              ...deliveryPDVs.map((pdv, i) => ({
+                filename: `${blNumbers[i]}-${slugPDV(pdv.name)}.pdf`,
+                content: pdvBuffers[i],
+              })),
+            ];
 
-        const resend = new Resend(import.meta.env.RESEND_API_KEY);
-        const { error: sendError } = await resend.emails.send({
-          from: FROM,
-          to: [COMPANY.contactEmail],
-          subject: `${blNumbers.join(', ')} · ${dateStr}`,
-          html: `<p>Bonjour,</p>
+            const pdvListHtml = deliveryPDVs.map((p, i) => `&bull; <strong>${blNumbers[i]}</strong> &mdash; ${p.name}`).join('<br/>');
+            const attachListHtml = [
+              `&bull; <strong>R&eacute;capitulatif</strong> &mdash; bilan consolid&eacute;`,
+              ...deliveryPDVs.map((p, i) => `&bull; <strong>${blNumbers[i]}</strong> &mdash; ${p.name}`),
+            ].join('<br/>');
+
+            // 4. Envoi par e-mail (les BL sont déjà enregistrés et signables, quoi qu'il arrive ici)
+            const resend = new Resend(import.meta.env.RESEND_API_KEY);
+            const { error: sendError } = await resend.emails.send({
+              from: FROM,
+              to: [COMPANY.contactEmail],
+              subject: `${blNumbers.join(', ')} · ${dateStr}`,
+              html: `<p>Bonjour,</p>
 <p>${deliveryPDVs.length} bon${deliveryPDVs.length > 1 ? 's' : ''} de livraison du ${dateStr}.</p>
 <p><strong>Points de vente :</strong><br/>${pdvListHtml}</p>
 <p><strong>Pi&egrave;ces jointes (${attachments.length}) :</strong><br/>${attachListHtml}</p>
 <p>Cordialement,<br/>Inca Import</p>`,
-          attachments,
-        });
+              attachments,
+            });
 
-        if (sendError) {
-          console.error('[livraison] Resend error:', sendError);
-          errorMessage = `PDF générés mais l'envoi a échoué : ${sendError.message}`;
-        } else {
-          successMessage = `${attachments.length} PDF envoyés (${blNumbers.join(', ')}) → ${COMPANY.contactEmail}`;
-          if (loadedOrderIds.length > 0) {
-            await supabaseAdmin
-              .from('orders')
-              .update({ status: 'en_preparation' })
-              .in('id', loadedOrderIds);
+            if (sendError) {
+              console.error('[livraison] Resend error:', sendError);
+              errorMessage = `Les bons ${blNumbers.join(', ')} sont enregistrés (liste « Bons de livraison à signer » plus bas, PDF téléchargeables) mais l'envoi par e-mail a échoué : ${sendError.message}. Ne les régénérez pas : de nouveaux numéros seraient consommés.`;
+            } else {
+              successMessage = `${attachments.length} PDF envoyés et ${blNumbers.length} bon${blNumbers.length > 1 ? 's' : ''} enregistré${blNumbers.length > 1 ? 's' : ''} (${blNumbers.join(', ')}) → ${COMPANY.contactEmail}`;
+              if (loadedOrderIds.length > 0) {
+                await supabaseAdmin
+                  .from('orders')
+                  .update({ status: 'en_preparation' })
+                  .in('id', loadedOrderIds);
+              }
+            }
           }
-          try {
-            await Promise.all(
-              pdvMeta.map(async (meta, i) => {
-                const storagePath = `${blNumbers[i]}/${meta.key}.pdf`;
-                const { error: upErr } = await supabaseAdmin.storage
-                  .from('delivery-notes')
-                  .upload(storagePath, pdvBuffers[i], { contentType: 'application/pdf', upsert: false });
-                if (upErr) { console.error('[livraison] upload error', meta.key, upErr.message); return; }
-                const { error: dbErr } = await supabaseAdmin.from('delivery_notes').insert({
-                  delivery_id: blNumbers[i],
-                  client_id: meta.clientId,
-                  pdv_key: meta.key,
-                  pdv_name: meta.name,
-                  storage_path: storagePath,
-                });
-                if (dbErr) console.error('[livraison] delivery_notes insert error:', dbErr.message);
-              })
-            );
-          } catch (e) {
-            console.error('[livraison] delivery_notes save failed:', e);
-          }
+        } catch (e) {
+          console.error(e);
+          errorMessage = "Une erreur est survenue lors de la génération ou de l'enregistrement. Rien n'a été envoyé par e-mail : vérifiez la liste des bons avant de réessayer.";
         }
-      } catch (e) {
-        console.error(e);
-        errorMessage = "Une erreur est survenue lors de la génération ou de l'envoi.";
       }
     }
   }
 }
+
+// Alerte dès l'ouverture de la page : la génération des BL est bloquée tant que le stockage n'est pas prêt.
+const etatStockage = await verifierStockageBl(depotBl);
 
 const categories = Object.keys(productsByCategory).sort();
 
@@ -268,6 +281,33 @@ const pendingPDVNames = Object.keys(pendingQtys)
 
 // Unmatched orders (for banner warning)
 const unmatchedOrders = (confirmedOrders ?? []).filter(o => !orderToPdvKey.has(o.id));
+
+// ── Bons de livraison enregistrés : état de signature ───────────────────────
+const sigOk = Astro.url.searchParams.get('sig_ok');
+const sigErr = Astro.url.searchParams.get('sig_err');
+const peutAnnuler = isAdmin((Astro.locals as any).user);
+const { data: notesRaw, error: notesErr } = await supabaseAdmin
+  .from('delivery_notes')
+  .select('id, delivery_id, pdv_name, client_id, created_at, contenu')
+  .order('created_at', { ascending: false })
+  .limit(40);
+if (notesErr) console.error('[livraison] delivery_notes lecture:', notesErr.message);
+const notes = (notesRaw ?? []) as any[];
+const signaturesParBl = await fetchSignaturesActives(notes.map(n => n.id));
+const bonsLivraison = notes.map(n => {
+  const sigs = signaturesParBl.get(n.id) ?? [];
+  const contenu = n.contenu as ContenuBl | null;
+  return {
+    id: n.id as string,
+    numero: n.delivery_id as string,
+    pdv: n.pdv_name as string,
+    client: contenu?.pdv?.client_societe ?? contenu?.pdv?.client_nom ?? null,
+    date: formatDateTimeReunion(n.created_at),
+    signable: !!contenu,
+    etat: etatDuBl(sigs),
+    signatures: sigs,
+  };
+});
 ---
 
 <AdminLayout title="Bon de livraison" activeNav="livraison">
@@ -281,6 +321,13 @@ const unmatchedOrders = (confirmedOrders ?? []).filter(o => !orderToPdvKey.has(o
       {successMessage}
     </div>
   )}
+  {!etatStockage.ok && (
+    <div class="alert alert-error" role="alert" data-testid="stockage-bl-indisponible">
+      Le stockage des bons de livraison n'est pas prêt ({etatStockage.detail}). La génération des BL est bloquée pour éviter tout BL non enregistré. Prévenez le support.
+    </div>
+  )}
+  {sigOk && <div class="alert alert-success" role="status">{sigOk}</div>}
+  {sigErr && <div class="alert alert-error" role="alert">{sigErr}</div>}
   {errorMessage && (
     <div class="alert alert-error" role="alert">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -429,6 +476,54 @@ const unmatchedOrders = (confirmedOrders ?? []).filter(o => !orderToPdvKey.has(o
     </div>
 
   </form>
+
+  <section class="liv-section bl-section" id="bons-de-livraison" data-testid="bons-de-livraison">
+    <h2 class="liv-section-title">Bons de livraison à signer</h2>
+    {bonsLivraison.length === 0 ? (
+      <p class="bl-vide">Aucun bon de livraison enregistré pour le moment. Les prochains bons générés apparaîtront ici.</p>
+    ) : (
+      <ul class="bl-liste">
+        {bonsLivraison.map(b => (
+          <li class="bl-ligne" data-testid="bl-ligne" data-etat={b.etat}>
+            <div class="bl-infos">
+              <p class="bl-numero">{b.numero} {b.signable
+                ? <span class={`bl-etat bl-etat--${b.etat}`} data-testid="bl-etat">{LIBELLE_ETAT[b.etat]}</span>
+                : <span class="bl-etat bl-etat--papier" data-testid="bl-etat" title="BL antérieur à la signature électronique : signé sur papier">Signé sur papier</span>}</p>
+              <p class="bl-detail">{b.client ? `${b.client} · ` : ''}{b.pdv} · {b.date}</p>
+              {b.signatures.length > 0 && (
+                <p class="bl-detail">
+                  {b.signatures.map(s => `${LIBELLE_ROLE[s.role]} : ${s.signataire_nom} (${formatDateTimeReunion(s.signed_at)})`).join(' — ')}
+                </p>
+              )}
+            </div>
+            <div class="bl-actions">
+              {b.etat !== 'signe' && b.signable && (
+                <a class="btn btn-primary bl-btn" href={`/admin/bl/${b.id}/signer`} data-testid="bl-faire-signer">Faire signer</a>
+              )}
+              {b.etat === 'signe' && (
+                <a class="btn btn-primary bl-btn" href={`/api/delivery-notes/${b.id}/signe`} target="_blank" rel="noopener" data-testid="bl-telecharger-signe">BL signé (PDF)</a>
+              )}
+              <a class="btn bl-btn bl-btn--sec" href={`/api/delivery-notes/${b.id}/download`} target="_blank" rel="noopener">BL non signé</a>
+            </div>
+            {peutAnnuler && b.signatures.length > 0 && (
+              <details class="bl-annulation">
+                <summary>Annuler une signature (erreur)</summary>
+                {b.signatures.map(s => (
+                  <form method="post" action={`/api/admin/bl-signatures/${s.id}/annuler`} class="bl-annuler-form">
+                    <label>Signature du {LIBELLE_ROLE[s.role].toLowerCase()} ({s.signataire_nom}) — motif obligatoire
+                      <input type="text" name="motif" required minlength="3" maxlength="300" placeholder="Ex. : mauvais destinataire" />
+                    </label>
+                    <button type="submit" class="btn bl-btn bl-btn--danger">Annuler cette signature</button>
+                  </form>
+                ))}
+                <p class="bl-detail">La signature n'est pas supprimée : elle reste conservée avec le motif et votre nom, et l'action est journalisée.</p>
+              </details>
+            )}
+          </li>
+        ))}
+      </ul>
+    )}
+  </section>
 </AdminLayout>
 
 <script>
@@ -596,6 +691,28 @@ const unmatchedOrders = (confirmedOrders ?? []).filter(o => !orderToPdvKey.has(o
 </script>
 
 <style>
+/* ── Bons de livraison à signer ──────────────────── */
+.bl-section { margin-top: var(--space-8); }
+.bl-vide { color: var(--color-muted); font-size: var(--text-sm); }
+.bl-liste { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
+.bl-ligne { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg); }
+.bl-numero { margin: 0; font-weight: 700; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.bl-detail { margin: 2px 0 0; font-size: var(--text-xs); color: var(--color-muted); }
+.bl-etat { font-size: var(--text-xs); font-weight: 700; padding: 2px 10px; border-radius: 999px; border: 1px solid transparent; }
+.bl-etat--non_signe { background: oklch(0.95 0.01 60); color: oklch(0.40 0.02 60); border-color: oklch(0.85 0.01 60); }
+.bl-etat--partiel { background: oklch(0.95 0.07 85); color: oklch(0.42 0.12 70); border-color: oklch(0.85 0.09 85); }
+.bl-etat--papier { background: oklch(0.95 0.01 250); color: oklch(0.40 0.03 250); border-color: oklch(0.85 0.02 250); }
+.bl-etat--signe { background: oklch(0.94 0.07 145); color: oklch(0.35 0.13 145); border-color: oklch(0.82 0.09 145); }
+.bl-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.bl-btn { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
+.bl-btn--sec { background: transparent; border: 1px solid var(--color-border); color: var(--color-text); }
+.bl-btn--danger { background: transparent; border: 1px solid oklch(0.55 0.19 25); color: oklch(0.45 0.19 25); }
+.bl-annulation { font-size: var(--text-sm); }
+.bl-annulation summary { cursor: pointer; color: var(--color-muted); }
+.bl-annuler-form { display: grid; gap: var(--space-2); margin-top: var(--space-3); }
+.bl-annuler-form input { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-md); font: inherit; }
+@media (min-width: 720px) { .bl-ligne { grid-template-columns: 1fr auto; align-items: center; } .bl-annulation { grid-column: 1 / -1; } }
+
 /* ── Pending orders banner ───────────────────────── */
 .pending-banner {
   display: flex;

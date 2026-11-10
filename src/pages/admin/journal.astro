@@ -41,6 +41,8 @@ const ACTION_LABELS: Record<string, string> = {
   'produit.suppression':       'Produit supprimé',
   'produit.stock_ajustement':  'Stock ajusté',
   'produit.visibilite_catalogue': 'Visibilité catalogue',
+  'bl.signature':           'BL signé',
+  'bl.signature_annulee':   'Signature BL annulée',
   'client.acces_produit':   'Accès produit réservé',
   'reception.creation':     'Réception stock',
   'reception.modification': 'Réception modifiée',
@@ -65,6 +67,8 @@ const ACTION_COLOR: Record<string, string> = {
   'produit.suppression':       'red',
   'produit.stock_ajustement':  'amber',
   'produit.visibilite_catalogue': 'purple',
+  'bl.signature':           'green',
+  'bl.signature_annulee':   'red',
   'client.acces_produit':   'purple',
   'reception.creation':     'green',
   'reception.modification': 'blue',
@@ -106,6 +110,11 @@ function formatDetails(details: Record<string, unknown> | null, action: string):
   }
   if (action === 'client.acces_produit') {
     return `${details.produit} · accès ${details.acces}`;
+  }
+  if (action === 'bl.signature' || action === 'bl.signature_annulee') {
+    const r = details.role === 'transporteur' ? 'Transporteur' : 'Destinataire';
+    const motif = typeof details.motif === 'string' ? ` · motif : ${details.motif}` : '';
+    return `${r} · ${details.signataire_nom ?? ''}${motif}`;
   }
   if (action === 'produit.visibilite_catalogue') {
     return `${details.ancien} → ${details.nouveau}`;

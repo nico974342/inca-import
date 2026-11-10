@@ -24,6 +24,7 @@
 
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { exigerBaseDeTest } from '../helpers/garde-ecriture';
 
 // ── Supabase admin client — initialized lazily in beforeAll ──────
 // (module-level env reads happen before Playwright loads .env)
@@ -74,6 +75,7 @@ async function loginAsAdmin() {
 test.describe.serial('Inca Import — Full E2E Flow', () => {
 
   test.beforeAll(async ({ browser }) => {
+    exigerBaseDeTest();   // refuse tout si la base vise la production
     // Initialize Supabase admin client here so env vars are loaded by Playwright
     db = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'), {
       auth: { autoRefreshToken: false, persistSession: false },
@@ -82,20 +84,15 @@ test.describe.serial('Inca Import — Full E2E Flow', () => {
     getEnv('TEST_ADMIN_EMAIL');
     getEnv('TEST_ADMIN_PASSWORD');
 
-    // Find a product with enough stock to order
-    const { data: products, error: prodErr } = await db
-      .from('products')
-      .select('id, name, stock_quantity')
-      .gte('stock_quantity', 2)
-      .order('stock_quantity', { ascending: false })
-      .limit(1);
-
-    if (prodErr || !products?.length)
-      throw new Error('No products with stock_quantity >= 2 found. Add test products first.');
-
-    state.productId    = products[0].id;
-    state.productName  = products[0].name;
-    state.initialStock = products[0].stock_quantity;
+    // Produit jetable créé par le test (jamais un produit réel) : stock 10, aucune réservation existante.
+    state.productName  = `__TEST__ Produit E2E ${RUN_ID}`;
+    state.initialStock = 10;
+    const { data: prod, error: prodErr } = await db.from('products').insert({
+      name: state.productName, slug: `e2e-produit-${RUN_ID}`, category: 'divers', unit: 'carton',
+      price_ht: 12.5, tva_rate: 0.085, stock_quantity: state.initialStock, in_stock: true, visible_catalogue: true,
+    }).select('id').single();
+    if (prodErr || !prod) throw new Error(`Création du produit de test impossible : ${prodErr?.message}`);
+    state.productId = prod.id;
 
     // Shared browser context — cookies persist between all tests
     ctx  = await browser.newContext();
@@ -114,12 +111,9 @@ test.describe.serial('Inca Import — Full E2E Flow', () => {
       await db.from('client_accounts').delete().eq('email', TEST_EMAIL);
       await db.auth.admin.deleteUser(state.userId);
     }
-    // Restore stock if it changed
-    if (state.productId && state.initialStock > 0) {
-      await db.from('products').update({
-        stock_quantity: state.initialStock,
-        in_stock: true,
-      }).eq('id', state.productId);
+    if (state.productId) {
+      await db.from('cart_items').delete().eq('product_id', state.productId);
+      await db.from('products').delete().eq('id', state.productId);
     }
     await ctx.close();
   });

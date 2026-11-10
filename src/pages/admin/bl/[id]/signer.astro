@@ -1,0 +1,190 @@
+---
+import '../../../../styles/global.css';
+import { supabaseAdmin } from '../../../../lib/supabase';
+import { fetchSignaturesActives, type ContenuBl } from '../../../../lib/blSignatures';
+import { ROLES_SIGNATURE, LIBELLE_ROLE } from '../../../../lib/signatureBl';
+import { formatDateTimeReunion } from '../../../../lib/datetime';
+
+// Écran terrain : admin et commercial (le middleware exige déjà un compte staff). Le client ne peut pas y accéder.
+const user = (Astro.locals as any).user;
+const id = Astro.params.id ?? '';
+if (!/^[0-9a-f-]{36}$/i.test(id)) return Astro.redirect('/admin/livraison?sig_err=' + encodeURIComponent('Bon de livraison introuvable.'));
+
+const { data: note } = await supabaseAdmin
+  .from('delivery_notes').select('id, delivery_id, pdv_name, contenu, created_at').eq('id', id).maybeSingle();
+if (!note) return Astro.redirect('/admin/livraison?sig_err=' + encodeURIComponent('Bon de livraison introuvable.'));
+
+const contenu = (note as any).contenu as ContenuBl | null;
+const pdv = contenu?.pdv;
+const client = pdv?.client_societe ?? pdv?.client_nom ?? '—';
+const cartons = (pdv?.items ?? []).reduce((s, i) => s + (Number(i.quantity) || 0), 0);
+const dateBl = contenu?.date ?? formatDateTimeReunion((note as any).created_at, { hour: undefined, minute: undefined });
+
+const actives = (await fetchSignaturesActives([id])).get(id) ?? [];
+const faites = new Map(actives.map(s => [s.role, s]));
+const etapes = ROLES_SIGNATURE.filter(r => !faites.has(r));
+
+// Nom du transporteur pré-rempli depuis le compte connecté (modifiable).
+const meta = (user?.user_metadata ?? {}) as Record<string, any>;
+const depuisEmail = String(user?.email ?? '').split('@')[0].split(/[._-]+/).filter(Boolean).map((m: string) => m[0].toUpperCase() + m.slice(1)).join(' ');
+const nomParDefaut = String(meta.nom ?? meta.full_name ?? meta.name ?? depuisEmail).trim();
+
+const config = JSON.stringify({ noteId: id, etapes, nomParDefaut, blNumber: (note as any).delivery_id })
+  .replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
+const titre = `Faire signer ${(note as any).delivery_id}`;
+---
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="robots" content="noindex" />
+  <meta name="theme-color" content="#1e1a16" />
+  <title>{titre} — Inca Import</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon-admin.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@700&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body class="sg-body">
+  <main class="sg-shell" data-testid="page-signature">
+    <header class="sg-entete">
+      <div>
+        <p class="sg-etiquette">Bon de livraison</p>
+        <h1 class="sg-numero" data-testid="sg-numero">{(note as any).delivery_id}</h1>
+      </div>
+      <a class="sg-retour" href="/admin/livraison#bons-de-livraison">← Livraisons</a>
+    </header>
+
+    <section class="sg-recap" aria-label="Rappel du bon de livraison">
+      <dl>
+        <div><dt>Client</dt><dd data-testid="sg-client">{client}</dd></div>
+        <div><dt>Point de vente</dt><dd data-testid="sg-pdv">{(note as any).pdv_name}</dd></div>
+        <div><dt>Cartons</dt><dd data-testid="sg-cartons">{cartons}</dd></div>
+        <div><dt>Date</dt><dd>{dateBl}</dd></div>
+      </dl>
+    </section>
+
+    {!contenu && (
+      <p class="sg-alerte sg-alerte--err" role="alert">
+        Ce bon de livraison est antérieur à la signature électronique : il ne peut pas être signé ici.
+      </p>
+    )}
+
+    {contenu && (
+      <>
+        <ol class="sg-etapes" aria-label="Étapes">
+          {ROLES_SIGNATURE.map((r, i) => (
+            <li class="sg-etape" data-role={r} data-etat={faites.has(r) ? 'fait' : 'attente'}>
+              <span class="sg-puce" aria-hidden="true">{faites.has(r) ? '✓' : i + 1}</span>
+              <span>{LIBELLE_ROLE[r]}</span>
+            </li>
+          ))}
+        </ol>
+
+        <section id="panneau" class="sg-panneau" hidden={etapes.length === 0}>
+          <h2 id="sg-titre" class="sg-titre"></h2>
+
+          <label class="sg-label" for="sg-nom" id="sg-nom-label">Nom du signataire</label>
+          <input id="sg-nom" class="sg-champ" type="text" autocomplete="name" autocapitalize="words" enterkeyhint="done" maxlength="100" data-testid="sg-nom" />
+
+          <p class="sg-sr" id="sg-cadre-label">Zone de signature : signez avec le doigt dans le cadre</p>
+          <div class="sg-cadre" id="sg-cadre">
+            <canvas id="pad" class="sg-pad" aria-labelledby="sg-cadre-label" data-testid="sg-pad"></canvas>
+            <span class="sg-indice" id="sg-indice" aria-hidden="true">Signez ici</span>
+          </div>
+
+          <div class="sg-actions">
+            <button type="button" id="sg-effacer" class="sg-btn sg-btn--sec" data-testid="sg-effacer" disabled>Effacer</button>
+            <button type="button" id="sg-valider" class="sg-btn sg-btn--prim" data-testid="sg-valider" disabled>Valider la signature</button>
+          </div>
+          <p class="sg-aide" id="sg-aide" aria-live="polite"></p>
+        </section>
+
+        <div id="sg-statut" class="sg-statut" role="status" aria-live="polite" data-testid="sg-statut" hidden></div>
+
+        <section id="sg-fin" class="sg-fin" data-testid="sg-fin" hidden={etapes.length > 0}>
+          <p class="sg-fin-titre"><span class="sg-gros-v" aria-hidden="true">✓</span> Bon de livraison signé</p>
+          <p class="sg-fin-texte">Le transporteur et le destinataire ont signé. Le PDF signé est disponible.</p>
+          <a class="sg-btn sg-btn--prim" href={`/api/delivery-notes/${id}/signe`} target="_blank" rel="noopener" data-testid="sg-telecharger">Télécharger le BL signé</a>
+          <a class="sg-btn sg-btn--sec" href="/admin/livraison#bons-de-livraison">Retour aux livraisons</a>
+        </section>
+      </>
+    )}
+
+    <script id="sg-config" type="application/json" set:html={config}></script>
+  </main>
+
+  <script is:inline src="/js/signature-pad.js"></script>
+  <script is:inline src="/js/signer-bl.js"></script>
+</body>
+</html>
+
+<style is:global>
+  .sg-body {
+    margin: 0; background: #fff; color: #111;
+    font-family: 'Figtree', system-ui, sans-serif; font-size: 18px; line-height: 1.4;
+    -webkit-tap-highlight-color: transparent; overscroll-behavior: contain;
+  }
+  .sg-shell { max-width: 760px; margin: 0 auto; padding: 14px 16px calc(28px + env(safe-area-inset-bottom)); }
+  .sg-retour { display: inline-flex; align-items: center; min-height: 48px; padding: 0 4px; font-weight: 700; color: #7a3412; text-decoration: none; }
+  .sg-entete { margin: 0 0 8px; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+  .sg-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .sg-etiquette { margin: 0; font-size: 0.95rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #444; }
+  .sg-numero { margin: 0; font-family: 'Barlow Semi Condensed', system-ui, sans-serif; font-size: 2rem; line-height: 1.1; color: #111; }
+
+  .sg-recap { border: 3px solid #111; border-radius: 14px; padding: 8px 14px; margin-bottom: 10px; box-sizing: border-box; }
+  .sg-recap dl { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 14px; }
+  .sg-recap dt { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #444; }
+  .sg-recap dd { margin: 0; font-size: 1.05rem; font-weight: 700; overflow-wrap: anywhere; }
+  .sg-recap dl > div:nth-child(2) { grid-column: 1 / -1; order: 0; }
+
+  .sg-etapes { list-style: none; margin: 0 0 8px; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .sg-etape { display: flex; align-items: center; gap: 10px; min-height: 48px; box-sizing: border-box; padding: 8px 12px; border: 3px solid #bbb; border-radius: 14px; font-weight: 700; color: #555; }
+  .sg-etape[data-etat="fait"] { border-color: #15803d; background: #dcfce7; color: #14532d; }
+  .sg-etape[data-actif="1"] { border-color: #111; color: #111; background: #fff7ed; }
+  .sg-puce { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: currentColor; flex: none; }
+  .sg-puce { color: inherit; }
+  .sg-etape .sg-puce { background: #111; color: #fff; }
+  .sg-etape[data-etat="fait"] .sg-puce { background: #15803d; }
+
+  .sg-titre { margin: 2px 0 4px; font-family: 'Barlow Semi Condensed', system-ui, sans-serif; font-size: 1.5rem; }
+  .sg-label { display: block; margin: 6px 0 4px; font-weight: 700; font-size: 1.05rem; }
+  .sg-champ { width: 100%; box-sizing: border-box; min-height: 60px; margin-bottom: 8px; padding: 10px 14px; font: inherit; font-size: 1.25rem; font-weight: 600; color: #111; background: #fff; border: 3px solid #111; border-radius: 14px; }
+  .sg-champ:focus-visible { outline: 4px solid #f59e0b; outline-offset: 2px; }
+
+  .sg-cadre { position: relative; width: 100%; box-sizing: border-box; scroll-margin-bottom: 130px; aspect-ratio: 5 / 3; background: #fff; border: 4px solid #111; border-radius: 16px; overflow: hidden; }
+  .sg-pad { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; cursor: crosshair; }
+  .sg-cadre::after { content: ''; position: absolute; left: 6%; right: 6%; bottom: 22%; border-bottom: 2px dashed #9ca3af; pointer-events: none; }
+  .sg-indice { position: absolute; inset: 0; display: grid; place-items: center; font-size: 1.6rem; font-weight: 700; color: #b4b4b4; pointer-events: none; }
+  .sg-cadre[data-trace="1"] .sg-indice { display: none; }
+  .sg-cadre[data-verrou="1"] { opacity: 0.6; }
+  .sg-cadre[data-verrou="1"] .sg-pad { pointer-events: none; }
+
+  /* Barre collée en bas de l'écran : « Effacer » et « Valider » restent toujours à portée du pouce, sans défiler. */
+  .sg-actions { display: grid; grid-template-columns: 1fr 2fr; gap: 12px; margin-top: 10px; position: sticky; bottom: 0; z-index: 5; background: #fff; padding: 12px 0 calc(12px + env(safe-area-inset-bottom)); box-shadow: 0 -10px 12px -6px rgba(255, 255, 255, 0.95); }
+  .sg-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 64px; padding: 12px 18px; font: inherit; font-size: 1.3rem; font-weight: 700; text-align: center; text-decoration: none; border-radius: 16px; border: 3px solid #111; cursor: pointer; touch-action: manipulation; box-sizing: border-box; }
+  .sg-btn--prim { background: #111; color: #fff; }
+  .sg-btn--sec { background: #fff; color: #111; }
+  .sg-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .sg-btn:focus-visible { outline: 4px solid #f59e0b; outline-offset: 3px; }
+  .sg-aide { min-height: 1.4em; margin: 10px 2px 0; font-weight: 600; color: #7a3412; }
+
+  .sg-statut { margin-top: 16px; border-radius: 16px; padding: 16px; border: 4px solid #111; font-weight: 700; font-size: 1.2rem; }
+  .sg-statut--cours { background: #fff7ed; border-color: #c2410c; color: #7c2d12; }
+  .sg-statut--ok { background: #dcfce7; border-color: #15803d; color: #14532d; }
+  .sg-statut--echec { background: #fee2e2; border-color: #b91c1c; color: #7f1d1d; }
+  .sg-statut p { margin: 0 0 10px; }
+  .sg-statut p:last-child { margin-bottom: 0; }
+  .sg-statut .sg-btn { width: 100%; margin-top: 8px; }
+  .sg-gros-v { display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: #15803d; color: #fff; font-size: 1.4rem; margin-right: 6px; vertical-align: middle; }
+  .sg-fin { margin-top: 16px; display: grid; gap: 12px; }
+  .sg-fin[hidden], .sg-panneau[hidden], .sg-statut[hidden] { display: none; }
+  .sg-fin-titre { margin: 0; font-family: 'Barlow Semi Condensed', system-ui, sans-serif; font-size: 1.9rem; }
+  .sg-fin-texte { margin: 0; }
+  .sg-alerte { padding: 14px; border-radius: 14px; font-weight: 700; }
+  .sg-alerte--err { background: #fee2e2; border: 3px solid #b91c1c; color: #7f1d1d; }
+
+  @media (min-width: 720px) { .sg-recap dl { grid-template-columns: repeat(4, 1fr); } .sg-recap dl > div:nth-child(2) { grid-column: auto; } }
+  @media (prefers-reduced-motion: no-preference) { .sg-btn { transition: transform 80ms ease; } .sg-btn:active:not(:disabled) { transform: scale(0.98); } }
+</style>

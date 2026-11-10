@@ -924,16 +924,20 @@ export function generateDeliverySummaryPDF(delivery: PdfDeliveryData): Promise<B
 
 // ── Per-PDV PDF: legal Bon de Livraison ──────────────────────────────────
 
+/** Signature à intégrer au BL : image PNG (data URL), nom du signataire et date/heure déjà formatées. */
+export interface BlSignaturePdf { data: string; nom: string; dateLabel: string }
+export interface BlSignaturesPdf { transporteur?: BlSignaturePdf | null; destinataire?: BlSignaturePdf | null }
+
 export function generatePDVDeliveryPDF(
-  pdv: DeliveryPDV, blNumber: string, date: string
+  pdv: DeliveryPDV, blNumber: string, date: string, signatures?: BlSignaturesPdf, opts: { compress?: boolean } = {}
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true, info: { Title: `${blNumber} — ${pdv.name}`, Author: 'Inca Import' } });
+    const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true, compress: opts.compress ?? true, info: { Title: `${blNumber} — ${pdv.name}`, Author: 'Inca Import' } });
     const chunks: Buffer[] = [];
     doc.on('data', (c: Buffer) => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
-    const SIG_H      = 95;  // signature block height
+    const SIG_H      = signatures?.transporteur || signatures?.destinataire ? 114 : 95;  // signature block height (plus haut une fois signé : place pour le tracé)
     const PAGE_BOTTOM = 640; // leave room for signatures + footer on every page
 
     // Column positions — DÉSIGNATION | U/CARTON | QTÉ | TOTAL UNITÉS
@@ -1074,17 +1078,30 @@ export function generatePDVDeliveryPDF(
 
     // ── Signature block ────────────────────────────────────────────────────
     // Ensure it fits on the current page; if not, open a new one
-    if (ry + 28 + SIG_H > PAGE_BOTTOM + SIG_H + 10) { doc.addPage(); ry = 50; }
+    if (ry + 28 + SIG_H > PAGE_BOTTOM + 95 + 10) { doc.addPage(); ry = 50; }   // 745 : le bloc ne chevauche jamais le pied de page
     ry += 28;
 
     const sigBoxW = 234;
     const sigGap  = 27;
     const sigR    = 50 + sigBoxW + sigGap; // x of second box
 
-    const drawSigBox = (x: number, label: string) => {
+    const drawSigBox = (x: number, label: string, sig?: BlSignaturePdf | null) => {
       doc.rect(x, ry, sigBoxW, SIG_H).lineWidth(0.5).strokeColor(BORDER).fillAndStroke(SURFACE, BORDER);
       doc.fontSize(6.5).font('Helvetica-Bold').fillColor(MUTED)
         .text(label, x + 12, ry + 10, { width: sigBoxW - 24, lineBreak: false });
+      if (sig) {
+        // Signature recueillie : image dans le cadre, puis nom et date du signataire dessous.
+        try {
+          doc.image(Buffer.from(sig.data.slice(sig.data.indexOf(',') + 1), 'base64'), x + 12, ry + 18, {
+            fit: [sigBoxW - 24, 56], align: 'center', valign: 'center',
+          });
+        } catch (e) { console.error('[pdf] signature illisible', e); }
+        doc.fontSize(8).font('Helvetica-Bold').fillColor(INK)
+          .text(sig.nom, x + 12, ry + SIG_H - 38, { width: sigBoxW - 24, lineBreak: false, ellipsis: true });
+        doc.fontSize(7.5).font('Helvetica').fillColor(MUTED)
+          .text(`Date : ${sig.dateLabel}`, x + 12, ry + SIG_H - 21, { width: sigBoxW - 24, lineBreak: false });
+        return;
+      }
       // Date line near bottom
       doc.fontSize(8).font('Helvetica').fillColor(MUTED)
         .text('Date :', x + 12, ry + SIG_H - 22, { lineBreak: false });
@@ -1092,8 +1109,8 @@ export function generatePDVDeliveryPDF(
         .lineWidth(0.4).strokeColor(BORDER).stroke();
     };
 
-    drawSigBox(50,   'SIGNATURE TRANSPORTEUR');
-    drawSigBox(sigR, 'SIGNATURE DESTINATAIRE');
+    drawSigBox(50,   'SIGNATURE TRANSPORTEUR', signatures?.transporteur);
+    drawSigBox(sigR, 'SIGNATURE DESTINATAIRE', signatures?.destinataire);
 
     // Footer on every page
     const totalPages = doc.bufferedPageRange().count;

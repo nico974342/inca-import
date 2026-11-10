@@ -36,6 +36,18 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
   if (clientErr) return fail('lecture', clientErr.message);
   if (!client)   return fail('introuvable', `Aucun client avec l'id ${id}`);
 
+  // Les bons de livraison signés sont des preuves de livraison : on ne les supprime pas (la base les protège aussi).
+  // Contrôle AVANT toute suppression, sinon la suppression des commandes aurait déjà eu lieu quand le blocage se déclencherait.
+  const { data: blDuClient } = await supabaseAdmin.from('delivery_notes').select('id').eq('client_id', id);
+  const idsBl = (blDuClient ?? []).map(b => b.id);
+  if (idsBl.length > 0) {
+    const { count: nbSignatures, error: sigErr } = await supabaseAdmin
+      .from('bl_signatures').select('id', { count: 'exact', head: true }).in('delivery_note_id', idsBl);
+    if (!sigErr && (nbSignatures ?? 0) > 0) {
+      return fail('bl_signes', 'Ce client a des bons de livraison signés (preuves de livraison) : suppression impossible. Rien n\'a été supprimé.');
+    }
+  }
+
   let authUserId: string | null = null;
   try {
     authUserId = await findAuthUserIdByEmail(client.email);

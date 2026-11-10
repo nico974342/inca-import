@@ -32,6 +32,7 @@
 
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { exigerBaseDeTest } from '../helpers/garde-ecriture';
 
 function getEnv(key: string): string {
   const v = process.env[key];
@@ -86,6 +87,7 @@ async function readSnapshot(productId: string) {
 test.describe.serial('Commande — correction explicite du prix à l\'édition (régression)', () => {
 
   test.beforeAll(async ({ browser }) => {
+    exigerBaseDeTest();   // refuse tout si la base vise la production
     db = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'), {
       auth: { autoRefreshToken: false, persistSession: false },
     });
@@ -95,7 +97,7 @@ test.describe.serial('Commande — correction explicite du prix à l\'édition (
     // Produit A : délibérément à 0 € — reproduit "prix de vente par erreur
     // à 0 €" du rapport de bug.
     const { data: prodA, error: prodAErr } = await db.from('products').insert({
-      name: state.productAName, category: 'divers', unit: 'carton',
+      name: state.productAName, slug: `e2e-price-a-${RUN_ID}`, category: 'divers', unit: 'carton',
       price_ht: 0, tva_rate: 0.085, stock_quantity: 10, in_stock: true,
     }).select('id').single();
     expect(prodAErr, `product A insert failed: ${prodAErr?.message}`).toBeNull();
@@ -105,7 +107,7 @@ test.describe.serial('Commande — correction explicite du prix à l\'édition (
     // sauvegarder la commande (ligne A) ou changer sa quantité (ligne B)
     // ne touche jamais à ce prix historique.
     const { data: prodB, error: prodBErr } = await db.from('products').insert({
-      name: state.productBName, category: 'divers', unit: 'carton',
+      name: state.productBName, slug: `e2e-price-b-${RUN_ID}`, category: 'divers', unit: 'carton',
       price_ht: HISTORIC_PRICE_B, tva_rate: 0.085, stock_quantity: 10, in_stock: true,
     }).select('id').single();
     expect(prodBErr, `product B insert failed: ${prodBErr?.message}`).toBeNull();
