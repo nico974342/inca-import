@@ -136,6 +136,10 @@ test.describe('Page livraison : ordre des opérations', () => {
   test('la mise à jour des commandes n\'a lieu qu\'après un envoi réussi (comportement conservé)', () => {
     expect(page.indexOf("status: 'en_preparation'")).toBeGreaterThan(page.indexOf('successMessage ='));
   });
+  test('alerte visible dès l\'ouverture de la page si le stockage n\'est pas prêt (pas seulement à la génération)', () => {
+    expect(page).toMatch(/const etatStockage = await verifierStockageBl\(depotBl\)/);
+    expect(page).toMatch(/\{!etatStockage\.ok && \(\s*<div class="alert alert-error" role="alert" data-testid="stockage-bl-indisponible">/);
+  });
   test('anciens BL (sans contenu figé) : « Signé sur papier », jamais « Non signé » ni bouton de signature', () => {
     expect(page).toContain('Signé sur papier');
     expect(page).toMatch(/b\.etat !== 'signe' && b\.signable/);

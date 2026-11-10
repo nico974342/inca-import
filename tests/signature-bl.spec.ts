@@ -123,7 +123,11 @@ test.describe('Contrôles de code : accès et preuve non modifiable', () => {
   });
   test('la seule écriture après création est l\'annulation (route admin) : aucun update ailleurs', () => {
     expect(index).not.toMatch(/\.update\(|\.delete\(|\.upsert\(/);
-    expect(lire('src/lib/blSignatures.ts')).not.toMatch(/\.update\(|\.delete\(|\.upsert\(/);
+    const lib = lire('src/lib/blSignatures.ts');
+    expect(lib).not.toMatch(/\.update\(|\.upsert\(/);
+    expect(lib).not.toMatch(/from\('bl_signatures'\)\s*\.(delete|update|upsert)\(/);   // jamais sur les signatures
+    expect(lib.match(/\.delete\(\)/g)).toHaveLength(1);                                // seul retrait : les lignes delivery_notes d'un lot raté…
+    expect(lib).toMatch(/from\('delivery_notes'\)\.delete\(\)\.in\('delivery_id'/);    // …par numéro de BL, avant tout e-mail
     const maj = annuler.slice(annuler.indexOf('.update('), annuler.indexOf('.update(') + 200);
     expect(maj).toMatch(/annulee_le.*annulee_par.*annulation_motif/s);
     expect(maj).not.toMatch(/signature_data|signataire_nom|signed_by|signed_at/);

@@ -218,6 +218,9 @@ if (Astro.request.method === 'POST') {
   }
 }
 
+// Alerte dès l'ouverture de la page : la génération des BL est bloquée tant que le stockage n'est pas prêt.
+const etatStockage = await verifierStockageBl(depotBl);
+
 const categories = Object.keys(productsByCategory).sort();
 
 // ── Confirmed orders pending delivery ──────────────────────────────────────
@@ -316,6 +319,11 @@ const bonsLivraison = notes.map(n => {
         <path d="M4.5 8l2.5 2.5 4-4" stroke="oklch(0.52 0.17 145)" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       {successMessage}
+    </div>
+  )}
+  {!etatStockage.ok && (
+    <div class="alert alert-error" role="alert" data-testid="stockage-bl-indisponible">
+      Le stockage des bons de livraison n'est pas prêt ({etatStockage.detail}). La génération des BL est bloquée pour éviter tout BL non enregistré. Prévenez le support.
     </div>
   )}
   {sigOk && <div class="alert alert-success" role="status">{sigOk}</div>}

@@ -34,7 +34,7 @@ export interface DepotBl {
   retirerNotes(numeros: string[]): Promise<void>;
 }
 
-export type ResultatBl = { ok: true } | { ok: false; message: string };
+export type ResultatBl = { ok: true } | { ok: false; message: string; detail?: string };
 
 export async function verifierStockageBl(depot: DepotBl): Promise<ResultatBl> {
   let erreur: string | null;
@@ -43,6 +43,7 @@ export async function verifierStockageBl(depot: DepotBl): Promise<ResultatBl> {
   return {
     ok: false,
     message: `Le stockage des bons de livraison n'est pas prêt (${erreur}). Rien n'a été généré ni envoyé, aucun numéro de BL n'a été consommé. Prévenez le support avant de réessayer.`,
+    detail: erreur,
   };
 }
 
