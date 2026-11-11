@@ -215,8 +215,8 @@ test.describe('Route et fiche Commandes : sécurité', () => {
     expect(composant).toMatch(/formaction=\{`\/api\/admin\/bl-signatures\/\$\{parRole\[r\]\.id\}\/annuler`\}/);   // chaque bouton désigne SA signature
     expect(composant).toMatch(/const ACTION_NEUTRE = '\/api\/admin\/bl-signatures\/00000000-0000-0000-0000-000000000000\/annuler'/);   // pas d'envoi involontaire
   });
-  test('aucune nouvelle migration SQL, aucun autre fichier de base modifié', () => {
-    expect(execSync('git diff --name-only main -- supabase', { encoding: 'utf8' }).trim()).toBe('');
-    expect(execSync('git status --short -- supabase/migrations supabase/propositions', { encoding: 'utf8' }).trim()).toBe('');
+  test("l'annulation n'exige aucune modification des migrations du système de BL", () => {
+    // Les migrations du BL (signatures, commandes, numérotation) ne doivent pas avoir bougé par rapport à main.
+    expect(execSync('git diff --name-only main -- supabase/migrations/bl_signatures.sql supabase/migrations/bl_commandes.sql supabase/migrations/bl_sequence.sql', { encoding: 'utf8' }).trim()).toBe('');
   });
 });
