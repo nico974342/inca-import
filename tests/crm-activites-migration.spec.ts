@@ -460,3 +460,69 @@ test.describe.serial('CRM M2 — activités, relances, délégations (base local
     expect(await un(db, `SELECT count(*)::int n FROM pg_proc WHERE proname = 'order_create_checked'`)).toEqual({ n: 1 });
   });
 });
+
+const DROITS = lire('crm_activites_droits.sql');
+
+test.describe.serial('CRM M2 — moindre privilège de service_role (crm_activites_droits.sql, base locale)', () => {
+  let db: PGlite; let ids: Record<string, string>;
+  test.beforeAll(async () => { ({ db, ids } = await baseM2()); await db.exec(M2); await db.exec(DROITS); });
+  test.afterAll(async () => { await db.close(); });
+
+  test('droits : plus aucun DELETE/TRUNCATE sur activités, relances, délégations ni suggestions ; DELETE conservé seulement pour les interlocuteurs', async () => {
+    const droits = async (t: string) => (await exec(db, `SELECT privilege_type p FROM information_schema.role_table_grants WHERE table_schema = 'public' AND table_name = $1 AND grantee = 'service_role' ORDER BY 1`, [t])).map(r => r.p);
+    expect(await droits('client_interactions')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
+    expect(await droits('crm_delegations')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
+    expect(await droits('crm_suggestions_masquees')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
+    expect(await droits('weekly_tasks')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
+    expect(await droits('client_contacts')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+    for (const t of ['client_interactions', 'crm_delegations', 'weekly_tasks', 'crm_suggestions_masquees'])
+      ERR((await srv(db, `DELETE FROM ${t}`)).error, 'permission denied');
+    ERR((await srv(db, `TRUNCATE client_interactions`)).error, 'permission denied');
+    for (const r of ['anon', 'authenticated']) expect((await un(db, `SELECT has_table_privilege('${r}', 'client_interactions', 'SELECT') a`)).a).toBe(false);
+  });
+
+  test('toutes les fonctions légitimes continuent de fonctionner avec ces droits réduits (activité, relance, report, clôture, correction, annulation, contacts, délégation, suggestion)', async () => {
+    const n = await noter(db, { client: ids.clem, action: 'rappeler', echeance: jour(2) });
+    expect(n.error).toBe('');
+    const rel = n.rows[0].r.relance_id as string;
+    expect((await rpc(db, 'relance_reporter', [rel, jour(4), 'Client absent', ...acteurArgs(CLEMENT)], ['uuid', 'date', 'text', 'uuid', 'text', 'text'])).error).toBe('');
+    expect((await rpc(db, 'relance_cloturer', [rel, 'faite', null, ...acteurArgs(CLEMENT)], ['uuid', 'text', 'text', 'uuid', 'text', 'text'])).error).toBe('');
+    const p = await programmer(db, ids.clem, { echeance: jour(3) }); expect(p.error).toBe('');
+    expect((await rpc(db, 'relance_reassigner', [p.rows[0].r.relance_id, ARNAUD, MEL[ARNAUD], 'Congés', ...acteurArgs(ADMIN)], ['uuid', 'uuid', 'text', 'text', 'uuid', 'text', 'text'])).error).toBe('');
+    const i = n.rows[0].r.interaction_id as string;
+    expect((await rpc(db, 'interaction_corriger', [i, 'echange', 'Corrigé', null, null, ...acteurArgs(CLEMENT)], ['uuid', 'text', 'text', 'text', 'text', 'uuid', 'text', 'text'])).error).toBe('');
+    expect((await rpc(db, 'interaction_annuler', [i, 'Saisie en double', ...acteurArgs(CLEMENT)], ['uuid', 'text', 'uuid', 'text', 'text'])).error).toBe('');
+    const c = await rpc(db, 'contact_enregistrer', [null, ids.clem, 'Mme Dupont', null, null, null, true, null, ...acteurArgs(CLEMENT)], ['uuid', 'uuid', 'text', 'text', 'text', 'text', 'boolean', 'text', 'uuid', 'text', 'text']);
+    expect(c.error).toBe('');
+    expect((await rpc(db, 'contact_supprimer', [c.rows[0].r.contact_id, ...acteurArgs(CLEMENT)], ['uuid', 'uuid', 'text', 'text'])).error).toBe('');
+    const d = await rpc(db, 'delegation_accorder', [CLEMENT, MEL[CLEMENT], ARNAUD, MEL[ARNAUD], null, 'Congés', ...acteurArgs(ADMIN)], ['uuid', 'text', 'uuid', 'text', 'date', 'text', 'uuid', 'text', 'text']);
+    expect(d.error).toBe('');
+    expect((await rpc(db, 'delegation_revoquer', [d.rows[0].r.delegation_id, 'Retour', ...acteurArgs(ADMIN)], ['uuid', 'text', 'uuid', 'text', 'text'])).error).toBe('');
+    expect((await rpc(db, 'suggestion_masquer', [ids.clem, 'client_sans_commande', jour(7), null, ...acteurArgs(CLEMENT)], ['uuid', 'text', 'date', 'text', 'uuid', 'text', 'text'])).error).toBe('');
+    expect((await srv(db, `INSERT INTO weekly_tasks (content) VALUES ('Tâche générale')`)).error).toBe('');
+    expect((await srv(db, `UPDATE weekly_tasks SET done = true, done_at = now() WHERE content = 'Tâche générale'`)).error).toBe('');
+  });
+
+  test('la suppression d\'un compte client (cascade, SET NULL) fonctionne toujours et conserve l\'historique', async () => {
+    const c = (await un(db, `INSERT INTO client_accounts (nom, societe, email, status) VALUES ('Éphémère', 'Éphémère', 'e@x.fr', 'actif') RETURNING id`)).id;
+    await srv(db, `SELECT client_attribuer($1, $2, $3, 'attribution', $4, $5, 'admin', NULL)`, [c, CLEMENT, MEL[CLEMENT], ADMIN, MEL[ADMIN]]);
+    const n = await noter(db, { client: c, action: 'rappeler', echeance: jour(2) });
+    await rpc(db, 'contact_enregistrer', [null, c, 'Mme E', null, null, null, false, null, ...acteurArgs(CLEMENT)], ['uuid', 'uuid', 'text', 'text', 'text', 'text', 'boolean', 'text', 'uuid', 'text', 'text']);
+    await rpc(db, 'suggestion_masquer', [c, 'client_sans_commande', jour(5), null, ...acteurArgs(CLEMENT)], ['uuid', 'text', 'date', 'text', 'uuid', 'text', 'text']);
+    expect((await srv(db, `DELETE FROM client_accounts WHERE id = $1`, [c])).error).toBe('');
+    expect(await un(db, `SELECT client_id, client_libelle FROM client_interactions WHERE id = $1`, [n.rows[0].r.interaction_id])).toEqual({ client_id: null, client_libelle: 'Éphémère' });
+    expect((await un(db, `SELECT client_id FROM weekly_tasks WHERE id = $1`, [n.rows[0].r.relance_id])).client_id).toBeNull();
+    expect(await un(db, `SELECT (SELECT count(*) FROM client_contacts WHERE client_id = $1)::int c, (SELECT count(*) FROM crm_suggestions_masquees WHERE client_id = $1)::int s`, [c])).toEqual({ c: 0, s: 0 });
+  });
+
+  test('rejouable sans effet ; aucune fonction SECURITY DEFINER dans M2 (20 fonctions : 14 appelées par le serveur, 3 aides internes, 3 déclencheurs)', async () => {
+    await db.exec(DROITS);
+    expect(DROITS.replace(/--[^\n]*/g, '')).not.toMatch(/\bGRANT\b|\bDROP\b|\bDELETE\s+FROM\b|\bINSERT\b/i);
+    const f = await exec(db, `SELECT p.proname, p.prosecdef, has_function_privilege('service_role', p.oid, 'EXECUTE') srv FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+      AND (p.proname ~ '^(interaction_|relance_|contact_|delegation_|suggestion_|crm_)' OR p.proname IN ('client_interactions_proteger', 'weekly_tasks_proteger')) ORDER BY 1`);
+    expect(f).toHaveLength(20);
+    expect(f.filter(x => x.prosecdef)).toEqual([]);
+    expect(f.filter(x => x.srv)).toHaveLength(17);          // 14 appelées par le serveur + 3 aides internes appelées par elles
+    expect(f.filter(x => !x.srv).map(x => x.proname).sort()).toEqual(['client_interactions_proteger', 'crm_delegations_proteger', 'weekly_tasks_proteger']);
+  });
+});
