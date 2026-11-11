@@ -161,31 +161,6 @@ const viewerIsStaff = isStaff((Astro.locals as any).user);
         </a>
           </div>
         </div>
-        <div class="nav-groupe" data-groupe="stocks" data-courant={groupeActif === 'stocks' ? 'true' : 'false'}>
-          <h2 class="nav-groupe-titre">
-            <button type="button" class="nav-groupe-btn" id="nav-btn-stocks" aria-expanded={groupeActif === 'stocks' ? 'true' : 'false'} aria-controls="nav-sous-stocks">
-              <span class="nav-groupe-label">Stocks</span>
-              <svg class="nav-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true" focusable="false"><path d="M4 2.5 7.5 6 4 9.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </button>
-          </h2>
-          <div class="nav-sous" id="nav-sous-stocks" role="group" aria-labelledby="nav-btn-stocks" hidden={groupeActif !== 'stocks'}>
-        {viewerIsStaff && (
-          <a href="/admin/produits" class={`nav-link ${activeNav === 'produits' ? 'nav-link--active' : ''}`}>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            </svg>
-            Produits
-          </a>
-        )}
-        <a href="/admin/stocks" class={`nav-link ${activeNav === 'stocks' ? 'nav-link--active' : ''}`}>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M2 5.5 8 2l6 3.5v5L8 14l-6-3.5v-5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-            <path d="M2 5.5 8 9l6-3.5M8 9v5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-          </svg>
-          Stocks
-        </a>
-          </div>
-        </div>
         {viewerIsAdmin && (
         <div class="nav-groupe" data-groupe="achats" data-courant={groupeActif === 'achats' ? 'true' : 'false'}>
           <h2 class="nav-groupe-titre">
@@ -228,6 +203,31 @@ const viewerIsStaff = isStaff((Astro.locals as any).user);
           </div>
         </div>
         )}
+        <div class="nav-groupe" data-groupe="stocks" data-courant={groupeActif === 'stocks' ? 'true' : 'false'}>
+          <h2 class="nav-groupe-titre">
+            <button type="button" class="nav-groupe-btn" id="nav-btn-stocks" aria-expanded={groupeActif === 'stocks' ? 'true' : 'false'} aria-controls="nav-sous-stocks">
+              <span class="nav-groupe-label">Stocks</span>
+              <svg class="nav-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true" focusable="false"><path d="M4 2.5 7.5 6 4 9.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </h2>
+          <div class="nav-sous" id="nav-sous-stocks" role="group" aria-labelledby="nav-btn-stocks" hidden={groupeActif !== 'stocks'}>
+        {viewerIsStaff && (
+          <a href="/admin/produits" class={`nav-link ${activeNav === 'produits' ? 'nav-link--active' : ''}`}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+            Produits
+          </a>
+        )}
+        <a href="/admin/stocks" class={`nav-link ${activeNav === 'stocks' ? 'nav-link--active' : ''}`}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2 5.5 8 2l6 3.5v5L8 14l-6-3.5v-5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M2 5.5 8 9l6-3.5M8 9v5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+          </svg>
+          Stocks
+        </a>
+          </div>
+        </div>
         {viewerIsAdmin && (
         <div class="nav-groupe" data-groupe="gestion" data-courant={groupeActif === 'gestion' ? 'true' : 'false'}>
           <h2 class="nav-groupe-titre">

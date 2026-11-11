@@ -9,14 +9,14 @@ import { readFileSync } from 'node:fs';
 const lire = (f: string) => readFileSync(f, 'utf8').replace(/\r\n/g, '\n');
 const layout = lire('src/components/admin/AdminLayout.astro');
 const script = lire('src/scripts/menuRubriques.ts');
-const IDS = ['ventes', 'stocks', 'achats', 'gestion'];
+const IDS = ['ventes', 'achats', 'stocks', 'gestion'];   // ordre demandé : Ventes, Achats, Stocks, Gestion
 
 test.describe('Menu repliable', () => {
-  test('un seul menu (composant existant) ; quatre rubriques : Ventes, Stocks, Achats, Gestion', () => {
+  test('un seul menu (composant existant) ; quatre rubriques : Ventes, Achats, Stocks, Gestion', () => {
     expect(layout.match(/<nav class="sidebar-nav"/g)).toHaveLength(1);
     expect(layout.match(/<nav\b/g)).toHaveLength(1);
     expect([...layout.matchAll(/<div class="nav-groupe" data-groupe="(\w+)"/g)].map(m => m[1])).toEqual(IDS);
-    expect([...layout.matchAll(/<span class="nav-groupe-label">([^<]+)<\/span>/g)].map(m => m[1])).toEqual(['Ventes', 'Stocks', 'Achats', 'Gestion']);
+    expect([...layout.matchAll(/<span class="nav-groupe-label">([^<]+)<\/span>/g)].map(m => m[1])).toEqual(['Ventes', 'Achats', 'Stocks', 'Gestion']);
     expect(layout).not.toMatch(/Achats et stock/);
   });
 

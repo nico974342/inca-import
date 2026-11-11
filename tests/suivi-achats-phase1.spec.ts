@@ -106,9 +106,9 @@ test.describe('Phase 1 — Suivi des achats', () => {
     // Ordre par groupe
     const ordre = nouveau.liens.map(x => x.href);
     expect(ordre).toEqual(['/admin', '/admin/aujourdhui', '/admin/clients', '/admin/portefeuilles', '/admin/activites', '/admin/tarifs', '/admin/commande-rapide', '/admin/preparation', '/admin/commandes', '/admin/livraison',
-      '/admin/produits', '/admin/stocks', '/admin/commande-fournisseur', '/admin/achats', '/admin/reception', '/admin/fournisseurs', '/admin/marges', '/admin/journal']);
+      '/admin/commande-fournisseur', '/admin/achats', '/admin/reception', '/admin/fournisseurs', '/admin/produits', '/admin/stocks', '/admin/marges', '/admin/journal']);
     expect(nouveau.titres).toEqual([
-      { label: 'Ventes', garde: 'tous', avantLien: null }, { label: 'Stocks', garde: 'tous', avantLien: null }, { label: 'Achats', garde: 'admin', avantLien: null }, { label: 'Gestion', garde: 'admin', avantLien: null }]);
+      { label: 'Ventes', garde: 'tous', avantLien: null }, { label: 'Achats', garde: 'admin', avantLien: null }, { label: 'Stocks', garde: 'tous', avantLien: null }, { label: 'Gestion', garde: 'admin', avantLien: null }]);
     // Les rubriques « Achats » et « Gestion » (liens réservés à l'administrateur) sont elles-mêmes réservées à l'administrateur : le commercial n'en voit pas même le titre
     const src = lire('src/components/admin/AdminLayout.astro');
     for (const g of ['achats', 'gestion']) expect(src).toMatch(new RegExp(`\\{viewerIsAdmin && \\(\\n\\s+<div class="nav-groupe" data-groupe="${g}"`));
