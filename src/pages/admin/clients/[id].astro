@@ -12,6 +12,10 @@ import { formatDateReunion, reunionMonthStart } from '../../../lib/datetime';
 import { fetchSignaturesActives, etatDuBl } from '../../../lib/blSignatures';
 import { LIBELLE_ETAT } from '../../../lib/signatureBl';
 import { isAdmin, getRole, ROLE_LABEL, type UserRole } from '../../../lib/roles';
+import CrmFiche from '../../../components/admin/CrmFiche.astro';
+import { acteurDepuisSession, portefeuille } from '../../../lib/portefeuille';
+import { crm } from '../../../lib/crm';
+import { todayReunionISO } from '../../../lib/datetime';
 
 const viewerIsAdmin = isAdmin((Astro.locals as any).user);
 
@@ -134,6 +138,8 @@ if (Astro.request.method === 'POST') {
 // since commande-rapide stamps the admin's own id there) ──────────────
 const orderQueries = [
   supabaseAdmin.from('orders').select('id, status, created_at, email').eq('email', client.email ?? ''),
+  // commandes rattachées par M1 (client_id), même si l'e-mail de la commande diffère de celui de la fiche
+  supabaseAdmin.from('orders').select('id, status, created_at, email').eq('client_id', id),
   ...(client.user_id ? [supabaseAdmin.from('orders').select('id, status, created_at, email').eq('user_id', client.user_id)] : []),
 ];
 const orderResults = await Promise.all(orderQueries);
@@ -238,6 +244,23 @@ const { data: deliveryNotes } = await supabaseAdmin
 
 const signaturesParBl = await fetchSignaturesActives((deliveryNotes ?? []).map(n => n.id));
 
+// ── Suivi commercial (M2) : lecture ouverte à tout le personnel, écriture selon le portefeuille (droit vérifié par la base) ──
+const acteurCrm = acteurDepuisSession((Astro.locals as any).user);
+const aujourdhuiCrm = todayReunionISO();
+const [peutAgirCrm, { data: interactionsBrutes }, { data: relancesBrutes }, { data: contactsBruts }, personnelCrm] = await Promise.all([
+  crm.peutAgir((Astro.locals as any).user, id!),
+  supabaseAdmin.from('client_interactions')
+    .select('id, type, resultat, commentaire, prochaine_action, occurred_at, created_at, created_by, created_by_email, nb_modifications, annulee_le, annulation_motif')
+    .eq('client_id', id).order('occurred_at', { ascending: false }).limit(200),
+  supabaseAdmin.from('weekly_tasks')
+    .select('id, content, type, echeance, heure, assigne_a, assigne_email, reports, statut, done_at, annulee_le, annulation_motif, created_at')
+    .eq('client_id', id).neq('type', 'tache').order('echeance', { ascending: true }).limit(200),
+  supabaseAdmin.from('client_contacts').select('id, nom, fonction, telephone, email, principal, notes').eq('client_id', id)
+    .order('principal', { ascending: false }).order('nom', { ascending: true }),
+  acteurCrm?.role === 'admin' ? portefeuille.personnel().catch(() => []) : Promise.resolve([]),
+]);
+const flashOk = Astro.url.searchParams.get('ok'); const flashErr = Astro.url.searchParams.get('err');
+
 // Resolve auth user and current role — app_metadata is the source of truth
 // (see lib/roles.ts), not user_metadata, which the account holder can write.
 let authUserId: string | null = (client as any).user_id ?? null;
@@ -288,6 +311,23 @@ const grantedMaskedCount = (maskedProducts ?? []).filter(m => grantedIds.has(m.i
     </div>
     <a href={`/admin/commande-rapide?client_id=${client.id}`} class="btn btn-primary">Créer une commande</a>
   </div>
+
+  {acteurCrm && (
+    <CrmFiche
+      client={client as any}
+      viewer={{ id: acteurCrm.id, role: acteurCrm.role }}
+      peutAgir={peutAgirCrm}
+      interactions={(interactionsBrutes ?? []) as any}
+      relances={(relancesBrutes ?? []) as any}
+      contacts={(contactsBruts ?? []) as any}
+      commandes={ordersWithTotal.filter(o => o.status !== 'annulee').map(o => ({ id: o.id, created_at: o.created_at, status: (ORDER_STATUS_LABEL as Record<string, string>)[o.status] ?? o.status, total: o.total }))}
+      aujourdhui={aujourdhuiCrm}
+      maintenant={Date.now()}
+      personnel={personnelCrm}
+      ok={flashOk}
+      err={flashErr}
+    />
+  )}
 
   <div class="addr-summary">
     <div class="addr-block addr-block--fact">

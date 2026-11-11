@@ -10,7 +10,8 @@ import LotsASurveiller from '../../components/admin/LotsASurveiller.astro';
 
 // Marge, valeur de stock, produits à surveiller : ce tableau de bord est
 // admin uniquement. Un commercial voit une version allégée à la place.
-if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin/tableau-de-bord');
+// Le commercial arrive sur « Aujourd'hui » (ses relances et suggestions) ; l'ancien tableau de bord allégé reste accessible depuis cette page.
+if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin/aujourdhui');
 
 const REVENUE_STATUSES = ['confirmee', 'en_preparation', 'expediee', 'livree'] as const;
 

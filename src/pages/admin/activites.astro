@@ -1,0 +1,183 @@
+---
+import AdminLayout from '../../components/admin/AdminLayout.astro';
+import { supabaseAdmin } from '../../lib/supabase';
+import { acteurDepuisSession, portefeuille } from '../../lib/portefeuille';
+import { estUuid, RACCOURCIS } from '../../lib/crm';
+import { dateCourte, etatRelance, libelleEcheance, titreInteraction } from '../../lib/crmVue';
+import { formatDateTimeReunion } from '../../lib/datetime';
+import { todayReunionISO } from '../../lib/datetime';
+
+/**
+ * Activités (administrateur) : tout ce que font les commerciaux, leurs prochaines relances, programmer une action pour quelqu'un, et les
+ * délégations (autorisation explicite d'agir sur le portefeuille d'un autre commercial). Réservé à l'administrateur, côté serveur ; la base
+ * refuse de toute façon ces opérations à un autre rôle.
+ */
+const acteur = acteurDepuisSession((Astro.locals as any).user);
+if (!acteur || acteur.role !== 'admin') return Astro.redirect('/admin/aujourdhui');
+const aujourdhui = todayReunionISO();
+const q = Astro.url.searchParams;
+const respParam = q.get('resp'); const resp = respParam && estUuid(respParam) ? respParam : null;
+const ok = q.get('ok'); const err = q.get('err');
+const personnel = await portefeuille.personnel().catch(() => []);
+
+let reqRelances = supabaseAdmin.from('weekly_tasks').select('id, content, type, client_id, client_libelle, echeance, heure, assigne_a, assigne_email, reports').neq('type', 'tache').eq('statut', 'a_faire').order('echeance', { ascending: true }).limit(300);
+let reqActivites = supabaseAdmin.from('client_interactions').select('id, client_id, client_libelle, type, resultat, commentaire, prochaine_action, occurred_at, created_by, created_by_email, annulee_le, annulation_motif').order('occurred_at', { ascending: false }).limit(100);
+if (resp) { reqRelances = reqRelances.eq('assigne_a', resp); reqActivites = reqActivites.eq('created_by', resp); }
+const [{ data: relances }, { data: activites }, { data: clients }, { data: delegations }] = await Promise.all([
+  reqRelances, reqActivites,
+  supabaseAdmin.from('client_accounts').select('id, nom, societe').order('societe', { ascending: true }).limit(5000),
+  supabaseAdmin.from('crm_delegations').select('id, commercial_email, proprietaire_email, accorde_par, accorde_le, expire_le, motif, revoque_le, revoque_par, revocation_motif').order('accorde_le', { ascending: false }).limit(50),
+]);
+const clientsListe = ((clients ?? []) as any[]).map(c => ({ id: c.id, nom: c.societe || c.nom })).sort((a, b) => a.nom.localeCompare(b.nom, 'fr'));
+const actives = ((delegations ?? []) as any[]).filter(d => !d.revoque_le && (!d.expire_le || d.expire_le >= aujourdhui));
+const passees = ((delegations ?? []) as any[]).filter(d => !actives.includes(d)).slice(0, 10);
+const cleProg = crypto.randomUUID();
+const retour = `/admin/activites${resp ? `?resp=${resp}` : ''}`;
+const mail = (e: string) => e.split('@')[0];
+---
+<AdminLayout title="Activités" activeNav="activites">
+  <div class="ac" data-testid="activites">
+    <h1 class="ac-h1">Activités</h1>
+    <p class="ac-sub">Ce que font les commerciaux : échanges, relances à venir, actions à leur confier, délégations.</p>
+    {ok && <p class="ac-flash ac-flash--ok" role="status">{ok}</p>}
+    {err && <p class="ac-flash ac-flash--err" role="alert">{err}</p>}
+
+    <form method="get" class="ac-filtre">
+      <label for="resp">Commercial</label>
+      <select id="resp" name="resp" onchange="this.form.submit()">
+        <option value="">Tous</option>
+        {personnel.map(p => <option value={p.id} selected={resp === p.id}>{p.email}</option>)}
+      </select>
+    </form>
+
+    <section class="ac-bloc" data-testid="programmer-pour">
+      <h2 class="ac-titre">Programmer une action pour quelqu'un</h2>
+      <form method="post" action="/api/admin/crm/action" class="ac-form">
+        <input type="hidden" name="operation" value="programmer" /><input type="hidden" name="cle" value={cleProg} /><input type="hidden" name="retour" value={retour} />
+        <label for="pg-client">Client</label>
+        <select id="pg-client" name="client_id" required><option value="">Choisir un client…</option>{clientsListe.map(c => <option value={c.id}>{c.nom}</option>)}</select>
+        <label for="pg-assigne">Confier à</label>
+        <select id="pg-assigne" name="assigne_id">{personnel.map(p => <option value={p.id} selected={p.id === acteur.id}>{p.email}</option>)}</select>
+        <label for="pg-titre">Que faut-il faire ?</label>
+        <input id="pg-titre" type="text" name="titre" maxlength="200" placeholder="Présenter la nouvelle gamme…" autocomplete="off" />
+        <div class="ac-chips">
+          {RACCOURCIS.map(r => <label class="ac-chip"><input type="radio" name="delai" value={r.code} checked={r.code === '3j'} /><span>{r.libelle}</span></label>)}
+          <label class="ac-chip"><input type="radio" name="delai" value="date" /><span>Autre date</span></label>
+        </div>
+        <input type="date" name="date_perso" min={aujourdhui} aria-label="Autre date" />
+        <label for="pg-heure">Heure (rendez-vous, facultatif)</label>
+        <input id="pg-heure" type="time" name="heure" />
+        <button type="submit" class="ac-btn ac-btn--p">Programmer</button>
+      </form>
+    </section>
+
+    <section class="ac-bloc" data-testid="prochaines-relances">
+      <h2 class="ac-titre">Prochaines relances et rendez-vous <span class="ac-n">{(relances ?? []).length}</span></h2>
+      {(relances ?? []).length === 0 ? <p class="ac-vide">Aucune relance à faire.</p> : (
+        <ul class="ac-liste">
+          {((relances ?? []) as any[]).map(r => (
+            <li class={`ac-ligne ac-ligne--${etatRelance(r.echeance, aujourdhui)}`} data-relance={r.id}>
+              <div class="ac-haut"><a href={r.client_id ? `/admin/clients/${r.client_id}` : '#'} class="ac-client">{r.client_libelle ?? 'Client'}</a><span class="ac-etat">{libelleEcheance(r.echeance, aujourdhui)} · {dateCourte(r.echeance)}{r.heure ? ` à ${r.heure.slice(0, 5)}` : ''}</span></div>
+              <p class="ac-meta">{r.content} · {mail(r.assigne_email)}{r.reports > 0 ? ` · reportée ${r.reports} fois` : ''}</p>
+              <details class="ac-det"><summary class="ac-btn">Confier à…</summary>
+                <form method="post" action="/api/admin/crm/action" class="ac-form">
+                  <input type="hidden" name="operation" value="reassigner" /><input type="hidden" name="relance_id" value={r.id} /><input type="hidden" name="client_id" value={r.client_id ?? ''} /><input type="hidden" name="retour" value={retour} />
+                  <select name="assigne_id" aria-label="Nouveau responsable">{personnel.map(p => <option value={p.id} selected={p.id === r.assigne_a}>{p.email}</option>)}</select>
+                  <input type="text" name="motif" maxlength="300" placeholder="Motif (obligatoire)" required />
+                  <button type="submit" class="ac-btn ac-btn--p">Réassigner</button>
+                </form>
+              </details>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+
+    <section class="ac-bloc" data-testid="activites-recentes">
+      <h2 class="ac-titre">Activités récentes <span class="ac-n">{(activites ?? []).length}</span></h2>
+      {(activites ?? []).length === 0 ? <p class="ac-vide">Aucune activité notée pour l'instant.</p> : (
+        <ul class="ac-liste">
+          {((activites ?? []) as any[]).map(a => (
+            <li class={`ac-ligne${a.annulee_le ? ' ac-ligne--annulee' : ''}`} data-interaction={a.id}>
+              <div class="ac-haut"><a href={a.client_id ? `/admin/clients/${a.client_id}` : '#'} class="ac-client">{a.client_libelle}</a><span class="ac-meta">{formatDateTimeReunion(a.occurred_at)} · {mail(a.created_by_email)}</span></div>
+              <p class="ac-meta"><strong>{titreInteraction(a)}</strong>{a.commentaire ? ` — ${a.commentaire}` : ''}</p>
+              {a.annulee_le && <p class="ac-meta">Annulée : {a.annulation_motif}</p>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+
+    <section class="ac-bloc" data-testid="delegations">
+      <h2 class="ac-titre">Délégations <span class="ac-n">{actives.length}</span></h2>
+      <p class="ac-vide">Un commercial ne peut agir que sur les clients de son portefeuille. Une délégation l'autorise, explicitement et avec une date limite possible, à agir sur le portefeuille d'un collègue (appels, relances, interlocuteurs). Elle est journalisée et révocable.</p>
+      {actives.length === 0 ? <p class="ac-vide">Aucune délégation active.</p> : (
+        <ul class="ac-liste">
+          {actives.map(d => (
+            <li class="ac-ligne" data-delegation={d.id}>
+              <p class="ac-meta"><strong>{mail(d.commercial_email)}</strong> peut agir sur le portefeuille de <strong>{mail(d.proprietaire_email)}</strong>{d.expire_le ? ` jusqu'au ${dateCourte(d.expire_le)}` : ' sans date limite'} — {d.motif} (accordée par {mail(d.accorde_par)})</p>
+              <details class="ac-det"><summary class="ac-btn">Révoquer</summary>
+                <form method="post" action="/api/admin/crm/action" class="ac-form">
+                  <input type="hidden" name="operation" value="delegation_revoquer" /><input type="hidden" name="delegation_id" value={d.id} /><input type="hidden" name="retour" value={retour} />
+                  <input type="text" name="motif" maxlength="300" placeholder="Motif (obligatoire)" required />
+                  <button type="submit" class="ac-btn ac-btn--p">Révoquer la délégation</button>
+                </form>
+              </details>
+            </li>
+          ))}
+        </ul>
+      )}
+      <details class="ac-det"><summary class="ac-btn ac-btn--p">Accorder une délégation</summary>
+        <form method="post" action="/api/admin/crm/action" class="ac-form" data-testid="form-delegation">
+          <input type="hidden" name="operation" value="delegation_accorder" /><input type="hidden" name="retour" value={retour} />
+          <label for="dl-com">Peut agir : </label>
+          <select id="dl-com" name="commercial_id" required><option value="">Choisir…</option>{personnel.filter(p => p.role === 'commercial').map(p => <option value={p.id}>{p.email}</option>)}</select>
+          <label for="dl-prop">Sur le portefeuille de : </label>
+          <select id="dl-prop" name="proprietaire_id" required><option value="">Choisir…</option>{personnel.map(p => <option value={p.id}>{p.email}</option>)}</select>
+          <label for="dl-exp">Jusqu'au (facultatif)</label>
+          <input id="dl-exp" type="date" name="expire_le" min={aujourdhui} />
+          <input type="text" name="motif" maxlength="300" placeholder="Motif (obligatoire)" required />
+          <button type="submit" class="ac-btn ac-btn--p">Accorder</button>
+        </form>
+      </details>
+      {passees.length > 0 && (
+        <details class="ac-det"><summary class="ac-meta">Délégations terminées ({passees.length})</summary>
+          <ul class="ac-liste">{passees.map(d => <li class="ac-ligne"><p class="ac-meta">{mail(d.commercial_email)} → {mail(d.proprietaire_email)} — {d.revoque_le ? `révoquée par ${mail(d.revoque_par)} : ${d.revocation_motif}` : 'expirée'}</p></li>)}</ul>
+        </details>
+      )}
+    </section>
+  </div>
+</AdminLayout>
+
+<style>
+.ac { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--space-4); padding-bottom: 5rem; }
+.ac-h1 { font-family: var(--font-display); font-size: 1.6rem; font-weight: 700; margin: 0; color: var(--color-ink); }
+.ac-sub { margin: 0; font-size: var(--text-sm); color: var(--color-muted); }
+.ac-flash { margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); font-size: var(--text-sm); }
+.ac-flash--ok { background: oklch(0.95 0.06 150); color: oklch(0.32 0.12 150); border: 1px solid oklch(0.85 0.09 150); }
+.ac-flash--err { background: oklch(0.97 0.04 25); color: oklch(0.50 0.19 25); border: 1px solid oklch(0.88 0.07 25); }
+.ac-filtre { display: flex; gap: var(--space-2); align-items: center; font-size: var(--text-sm); }
+.ac select, .ac input[type="text"], .ac input[type="date"], .ac input[type="time"] { min-height: 44px; padding: 0 var(--space-3); font-size: 16px; border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-sm); background: var(--color-bg); width: 100%; max-width: 420px; font-family: var(--font-body); }
+.ac-bloc { background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); }
+.ac-titre { display: flex; gap: var(--space-2); align-items: center; margin: 0 0 var(--space-3); font-size: var(--text-base); font-weight: 700; color: var(--color-ink); }
+.ac-n { margin-left: auto; font-size: var(--text-sm); color: var(--color-muted); }
+.ac-vide { margin: 0 0 var(--space-3); font-size: var(--text-sm); color: var(--color-muted); }
+.ac-liste { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.ac-ligne { padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
+.ac-ligne--en_retard { border-color: oklch(0.80 0.12 25); background: oklch(0.98 0.02 25); }
+.ac-ligne--annulee { opacity: 0.65; }
+.ac-haut { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: space-between; align-items: baseline; }
+.ac-client { font-weight: 700; color: var(--color-ink); text-decoration: none; }
+.ac-etat, .ac-meta { font-size: var(--text-xs); color: var(--color-muted); margin: 2px 0 0; overflow-wrap: anywhere; }
+.ac-form { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-2); }
+.ac-form label { font-size: var(--text-sm); font-weight: 500; }
+.ac-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.ac-chip { position: relative; }
+.ac-chip input { position: absolute; opacity: 0; inset: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; max-width: none; }
+.ac-chip span { display: inline-flex; align-items: center; min-height: 44px; padding: 0 var(--space-3); border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-full); font-size: var(--text-xs); }
+.ac-chip input:checked + span { background: var(--color-primary); border-color: var(--color-primary); color: #fff; font-weight: 700; }
+.ac-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 var(--space-4); border-radius: var(--radius-full); border: 1.5px solid var(--color-border-strong); background: var(--color-bg); color: var(--color-ink); font: 600 var(--text-xs)/1 var(--font-body); cursor: pointer; list-style: none; }
+.ac-btn::-webkit-details-marker { display: none; }
+.ac-btn--p { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
+.ac-det { margin-top: var(--space-2); }
+</style>

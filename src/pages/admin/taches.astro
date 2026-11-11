@@ -18,6 +18,7 @@ if (Astro.request.method === 'POST') {
       await supabaseAdmin
         .from('weekly_tasks')
         .update({ done, done_at: done ? new Date().toISOString() : null })
+        .eq('type', 'tache')   // les relances se terminent par leurs fonctions (CRM), jamais par cette case à cocher
         .eq('id', id);
     }
   }
@@ -32,6 +33,7 @@ const taskFreshnessCutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toIS
 const { data: weeklyTasksRaw } = await supabaseAdmin
   .from('weekly_tasks')
   .select('id, content, done, created_at, done_at')
+  .eq('type', 'tache')       // tâches générales seulement : les relances sont dans le CRM
   .or(`done.eq.false,and(done.eq.true,done_at.gte.${taskFreshnessCutoff})`)
   .order('created_at', { ascending: true });
 

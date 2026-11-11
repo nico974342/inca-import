@@ -1,0 +1,190 @@
+---
+import { LIBELLE_ACTION, LIBELLE_RESULTAT, RACCOURCIS, RESULTATS, ACTIONS, lienTelephone, type TypeContact } from '../../lib/crm';
+import { libelleEcheance } from '../../lib/crmVue';
+
+/** Formulaire de saisie rapide (appel, visite, message, note, relance) : présentation seule, les données sont préparées par la page. */
+interface Props {
+  mode: TypeContact | 'relance'; clientId: string; nom: string; telephone: string | null; cle: string; retour: string; aujourdhui: string;
+  relanceProposee: { id: string; content: string; echeance: string } | null; viewerRole: 'admin' | 'commercial'; viewerId: string; personnel: { id: string; email: string }[];
+}
+const { mode, clientId, nom, telephone, cle, retour, aujourdhui, relanceProposee, viewerRole, viewerId, personnel } = Astro.props;
+const id = clientId; const client = { telephone }; const tel = lienTelephone(telephone); const resultats = RESULTATS;
+const acteur = { role: viewerRole, id: viewerId };
+const titrePage = mode === 'relance' ? 'Programmer une relance' : mode === 'appel' ? 'Noter un appel' : mode === 'visite' ? 'Noter une visite' : mode === 'message' ? 'Noter un message' : 'Ajouter une note';
+---
+  <div class="nt">
+    <a href={retour} class="nt-back">← {nom}</a>
+    <h1 class="nt-h1">{titrePage}</h1>
+    <p class="nt-sub">{nom}{client.telephone ? ` · ${client.telephone}` : ''}</p>
+    {tel && mode === 'appel' && <a href={tel} class="nt-call" data-appel={id} data-nom={nom}>📞 Appeler {client.telephone}</a>}
+
+    <form method="post" action="/api/admin/crm/action" class="nt-form" id="ntForm" novalidate>
+      <input type="hidden" name="operation" value={mode === 'relance' ? 'programmer' : 'noter'} />
+      <input type="hidden" name="cle" value={cle} />
+      <input type="hidden" name="client_id" value={id} />
+      <input type="hidden" name="type" value={mode === 'relance' ? 'appel' : mode} />
+      <input type="hidden" name="retour" value={retour} />
+      {relanceProposee && <input type="hidden" name="relance_id" value={relanceProposee.id} />}
+
+      {mode !== 'relance' && mode !== 'note' && (
+        <fieldset class="nt-bloc">
+          <legend>Résultat de l'échange</legend>
+          <div class="nt-chips" data-testid="resultats">
+            {resultats.map(r => (
+              <label class="nt-chip"><input type="radio" name="resultat" value={r} required /><span>{LIBELLE_RESULTAT[r]}</span></label>
+            ))}
+          </div>
+        </fieldset>
+      )}
+
+      {mode === 'relance' && (
+        <div class="nt-bloc">
+          <label for="titre" class="nt-label">Que faut-il faire ? <span class="nt-opt">(facultatif)</span></label>
+          <input type="text" id="titre" name="titre" maxlength="200" placeholder="Rappeler pour l'offre de Noël…" autocomplete="off" />
+        </div>
+      )}
+
+      {mode !== 'relance' && (
+        <div class="nt-bloc">
+          <label for="commentaire" class="nt-label" id="comLabel">{mode === 'note' ? 'Note' : 'Commentaire'} <span class="nt-opt" id="comOpt">{mode === 'note' ? '(obligatoire)' : '(facultatif)'}</span></label>
+          <textarea id="commentaire" name="commentaire" rows="3" maxlength="2000" placeholder={mode === 'note' ? 'Votre note…' : 'Ce qui a été dit, en quelques mots…'} required={mode === 'note'}></textarea>
+        </div>
+      )}
+
+      {relanceProposee && (
+        <fieldset class="nt-bloc nt-bloc--relance" data-testid="cloture-relance">
+          <legend>Relance en cours : « {relanceProposee.content} » — {libelleEcheance(relanceProposee.echeance, aujourdhui)}</legend>
+          <p class="nt-aide">Cet échange termine-t-il cette relance ? Rien n'est clôturé sans votre réponse.</p>
+          <div class="nt-chips">
+            <label class="nt-chip"><input type="radio" name="cloturer_relance" value="oui" required /><span>Oui, la terminer</span></label>
+            <label class="nt-chip"><input type="radio" name="cloturer_relance" value="non" required /><span>Non, la garder</span></label>
+          </div>
+        </fieldset>
+      )}
+
+      {mode !== 'relance' && (
+        <fieldset class="nt-bloc">
+          <legend>Prochaine action</legend>
+          <div class="nt-chips" data-testid="actions">
+            {ACTIONS.map(a => (
+              <label class="nt-chip"><input type="radio" name="action" value={a} /><span>{LIBELLE_ACTION[a]}</span></label>
+            ))}
+          </div>
+        </fieldset>
+      )}
+
+      <fieldset class="nt-bloc" id="quand" data-mode={mode} hidden={mode !== 'relance'}>
+        <legend>{mode === 'relance' ? 'Pour quand ?' : 'Relancer quand ?'}</legend>
+        <div class="nt-chips" data-testid="delais">
+          {RACCOURCIS.map(r => (
+            <label class="nt-chip"><input type="radio" name="delai" value={r.code} checked={r.code === '3j'} /><span>{r.libelle}</span></label>
+          ))}
+          <label class="nt-chip"><input type="radio" name="delai" value="date" /><span>Autre date</span></label>
+        </div>
+        <div class="nt-ligne">
+          <input type="date" name="date_perso" id="datePerso" min={aujourdhui} aria-label="Date personnalisée" hidden />
+          <div class="nt-heure">
+            <label for="heure" class="nt-label">Heure <span class="nt-opt">(rendez-vous, facultatif)</span></label>
+            <input type="time" id="heure" name="heure" />
+          </div>
+        </div>
+        {acteur.role === 'admin' && personnel.length > 0 && (
+          <div class="nt-bloc-int">
+            <label for="assigne_id" class="nt-label">Confier à</label>
+            <select id="assigne_id" name="assigne_id">
+              <option value="">Moi-même</option>
+              {personnel.filter(p => p.id !== acteur.id).map(p => <option value={p.id}>{p.email}</option>)}
+            </select>
+          </div>
+        )}
+      </fieldset>
+
+      <p class="nt-erreur" id="ntErreur" role="alert" hidden></p>
+      <button type="submit" class="nt-envoyer" id="ntEnvoyer">Enregistrer</button>
+      <a href={retour} class="nt-annuler">Annuler</a>
+    </form>
+  </div>
+
+
+<style>
+.nt { max-width: 560px; margin: 0 auto; padding-bottom: 5rem; }
+.nt-back { display: inline-block; font-size: var(--text-sm); color: var(--color-muted); text-decoration: none; margin-bottom: var(--space-3); min-height: 32px; }
+.nt-h1 { font-family: var(--font-display); font-size: 1.5rem; font-weight: 700; margin: 0; color: var(--color-ink); }
+.nt-sub { margin: var(--space-1) 0 var(--space-4); font-size: var(--text-sm); color: var(--color-muted); }
+.nt-call { display: flex; align-items: center; justify-content: center; min-height: 52px; margin-bottom: var(--space-4); border-radius: var(--radius-md); background: var(--color-primary); color: #fff; font-weight: 700; text-decoration: none; font-size: var(--text-base); }
+.nt-form { display: flex; flex-direction: column; gap: var(--space-4); }
+.nt-bloc { border: 0; padding: 0; margin: 0; min-width: 0; }
+.nt-bloc[hidden] { display: none; }
+.nt-bloc legend, .nt-label { font-size: var(--text-sm); font-weight: 600; color: var(--color-ink); padding: 0; margin-bottom: var(--space-2); display: block; }
+.nt-opt { font-weight: 400; color: var(--color-muted); }
+.nt-aide { font-size: var(--text-xs); color: var(--color-muted); margin: 0 0 var(--space-2); }
+.nt-bloc--relance { background: oklch(0.97 0.04 80); border: 1px solid oklch(0.88 0.08 80); border-radius: var(--radius-md); padding: var(--space-3); }
+.nt-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.nt-chip { position: relative; }
+.nt-chip input { position: absolute; opacity: 0; inset: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.nt-chip span { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; padding: 0 var(--space-4); border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-full); font-size: var(--text-sm); font-weight: 500; background: var(--color-bg); color: var(--color-ink); }
+.nt-chip input:checked + span { background: var(--color-primary); border-color: var(--color-primary); color: #fff; font-weight: 700; }
+.nt-chip input:focus-visible + span { outline: 3px solid oklch(0.568 0.149 45.9 / 0.35); outline-offset: 2px; }
+.nt-ligne { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: flex-end; margin-top: var(--space-3); }
+.nt-heure { min-width: 0; }
+.nt-bloc-int { margin-top: var(--space-3); }
+.nt input[type="text"], .nt input[type="date"], .nt input[type="time"], .nt select, .nt textarea { width: 100%; min-height: 48px; padding: 0.6875rem 0.875rem; font-family: var(--font-body); font-size: 16px; border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-sm); background: var(--color-bg); color: var(--color-ink); }
+.nt input[hidden] { display: none; }
+.nt-erreur { color: oklch(0.50 0.19 25); background: oklch(0.97 0.04 25); border: 1px solid oklch(0.88 0.07 25); border-radius: var(--radius-sm); padding: var(--space-3); font-size: var(--text-sm); margin: 0; }
+.nt-envoyer { min-height: 56px; border: 0; border-radius: var(--radius-md); background: var(--color-primary); color: #fff; font-size: var(--text-base); font-weight: 700; cursor: pointer; }
+.nt-envoyer:disabled { opacity: 0.6; cursor: progress; }
+.nt-annuler { text-align: center; font-size: var(--text-sm); color: var(--color-muted); min-height: 44px; display: flex; align-items: center; justify-content: center; }
+</style>
+
+<script>
+  import { oublierAppel } from '../../scripts/appelRetour';
+  const form = document.getElementById('ntForm') as HTMLFormElement | null;
+  if (form) {
+    const quand = document.getElementById('quand') as HTMLElement | null;
+    const datePerso = document.getElementById('datePerso') as HTMLInputElement | null;
+    const erreur = document.getElementById('ntErreur') as HTMLElement | null;
+    const bouton = document.getElementById('ntEnvoyer') as HTMLButtonElement | null;
+    const radios = (nom: string) => Array.from(form.querySelectorAll<HTMLInputElement>(`input[name="${nom}"]`));
+    const valeur = (nom: string) => radios(nom).find(r => r.checked)?.value ?? '';
+    let actionTouchee = false; let delaiTouche = false;
+
+    const syncQuand = () => {
+      if (!quand || quand.dataset.mode === 'relance') return;
+      const a = valeur('action'); quand.hidden = !a || a === 'aucune';
+    };
+    const syncDate = () => { if (datePerso) datePerso.hidden = valeur('delai') !== 'date'; };
+    const syncCommentaire = () => {
+      const opt = document.getElementById('comOpt'); const obligatoire = valeur('resultat') === 'autre' || form.querySelector('input[name="type"]')?.getAttribute('value') === 'note';
+      if (opt) opt.textContent = obligatoire ? '(obligatoire : précisez)' : '(facultatif)';
+    };
+    radios('action').forEach(r => r.addEventListener('change', () => { actionTouchee = true; syncQuand(); }));
+    radios('delai').forEach(r => r.addEventListener('change', () => { delaiTouche = true; syncDate(); }));
+    // Suggestions de départ (jamais imposées : un appui sur un autre choix les remplace)
+    radios('resultat').forEach(r => r.addEventListener('change', () => {
+      syncCommentaire();
+      const v = r.value;
+      const suggestion = v === 'pas_de_reponse' ? ['rappeler', 'demain'] : v === 'message_laisse' ? ['rappeler', '3j'] : v === 'rdv_pris' ? ['visiter', '7j']
+        : v === 'commande_envisagee' ? ['preparer_commande', '3j'] : v === 'echange' ? ['rappeler', '14j'] : null;
+      if (suggestion && !actionTouchee) { const a = radios('action').find(x => x.value === suggestion[0]); if (a) { a.checked = true; syncQuand(); } }
+      if (suggestion && !delaiTouche) { const d = radios('delai').find(x => x.value === suggestion[1]); if (d) d.checked = true; syncDate(); }
+    }));
+    syncQuand(); syncDate(); syncCommentaire();
+
+    form.addEventListener('submit', (e) => {
+      const type = (form.querySelector('input[name="type"]') as HTMLInputElement).value;
+      const op = (form.querySelector('input[name="operation"]') as HTMLInputElement).value;
+      let message = '';
+      if (op === 'noter' && type !== 'note' && !valeur('resultat')) message = "Choisissez le résultat de l'échange.";
+      else if (form.querySelector('[data-testid="cloture-relance"]') && !valeur('cloturer_relance')) message = 'Dites si cette relance est terminée (Oui ou Non).';
+      else if (valeur('resultat') === 'autre' && (form.querySelector('textarea') as HTMLTextAreaElement).value.trim().length < 3) message = 'Précisez en quelques mots (obligatoire pour « Autre »).';
+      else if (type === 'note' && (form.querySelector('textarea') as HTMLTextAreaElement).value.trim().length < 3) message = 'Écrivez votre note.';
+      else if (valeur('delai') === 'date' && !(datePerso?.value) && !(quand?.hidden)) message = 'Choisissez la date.';
+      if (message) { e.preventDefault(); if (erreur) { erreur.textContent = message; erreur.hidden = false; } return; }
+      if (erreur) erreur.hidden = true;
+      // Un seul envoi : le bouton se verrouille (la clé d'envoi protège aussi contre un renvoi réseau)
+      if (bouton) { bouton.disabled = true; bouton.textContent = 'Enregistrement…'; }
+      oublierAppel();
+    });
+    window.addEventListener('pageshow', () => { if (bouton) { bouton.disabled = false; bouton.textContent = 'Enregistrer'; } });
+  }
+</script>

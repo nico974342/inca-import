@@ -1,0 +1,43 @@
+---
+import AdminLayout from '../../../../components/admin/AdminLayout.astro';
+import NoterFormulaire from '../../../../components/admin/NoterFormulaire.astro';
+import { supabaseAdmin } from '../../../../lib/supabase';
+import { acteurDepuisSession, portefeuille } from '../../../../lib/portefeuille';
+import { crm, estUuid, TYPES, type TypeContact } from '../../../../lib/crm';
+import { todayReunionISO } from '../../../../lib/datetime';
+
+/**
+ * Saisie rapide d'un échange (appel, visite, message, note) ou d'une relance, pensée pour le téléphone : une seule page, des gros boutons,
+ * aucun champ obligatoire hormis le résultat. La clé d'envoi est créée à l'affichage : un double appui ou un renvoi ne crée jamais de doublon.
+ */
+const acteur = acteurDepuisSession((Astro.locals as any).user);
+if (!acteur) return Astro.redirect('/admin');
+const { id } = Astro.params;
+if (!estUuid(id)) return Astro.redirect('/admin/clients');
+
+const { data: client } = await supabaseAdmin.from('client_accounts').select('id, nom, societe, telephone, status, responsable_id, responsable_email').eq('id', id).maybeSingle();
+if (!client) return Astro.redirect('/admin/clients');
+// Droit réel (même fonction que la base) : sans lui, retour à la fiche, en consultation.
+if (!(await crm.peutAgir((Astro.locals as any).user, id))) return Astro.redirect(`/admin/clients/${id}?err=${encodeURIComponent("Ce client n'est pas dans votre portefeuille : consultation seulement.")}`);
+
+const aujourdhui = todayReunionISO();
+const typeParam = Astro.url.searchParams.get('type') ?? 'appel';
+const mode: TypeContact | 'relance' = typeParam === 'relance' ? 'relance' : (TYPES as string[]).includes(typeParam) ? (typeParam as TypeContact) : 'appel';
+const nom = client.societe || client.nom;
+
+const { data: ouvertes } = await supabaseAdmin.from('weekly_tasks')
+  .select('id, content, echeance, heure, type').eq('client_id', id).neq('type', 'tache').eq('statut', 'a_faire').order('echeance', { ascending: true });
+const relances = (ouvertes ?? []) as { id: string; content: string; echeance: string; heure: string | null; type: string }[];
+const relanceParam = Astro.url.searchParams.get('relance');
+// Relance à proposer de clôturer : celle demandée, sinon la plus urgente si elle est due. Jamais clôturée sans réponse explicite.
+const relanceProposee = mode === 'relance' ? null
+  : (relanceParam ? relances.find(r => r.id === relanceParam) : relances.find(r => r.echeance <= aujourdhui)) ?? null;
+
+const personnel = acteur.role === 'admin' ? await portefeuille.personnel().catch(() => []) : [];
+const cle = crypto.randomUUID();
+const titrePage = mode === 'relance' ? 'Programmer une relance' : mode === 'appel' ? 'Noter un appel' : mode === 'visite' ? 'Noter une visite' : mode === 'message' ? 'Noter un message' : 'Ajouter une note';
+const retour = `/admin/clients/${id}`;
+---
+<AdminLayout title={titrePage} activeNav="clients">
+  <NoterFormulaire mode={mode} clientId={id} nom={nom} telephone={client.telephone} cle={cle} retour={retour} aujourdhui={aujourdhui} relanceProposee={relanceProposee} viewerRole={acteur.role} viewerId={acteur.id} personnel={personnel} />
+</AdminLayout>

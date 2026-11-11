@@ -1,0 +1,284 @@
+---
+import { LIBELLE_RESULTAT, RACCOURCIS, RESULTATS, ACTIONS, LIBELLE_ACTION, lienTelephone } from '../../lib/crm';
+import {
+  construireHistorique, dateCourte, dernierContact, etatRelance, libelleEcheance, libelleProchaineAction, peutModifierInteraction, prochaineRelance, titreInteraction,
+  type CommandeResume, type Interaction, type Relance,
+} from '../../lib/crmVue';
+import { formatDateTimeReunion, formatDateReunion } from '../../lib/datetime';
+
+/**
+ * Suivi commercial d'un client : responsable, coordonnées, dernier contact, prochaine relance, saisie rapide, relances, interlocuteurs et
+ * historique. Les boutons d'écriture ne s'affichent que si l'utilisateur a le droit d'agir (même règle que la base, qui reste juge).
+ * Aucune donnée d'achat, de coût ni de marge n'apparaît ici.
+ */
+interface Props {
+  client: { id: string; nom: string; societe: string | null; telephone: string | null; email: string | null; responsable_id: string | null; responsable_email: string | null };
+  viewer: { id: string; role: 'admin' | 'commercial' };
+  peutAgir: boolean;
+  interactions: Interaction[];
+  relances: Relance[];
+  contacts: { id: string; nom: string; fonction: string | null; telephone: string | null; email: string | null; principal: boolean; notes: string | null }[];
+  commandes: CommandeResume[];
+  aujourdhui: string;
+  maintenant: number;
+  personnel: { id: string; email: string }[];
+  ok?: string | null;
+  err?: string | null;
+}
+const { client, viewer, peutAgir, interactions, relances, contacts, commandes, aujourdhui, maintenant, personnel, ok, err } = Astro.props;
+const nom = client.societe || client.nom;
+const retour = `/admin/clients/${client.id}`;
+const tel = lienTelephone(client.telephone);
+const dernier = dernierContact(interactions);
+const prochaine = prochaineRelance(relances);
+const aFaire = relances.filter(r => r.statut === 'a_faire');
+const historique = construireHistorique({ interactions, relances, commandes });
+const mail = (e: string) => e.split('@')[0];
+---
+<section class="crm" data-testid="crm-fiche" aria-label="Suivi commercial">
+  {ok && <p class="crm-flash crm-flash--ok" role="status">{ok}</p>}
+  {err && <p class="crm-flash crm-flash--err" role="alert">{err}</p>}
+
+  <div class="crm-resume">
+    <div class="crm-case"><span class="crm-etiq">Responsable</span>
+      <strong data-testid="crm-responsable">{client.responsable_email ? mail(client.responsable_email) : 'Aucun responsable'}</strong></div>
+    <div class="crm-case"><span class="crm-etiq">Coordonnées</span>
+      <strong>{client.telephone ?? 'Pas de téléphone'}</strong>
+      {client.email && <span class="crm-mail">{client.email}</span>}</div>
+    <div class="crm-case"><span class="crm-etiq">Dernier contact</span>
+      <strong data-testid="crm-dernier">{dernier ? `${titreInteraction(dernier)} · ${formatDateReunion(dernier.occurred_at, { year: '2-digit' })}` : 'Aucun échange noté'}</strong></div>
+    <div class="crm-case"><span class="crm-etiq">Prochaine relance</span>
+      <strong data-testid="crm-prochaine" class={prochaine && etatRelance(prochaine.echeance, aujourdhui) !== 'a_venir' ? 'crm-alerte' : ''}>
+        {prochaine ? `${libelleEcheance(prochaine.echeance, aujourdhui)} · ${prochaine.content}` : 'Aucune'}</strong></div>
+  </div>
+
+  {tel && <a href={tel} class="crm-appeler" data-appel={client.id} data-nom={nom} data-testid="crm-appeler">📞 Appeler {client.telephone}</a>}
+
+  {peutAgir ? (
+    <div class="crm-boutons" data-testid="crm-boutons">
+      <a class="crm-btn crm-btn--p" href={`${retour}/noter?type=appel`}>Noter un appel</a>
+      <a class="crm-btn" href={`${retour}/noter?type=visite`}>Noter une visite</a>
+      <a class="crm-btn" href={`${retour}/noter?type=relance`}>Programmer une relance</a>
+      <a class="crm-btn crm-btn--l" href={`${retour}/noter?type=note`}>Ajouter une note</a>
+    </div>
+  ) : (
+    <p class="crm-lecture" data-testid="crm-lecture">
+      {client.responsable_id
+        ? `Client de ${mail(client.responsable_email ?? '?')} : vous pouvez le consulter, mais seul son responsable (ou une personne qu'un administrateur a autorisée) peut noter un échange.`
+        : <>Ce client n'a pas de responsable : prenez-le en charge pour noter vos échanges. <a href={`/admin/portefeuilles?client=${client.id}`}>Ouvrir les portefeuilles</a></>}
+    </p>
+  )}
+
+  {aFaire.length > 0 && (
+    <div class="crm-bloc" data-testid="crm-relances">
+      <h3 class="crm-titre">Relances et rendez-vous à venir</h3>
+      <ul class="crm-liste">
+        {aFaire.map(r => {
+          const etat = etatRelance(r.echeance, aujourdhui);
+          return (
+            <li class={`crm-relance crm-relance--${etat}`} data-relance={r.id}>
+              <div class="crm-relance-t">
+                <strong>{r.content}</strong>
+                <span class="crm-pastille">{r.type === 'rendez_vous' ? 'Rendez-vous' : 'Relance'}</span>
+              </div>
+              <p class="crm-meta">{libelleEcheance(r.echeance, aujourdhui)} · {dateCourte(r.echeance)}{r.heure ? ` à ${r.heure.slice(0, 5)}` : ''} · {mail(r.assigne_email)}{r.reports > 0 ? ` · reportée ${r.reports} fois` : ''}</p>
+              <div class="crm-actions">
+                {peutAgir && <a class="crm-mini crm-mini--p" href={`${retour}/noter?type=appel&relance=${r.id}`}>Noter l'appel</a>}
+                <form method="post" action="/api/admin/crm/action">
+                  <input type="hidden" name="operation" value="cloturer" /><input type="hidden" name="statut" value="faite" />
+                  <input type="hidden" name="relance_id" value={r.id} /><input type="hidden" name="client_id" value={client.id} /><input type="hidden" name="retour" value={retour} />
+                  <button type="submit" class="crm-mini">Terminer</button>
+                </form>
+                <details class="crm-det"><summary class="crm-mini">Reporter</summary>
+                  <form method="post" action="/api/admin/crm/action" class="crm-form">
+                    <input type="hidden" name="operation" value="reporter" /><input type="hidden" name="relance_id" value={r.id} /><input type="hidden" name="client_id" value={client.id} /><input type="hidden" name="retour" value={retour} />
+                    <div class="crm-chips">
+                      {RACCOURCIS.map(x => <label class="crm-chip"><input type="radio" name="delai" value={x.code} checked={x.code === '3j'} /><span>{x.libelle}</span></label>)}
+                      <label class="crm-chip"><input type="radio" name="delai" value="date" /><span>Autre date</span></label>
+                    </div>
+                    <input type="date" name="date_perso" min={aujourdhui} aria-label="Autre date" />
+                    <input type="text" name="motif" maxlength="300" placeholder="Pourquoi ? (facultatif)" />
+                    <button type="submit" class="crm-mini crm-mini--p">Reporter</button>
+                  </form>
+                </details>
+                <details class="crm-det"><summary class="crm-mini">Annuler</summary>
+                  <form method="post" action="/api/admin/crm/action" class="crm-form">
+                    <input type="hidden" name="operation" value="cloturer" /><input type="hidden" name="statut" value="annulee" />
+                    <input type="hidden" name="relance_id" value={r.id} /><input type="hidden" name="client_id" value={client.id} /><input type="hidden" name="retour" value={retour} />
+                    <input type="text" name="motif" maxlength="300" placeholder="Motif (obligatoire)" required />
+                    <button type="submit" class="crm-mini crm-mini--p">Annuler la relance</button>
+                  </form>
+                </details>
+                {viewer.role === 'admin' && personnel.length > 0 && (
+                  <details class="crm-det"><summary class="crm-mini">Confier à…</summary>
+                    <form method="post" action="/api/admin/crm/action" class="crm-form">
+                      <input type="hidden" name="operation" value="reassigner" /><input type="hidden" name="relance_id" value={r.id} /><input type="hidden" name="client_id" value={client.id} /><input type="hidden" name="retour" value={retour} />
+                      <select name="assigne_id" aria-label="Nouveau responsable de la relance">{personnel.map(p => <option value={p.id} selected={p.id === r.assigne_a}>{p.email}</option>)}</select>
+                      <input type="text" name="motif" maxlength="300" placeholder="Motif (obligatoire)" required />
+                      <button type="submit" class="crm-mini crm-mini--p">Réassigner</button>
+                    </form>
+                  </details>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  )}
+
+  <div class="crm-bloc" data-testid="crm-contacts">
+    <h3 class="crm-titre">Interlocuteurs</h3>
+    {contacts.length === 0 ? <p class="crm-vide">Aucun interlocuteur enregistré (le contact principal est celui de la fiche).</p> : (
+      <ul class="crm-liste">
+        {contacts.map(c => (
+          <li class="crm-contact">
+            <div><strong>{c.nom}</strong>{c.principal && <span class="crm-pastille">Principal</span>}{c.fonction && <span class="crm-meta"> · {c.fonction}</span>}</div>
+            <div class="crm-meta">
+              {c.telephone && (lienTelephone(c.telephone) ? <a href={lienTelephone(c.telephone)!} data-appel={client.id} data-nom={`${c.nom} (${nom})`}>{c.telephone}</a> : c.telephone)}
+              {c.email && <> · {c.email}</>}{c.notes && <> · {c.notes}</>}
+            </div>
+            {peutAgir && (
+              <form method="post" action="/api/admin/crm/action" class="crm-inline">
+                <input type="hidden" name="operation" value="contact_supprimer" /><input type="hidden" name="contact_id" value={c.id} /><input type="hidden" name="client_id" value={client.id} /><input type="hidden" name="retour" value={retour} />
+                <button type="submit" class="crm-mini">Supprimer</button>
+              </form>
+            )}
+          </li>
+        ))}
+      </ul>
+    )}
+    {peutAgir && (
+      <details class="crm-det"><summary class="crm-mini">Ajouter un interlocuteur</summary>
+        <form method="post" action="/api/admin/crm/action" class="crm-form">
+          <input type="hidden" name="operation" value="contact" /><input type="hidden" name="client_id" value={client.id} /><input type="hidden" name="retour" value={retour} />
+          <input type="text" name="nom" maxlength="120" placeholder="Nom" required />
+          <input type="text" name="fonction" maxlength="120" placeholder="Fonction" />
+          <input type="text" name="telephone" maxlength="40" placeholder="Téléphone" inputmode="tel" />
+          <input type="text" name="email" maxlength="200" placeholder="E-mail" inputmode="email" />
+          <label class="crm-case-a-cocher"><input type="checkbox" name="principal" value="1" /> Interlocuteur principal</label>
+          <button type="submit" class="crm-mini crm-mini--p">Enregistrer</button>
+        </form>
+      </details>
+    )}
+  </div>
+
+  <div class="crm-bloc" data-testid="crm-historique">
+    <h3 class="crm-titre">Historique</h3>
+    {historique.length === 0 ? <p class="crm-vide">Aucun échange ni commande pour l'instant.</p> : (
+      <ol class="crm-histo">
+        {historique.map(h => {
+          if (h.genre === 'interaction') {
+            const i = h.interaction; const suite = libelleProchaineAction(i.prochaine_action);
+            const modifiable = peutModifierInteraction(i, viewer, maintenant);
+            return (
+              <li class={`crm-h crm-h--${i.type}${i.annulee_le ? ' crm-h--annulee' : ''}`} data-interaction={i.id}>
+                <div class="crm-h-t"><strong>{titreInteraction(i)}</strong><span class="crm-meta">{formatDateTimeReunion(i.occurred_at)} · {mail(i.created_by_email)}</span></div>
+                {i.commentaire && <p class="crm-com">{i.commentaire}</p>}
+                {suite && <p class="crm-meta">Prochaine action : {suite}</p>}
+                {i.nb_modifications > 0 && <p class="crm-meta">Corrigée {i.nb_modifications} fois (journalisé)</p>}
+                {i.annulee_le && <p class="crm-meta crm-alerte">Annulée : {i.annulation_motif}</p>}
+                {modifiable && (
+                  <div class="crm-actions">
+                    <details class="crm-det"><summary class="crm-mini">Corriger</summary>
+                      <form method="post" action="/api/admin/crm/action" class="crm-form">
+                        <input type="hidden" name="operation" value="corriger" /><input type="hidden" name="interaction_id" value={i.id} /><input type="hidden" name="client_id" value={client.id} /><input type="hidden" name="retour" value={retour} />
+                        <select name="resultat" aria-label="Résultat"><option value="">—</option>{RESULTATS.map(r => <option value={r} selected={i.resultat === r}>{LIBELLE_RESULTAT[r]}</option>)}</select>
+                        <textarea name="commentaire" rows="2" maxlength="2000" aria-label="Commentaire">{i.commentaire ?? ''}</textarea>
+                        <select name="action" aria-label="Prochaine action"><option value="">—</option>{ACTIONS.map(a => <option value={a} selected={i.prochaine_action === a}>{LIBELLE_ACTION[a]}</option>)}</select>
+                        <input type="text" name="motif" maxlength="300" placeholder={viewer.role === 'admin' ? 'Motif (obligatoire après 24 h)' : 'Motif (facultatif)'} />
+                        <button type="submit" class="crm-mini crm-mini--p">Enregistrer la correction</button>
+                      </form>
+                    </details>
+                    <details class="crm-det"><summary class="crm-mini">Annuler</summary>
+                      <form method="post" action="/api/admin/crm/action" class="crm-form">
+                        <input type="hidden" name="operation" value="annuler" /><input type="hidden" name="interaction_id" value={i.id} /><input type="hidden" name="client_id" value={client.id} /><input type="hidden" name="retour" value={retour} />
+                        <input type="text" name="motif" maxlength="300" placeholder="Motif (obligatoire)" required />
+                        <button type="submit" class="crm-mini crm-mini--p">Annuler cette activité</button>
+                      </form>
+                    </details>
+                  </div>
+                )}
+              </li>
+            );
+          }
+          if (h.genre === 'relance') {
+            const r = h.relance;
+            return (
+              <li class="crm-h crm-h--relance">
+                <div class="crm-h-t"><strong>{r.statut === 'faite' ? 'Relance terminée' : 'Relance annulée'} — {r.content}</strong><span class="crm-meta">{formatDateTimeReunion(h.date)}</span></div>
+                {r.statut === 'annulee' && <p class="crm-meta">Motif : {r.annulation_motif}</p>}
+              </li>
+            );
+          }
+          const c = h.commande;
+          return (
+            <li class="crm-h crm-h--commande">
+              <div class="crm-h-t"><strong>Commande #{c.id.slice(0, 8).toUpperCase()}</strong><span class="crm-meta">{formatDateTimeReunion(c.created_at)}</span></div>
+              <p class="crm-meta">{c.total != null ? `${c.total.toFixed(2).replace('.', ',')} € HT · ` : ''}{c.status}</p>
+            </li>
+          );
+        })}
+      </ol>
+    )}
+  </div>
+</section>
+
+<style>
+.crm { margin-bottom: var(--space-6); display: flex; flex-direction: column; gap: var(--space-3); }
+.crm-flash { margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); font-size: var(--text-sm); }
+.crm-flash--ok { background: oklch(0.95 0.06 150); color: oklch(0.32 0.12 150); border: 1px solid oklch(0.85 0.09 150); }
+.crm-flash--err { background: oklch(0.97 0.04 25); color: oklch(0.50 0.19 25); border: 1px solid oklch(0.88 0.07 25); }
+.crm-resume { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--space-3); }
+@media (max-width: 560px) {
+  .crm-resume { grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+  .crm-case { padding: var(--space-2) var(--space-3); }
+  .crm-case:nth-child(3), .crm-case:nth-child(4) { grid-column: 1 / -1; }
+}
+.crm-case { display: flex; flex-direction: column; gap: 2px; padding: var(--space-3) var(--space-4); background: var(--color-surface); border-radius: var(--radius-sm); min-width: 0; }
+.crm-etiq { font-size: var(--text-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-muted); }
+.crm-case strong { font-size: var(--text-sm); color: var(--color-ink); overflow-wrap: anywhere; }
+.crm-mail { font-size: var(--text-xs); color: var(--color-muted); overflow-wrap: anywhere; }
+.crm-alerte { color: oklch(0.50 0.19 25) !important; }
+.crm-appeler { display: flex; align-items: center; justify-content: center; min-height: 52px; border-radius: var(--radius-md); background: var(--color-primary); color: #fff; font-weight: 700; text-decoration: none; }
+.crm-boutons { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-2); }
+.crm-btn { display: flex; align-items: center; justify-content: center; min-height: 48px; padding: 0 var(--space-3); border-radius: var(--radius-md); border: 1.5px solid var(--color-primary); color: var(--color-primary-deep); font-weight: 600; font-size: var(--text-sm); text-decoration: none; background: var(--color-bg); text-align: center; }
+.crm-btn--p { background: var(--color-primary); color: #fff; }
+.crm-btn--l { border-color: var(--color-border-strong); color: var(--color-ink); }
+.crm-lecture { margin: 0; font-size: var(--text-sm); color: var(--color-muted); background: var(--color-surface); padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); }
+.crm-bloc { background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); }
+.crm-titre { margin: 0 0 var(--space-3); font-size: var(--text-sm); font-weight: 600; color: var(--color-ink); }
+.crm-liste, .crm-histo { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.crm-relance { padding: var(--space-3); border-radius: var(--radius-sm); border: 1px solid var(--color-border); }
+.crm-relance--en_retard { border-color: oklch(0.80 0.12 25); background: oklch(0.98 0.02 25); }
+.crm-relance--aujourdhui { border-color: oklch(0.82 0.10 80); background: oklch(0.98 0.03 80); }
+.crm-relance-t { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
+.crm-pastille { font-size: var(--text-xs); padding: 2px 8px; border-radius: var(--radius-full); background: var(--color-surface); color: var(--color-muted); margin-left: var(--space-2); }
+.crm-meta { margin: 2px 0 0; font-size: var(--text-xs); color: var(--color-muted); overflow-wrap: anywhere; }
+.crm-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); align-items: flex-start; }
+.crm-actions form, .crm-inline { margin: 0; }
+.crm-mini { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 var(--space-4); border-radius: var(--radius-full); border: 1.5px solid var(--color-border-strong); background: var(--color-bg); color: var(--color-ink); font: 600 var(--text-xs)/1 var(--font-body); text-decoration: none; cursor: pointer; list-style: none; }
+.crm-mini::-webkit-details-marker { display: none; }
+.crm-mini--p { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
+.crm-det { display: inline-block; }
+.crm-det[open] { display: block; width: 100%; }
+.crm-form { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-2); max-width: 420px; }
+.crm-form input[type="text"], .crm-form input[type="date"], .crm-form select, .crm-form textarea { min-height: 44px; padding: 0.5rem 0.75rem; font-size: 16px; border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-sm); background: var(--color-bg); font-family: var(--font-body); width: 100%; }
+.crm-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.crm-chip { position: relative; }
+.crm-chip input { position: absolute; opacity: 0; inset: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.crm-chip span { display: inline-flex; align-items: center; min-height: 44px; padding: 0 var(--space-3); border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-full); font-size: var(--text-xs); font-weight: 500; }
+.crm-chip input:checked + span { background: var(--color-primary); border-color: var(--color-primary); color: #fff; font-weight: 700; }
+.crm-case-a-cocher { display: flex; gap: var(--space-2); align-items: center; font-size: var(--text-sm); min-height: 44px; }
+.crm-vide { margin: 0; font-size: var(--text-sm); color: var(--color-muted); }
+.crm-contact { padding-bottom: var(--space-3); border-bottom: 1px solid var(--color-border); }
+.crm-contact:last-child { border-bottom: 0; padding-bottom: 0; }
+.crm-histo { border-left: 2px solid var(--color-border); padding-left: var(--space-4); }
+.crm-h { position: relative; }
+.crm-h::before { content: ''; position: absolute; left: calc(var(--space-4) * -1 - 6px); top: 6px; width: 10px; height: 10px; border-radius: 50%; background: var(--color-primary); }
+.crm-h--commande::before { background: oklch(0.55 0.12 150); }
+.crm-h--relance::before { background: var(--color-muted); }
+.crm-h--annulee { opacity: 0.65; }
+.crm-h-t { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: baseline; justify-content: space-between; }
+.crm-com { margin: var(--space-1) 0 0; font-size: var(--text-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>

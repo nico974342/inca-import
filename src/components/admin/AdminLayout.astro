@@ -4,7 +4,7 @@ import { isAdmin, isStaff, ROLE_LABEL } from '../../lib/roles';
 
 interface Props {
   title: string;
-  activeNav?: 'dashboard' | 'produits' | 'stocks' | 'reappro' | 'commande-fournisseur' | 'fournisseurs' | 'achats' | 'reception' | 'clients' | 'tarifs' | 'portefeuilles' | 'commande-rapide' | 'preparation' | 'livraison' | 'commandes' | 'marges' | 'journal' | 'taches' | 'chat';
+  activeNav?: 'dashboard' | 'produits' | 'stocks' | 'reappro' | 'commande-fournisseur' | 'fournisseurs' | 'achats' | 'reception' | 'clients' | 'tarifs' | 'portefeuilles' | 'aujourdhui' | 'activites' | 'commande-rapide' | 'preparation' | 'livraison' | 'commandes' | 'marges' | 'journal' | 'taches' | 'chat';
 }
 
 const { title, activeNav } = Astro.props;
@@ -72,6 +72,13 @@ const viewerIsStaff = isStaff((Astro.locals as any).user);
           Tableau de bord
         </a>
         <p class="nav-group" role="presentation">Ventes</p>
+        <a href="/admin/aujourdhui" class={`nav-link ${activeNav === 'aujourdhui' ? 'nav-link--active' : ''}`}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <rect x="2" y="3" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3M5.5 10l1.5 1.5L10.5 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Aujourd'hui
+        </a>
         <a href="/admin/clients" class={`nav-link ${activeNav === 'clients' ? 'nav-link--active' : ''}`}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path d="M7.5 2a2 2 0 1 1 0 4 2 2 0 0 1 0-4ZM12 3a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3ZM1 11c0-2.2 2.91-4 6.5-4S14 8.8 14 11M12 8.5c1.38.37 2.5 1.16 2.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
@@ -85,6 +92,14 @@ const viewerIsStaff = isStaff((Astro.locals as any).user);
           </svg>
           Portefeuilles
         </a>
+        {viewerIsAdmin && (
+        <a href="/admin/activites" class={`nav-link ${activeNav === 'activites' ? 'nav-link--active' : ''}`}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2 8h2.5l1.5-4.5 3 9 1.5-4.5H14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Activités
+        </a>
+        )}
         <a href="/admin/tarifs" class={`nav-link ${activeNav === 'tarifs' ? 'nav-link--active' : ''}`}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path d="M2 2h5l7 7-5 5-7-7V2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
@@ -230,6 +245,11 @@ const viewerIsStaff = isStaff((Astro.locals as any).user);
       </div>
     </main>
   </div>
+
+  <script>
+    import { initRetourAppel } from '../../scripts/appelRetour';
+    initRetourAppel();
+  </script>
 
   <script>
     const toggle = document.getElementById('sidebarToggle');
