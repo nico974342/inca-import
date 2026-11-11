@@ -134,6 +134,116 @@ test.describe('Gel des réceptions au niveau de la base', () => {
   });
 });
 
+/**
+ * Portage fidèle de src/pages/api/admin/reception/create.ts du commit 6befb09 — le code ACTUELLEMENT DÉPLOYÉ en production (vérifié dans Vercel : déploiement READY de main).
+ * Même ordre d'opérations : 1. reception_create (stock + réception + PUMP) ; si l'appel échoue → redirection immédiate ; 2. seulement ensuite, mise à jour NON atomique du cumul
+ * de chaque ligne, puis passage de la commande à « receptionne » si tout est couvert.
+ */
+const ancienParcours = async (db: PGlite, shipmentId: string, lignes: { product_id: string; quantity: number; unit_cost_ht: number }[]) => {
+  const r = await srv(db, `SELECT reception_create('Fournisseur', '2026-11-11'::date, NULL, true, $1::jsonb) AS id`, [JSON.stringify(lignes)]);
+  if (r.error || !r.rows[0]?.id) return { redirect: 'new', erreur: r.error, avertissement: false };
+  let avertissement = false; let toutCouvert = true;
+  const items = (await srv(db, `SELECT id, product_id, quantity, received_quantity FROM shipment_items WHERE shipment_id = $1`, [shipmentId])).rows;
+  for (const it of items) {
+    const recu = lignes.find(l => l.product_id === it.product_id)?.quantity ?? 0; const nouveau = (it.received_quantity ?? 0) + recu;
+    if (recu > 0) { const u = await srv(db, `UPDATE shipment_items SET received_quantity = $1 WHERE id = $2`, [nouveau, it.id]); if (u.error) avertissement = true; }
+    if (nouveau < it.quantity) toutCouvert = false;
+  }
+  if (toutCouvert) { const s = await srv(db, `UPDATE shipments SET status = 'receptionne' WHERE id = $1`, [shipmentId]); if (s.error) avertissement = true; }
+  return { redirect: 'receptions', erreur: '', avertissement };
+};
+const acl = async (db: PGlite) => (await exec(db, `SELECT p.proname, (SELECT string_agg(coalesce(nullif(a.grantee::regrole::text, '-'), 'PUBLIC') || ':' || a.privilege_type, ',' ORDER BY a.grantee::regrole::text) FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a) AS droits
+  FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('reception_create', 'reception_update', 'reception_delete') ORDER BY 1`));
+
+test.describe('Gel vs code actuellement déployé : aucun stock, aucune réception, aucun cumul ne peut être écrit par l\'ancien parcours', () => {
+  const lignesDe = (c: { ids: string[] }, p: string, q: number) => [{ product_id: p, quantity: q, unit_cost_ht: 5 }];
+  for (const migre of [false, true]) {
+    test(`ancien parcours, base GELÉE ${migre ? 'APRÈS' : 'AVANT'} la migration : la base refuse avant la moindre écriture (ni stock, ni réception, ni PUMP, ni cumul, ni statut)`, async () => {
+      const db = await baseAchats(false); const p = await produit(db, 'A', 7); const c = await commande(db, [{ p, q: 100 }]);
+      await db.exec(GEL); if (migre) await db.exec(MIGRATION);
+      const avant = await photo(db); const statut = (await un(db, `SELECT status FROM shipments WHERE id = $1`, [c.s])).status;
+      for (const q of [10, 100]) {                                                                             // 100 = la quantité qui aurait soldé la commande
+        const r = await ancienParcours(db, c.s, lignesDe(c, p, q));
+        expect(r.redirect).toBe('new'); expect(r.erreur).toContain('permission denied');                         // refusé au niveau de la base, avant d'exécuter la fonction
+      }
+      expect(await photo(db)).toEqual(avant);                                                                  // stock, réceptions, cumuls : strictement inchangés
+      expect((await un(db, `SELECT status FROM shipments WHERE id = $1`, [c.s])).status).toBe(statut);
+      expect((await un(db, `SELECT prix_achat_moyen_ht FROM products WHERE id = $1`, [p])).prix_achat_moyen_ht).toBeNull();   // le PUMP non plus
+      for (const [q, a] of [[`SELECT reception_update($1::uuid, 'F', '2026-11-11'::date, 'x', true, '[]'::jsonb)`, [ADMIN_ID]], [`SELECT reception_delete($1::uuid)`, [ADMIN_ID]]] as [string, unknown[]][])
+        expect((await srv(db, q, a)).error).toContain('permission denied');                                    // correction et suppression : idem
+      await db.close();
+    });
+  }
+
+  test('PREUVE de la nécessité du gel : sans lui, après la migration, l\'ancien parcours augmente le stock puis échoue sur le cumul (et peut même marquer la commande « receptionne »)', async () => {
+    const db = await baseAchats(true); const p = await produit(db, 'A', 0); const c = await commande(db, [{ p, q: 100 }]);
+    const r = await ancienParcours(db, c.s, lignesDe(c, p, 100));
+    expect(r.redirect).toBe('receptions'); expect(r.avertissement).toBe(true);
+    expect((await un(db, `SELECT stock_quantity s FROM products WHERE id = $1`, [p])).s).toBe(100);           // stock modifié...
+    expect((await un(db, `SELECT received_quantity r FROM shipment_items WHERE id = $1`, [c.ids[0]])).r).toBeNull();   // ...mais cumul non écrit (CUMUL_PROTEGE)
+    expect((await un(db, `SELECT status FROM shipments WHERE id = $1`, [c.s])).status).toBe('receptionne');    // et statut posé : c'est exactement ce que le gel empêche
+    await db.close();
+  });
+
+  test('droits EFFECTIFS : même si une fonction était ouverte à PUBLIC, le gel la ferme à tous (service_role, anon, authenticated, PUBLIC)', async () => {
+    const db = await baseAchats(false);
+    await db.exec(`GRANT EXECUTE ON FUNCTION reception_create(text, date, text, boolean, jsonb, uuid), reception_update(uuid, text, date, text, boolean, jsonb, uuid), reception_delete(uuid) TO PUBLIC`);
+    expect((await un(db, `SELECT has_function_privilege('anon', 'reception_delete(uuid)', 'EXECUTE') a`)).a).toBe(true);   // état de départ du cas défavorable : ouvert à tous
+    await db.exec(GEL);
+    for (const f of ['reception_create(text, date, text, boolean, jsonb, uuid)', 'reception_update(uuid, text, date, text, boolean, jsonb, uuid)', 'reception_delete(uuid)'])
+      for (const r of ['anon', 'authenticated', 'service_role']) expect((await un(db, `SELECT has_function_privilege('${r}', '${f}', 'EXECUTE') a`)).a, `${r} ${f}`).toBe(false);
+    expect((await acl(db)).every(x => !String(x.droits).includes('PUBLIC'))).toBe(true);
+    await db.close();
+  });
+
+  test('droit HÉRITÉ : si service_role appartenait à un autre rôle autorisé, le script s\'arrête (GEL_INEFFICACE) et n\'applique RIEN — on le sait avant d\'aller plus loin', async () => {
+    const db = await baseAchats(false);
+    await db.exec(`CREATE ROLE relais NOLOGIN; GRANT EXECUTE ON FUNCTION reception_create(text, date, text, boolean, jsonb, uuid) TO relais; GRANT relais TO service_role`);
+    let erreur = ''; try { await db.exec(GEL); } catch (e: any) { erreur = String(e.message ?? e); }
+    await db.exec('ROLLBACK');
+    expect(erreur).toContain('GEL_INEFFICACE'); expect(erreur).toContain('relais');
+    expect((await un(db, `SELECT has_function_privilege('service_role', 'reception_create(text, date, text, boolean, jsonb, uuid)', 'EXECUTE') a`)).a).toBe(true);   // rien n'a changé : gel NON posé
+    await db.close();
+  });
+
+  test('DÉGEL : ne rend que service_role, restaure exactement les droits d\'avant le gel, et refuse (DEGEL_REFUSE, tout annulé) si un autre rôle a un droit inattendu', async () => {
+    const db = await baseAchats(false);
+    const origine = await acl(db);
+    await db.exec(GEL); expect((await acl(db)).every(x => !String(x.droits).includes('service_role'))).toBe(true);
+    await db.exec(DEGEL);
+    expect(await acl(db)).toEqual(origine);                                                                // droits strictement identiques à l'état d'avant le gel
+    for (const r of ['anon', 'authenticated']) expect((await un(db, `SELECT has_function_privilege('${r}', 'reception_create(text, date, text, boolean, jsonb, uuid)', 'EXECUTE') a`)).a).toBe(false);
+    await db.exec(GEL);
+    await db.exec(`GRANT EXECUTE ON FUNCTION reception_delete(uuid) TO authenticated`);                      // état inattendu pendant le gel
+    let erreur = ''; try { await db.exec(DEGEL); } catch (e: any) { erreur = String(e.message ?? e); }
+    await db.exec('ROLLBACK');
+    expect(erreur).toContain('DEGEL_REFUSE');
+    expect((await srv(db, `SELECT reception_delete(gen_random_uuid())`)).error).toContain('permission denied');   // les fonctions restent gelées
+    await db.close();
+  });
+
+  test('APRÈS le dégel (base migrée, nouveau code) : aucun contournement — les fonctions historiques ne rattachent rien à une commande, ne touchent ni cumul ni lignes de commande, et ne modifient pas une réception de commande', async () => {
+    const db = await baseAchats(true); const p = await produit(db, 'A', 0); const c = await commande(db, [{ p, q: 100 }]);
+    await db.exec(GEL); await db.exec(DEGEL);
+    // la nouvelle opération atomique reste la seule voie pour une réception de commande
+    const r = await srv(db, `SELECT reception_commande_enregistrer($1::uuid, $2::uuid, ((now() AT TIME ZONE 'UTC') + interval '4 hours')::date, NULL, NULL, $3::jsonb, $4::uuid, 'admin@inca.re', 'admin') AS r`,
+      [crypto.randomUUID(), c.s, JSON.stringify([{ shipment_item_id: c.ids[0], quantity: 40, unit_cost_ht: 5 }]), ADMIN_ID]);
+    expect(r.error).toBe(''); const liee = r.rows[0].r.reception_id as string;
+    const avant = await photo(db);
+    expect((await srv(db, `SELECT reception_update($1::uuid, 'F', '2026-11-11'::date, 'x', true, $2::jsonb)`, [liee, JSON.stringify([{ product_id: p, quantity: 5, unit_cost_ht: 5 }])])).error).not.toBe('');   // correction d'une réception de commande : refusée
+    expect((await srv(db, `SELECT reception_delete($1::uuid)`, [liee])).error).not.toBe('');                // suppression : refusée
+    expect(await photo(db)).toEqual(avant);
+    // une réception libre fonctionne normalement mais ne peut ni toucher la commande ni son cumul
+    const s0 = (await un(db, `SELECT stock_quantity s FROM products WHERE id = $1`, [p])).s;
+    const libre = (await srv(db, `SELECT reception_create('Fournisseur', '2026-11-11'::date, 'libre', true, $1::jsonb) AS id`, [JSON.stringify([{ product_id: p, quantity: 12, unit_cost_ht: 5 }])])).rows[0].id as string;
+    expect((await un(db, `SELECT stock_quantity s FROM products WHERE id = $1`, [p])).s).toBe(s0 + 12);
+    expect((await un(db, `SELECT shipment_id, cle_idempotence FROM stock_receptions WHERE id = $1`, [libre]))).toEqual({ shipment_id: null, cle_idempotence: null });   // jamais rattachée à une commande
+    expect((await un(db, `SELECT received_quantity r FROM shipment_items WHERE id = $1`, [c.ids[0]])).r).toBe(40);                                     // cumul inchangé
+    expect((await srv(db, `UPDATE stock_receptions SET shipment_id = $1 WHERE id = $2`, [c.s, libre])).error).not.toBe('');                           // impossible de la rattacher après coup
+    await db.close();
+  });
+});
+
 test.describe('Contrôle « aucune opération en cours » (lecture seule)', () => {
   const sections = AVANT_MIGRATION.split(/-- ═══ \d\./).slice(1).map(b => b.slice(b.indexOf('\n') + 1));
   test('lecture seule ; renvoie 0 ligne quand tout est calme ; détecte une transaction ouverte, une réception récente et l\'absence de gel', async () => {
