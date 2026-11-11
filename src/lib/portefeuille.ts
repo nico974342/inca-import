@@ -107,15 +107,31 @@ export function acteurDepuisSession(user: UtilisateurSession): ActeurPortefeuill
 export type Resultat = { ok: true; data: unknown } | { ok: false; message: string };
 type CompteAnnuaire = { id: string; email?: string | null; app_metadata?: { role?: string | null } | null } | null;
 /** Dépendances externes (injectées en test) : appel des fonctions SQL et annuaire des comptes. */
+export type CompteStaff = { id: string; email: string; role: RoleStaff };
 export type DepotPortefeuille = {
   rpc(nom: string, params: Record<string, unknown>): Promise<{ data: unknown; error: { message: string } | null }>;
   trouverCompte(id: string): Promise<CompteAnnuaire>;
+  /** Comptes du PERSONNEL (admin, commercial) : sert à proposer les responsables possibles. */
+  listerPersonnel?(): Promise<CompteStaff[]>;
 };
 export const depotSupabase: DepotPortefeuille = {
   rpc: (nom, params) => supabaseAdmin.rpc(nom, params) as any,
   async trouverCompte(id) {
     const { data, error } = await supabaseAdmin.auth.admin.getUserById(id);
     return error || !data?.user ? null : { id: data.user.id, email: data.user.email, app_metadata: data.user.app_metadata as any };
+  },
+  async listerPersonnel() {
+    const personnel: CompteStaff[] = [];
+    for (let page = 1; ; page++) {
+      const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: 1000 });
+      if (error) throw new Error(`listUsers: ${error.message}`);
+      for (const u of data.users) {
+        const role = getRole({ app_metadata: (u.app_metadata as any) ?? null });
+        if (u.email && (role === 'admin' || role === 'commercial')) personnel.push({ id: u.id, email: u.email, role });
+      }
+      if (data.users.length < 1000) break;
+    }
+    return personnel;
   },
 };
 
@@ -137,6 +153,11 @@ export function creerPortefeuille(depot: DepotPortefeuille) {
   const ids = (l: unknown): string[] | null => (Array.isArray(l) && l.length > 0 && l.length <= 200 && l.every(x => typeof x === 'string' && UUID.test(x)) ? (l as string[]) : null);
 
   return {
+    /** Responsables possibles (comptes du personnel), administrateurs d'abord puis par e-mail. */
+    async personnel(): Promise<CompteStaff[]> {
+      const l = (await depot.listerPersonnel?.()) ?? [];
+      return [...l].sort((a, b) => (a.role === b.role ? a.email.localeCompare(b.email) : a.role === 'admin' ? -1 : 1));
+    },
     /** Attribution, transfert, retrait ou prise en charge d'UN client. Pour « prise_en_charge », le responsable est l'acteur. */
     async attribuerClient(p: { utilisateur: UtilisateurSession; clientId: string; action: ActionPortefeuille; nouveauId?: string | null; motif?: string | null }): Promise<Resultat> {
       const acteur = acteurDepuisSession(p.utilisateur);

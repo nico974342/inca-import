@@ -99,11 +99,12 @@ test.describe('Phase 1 — Suivi des achats', () => {
     const nouveau = analyser(lire('src/components/admin/AdminLayout.astro'));
     const norm = (l: { href: string; garde: string }[]) => l.map(x => `${x.garde}:${x.href}`).sort();
     expect(norm(ancien.liens)).toContain('admin:/admin/transit');
-    expect(norm(nouveau.liens)).toEqual(norm(ancien.liens).map(x => x === 'admin:/admin/transit' ? 'admin:/admin/achats' : x).sort());
-    expect(nouveau.liens.length).toBe(15);
+    // seuls changements depuis la phase 1 : Transit → Suivi des achats, et l'ajout de Portefeuilles (visible de tout le personnel)
+    expect(norm(nouveau.liens)).toEqual([...norm(ancien.liens).map(x => x === 'admin:/admin/transit' ? 'admin:/admin/achats' : x), 'tous:/admin/portefeuilles'].sort());
+    expect(nouveau.liens.length).toBe(16);
     // Ordre par groupe
     const ordre = nouveau.liens.map(x => x.href);
-    expect(ordre).toEqual(['/admin', '/admin/clients', '/admin/tarifs', '/admin/commande-rapide', '/admin/preparation', '/admin/commandes', '/admin/livraison',
+    expect(ordre).toEqual(['/admin', '/admin/clients', '/admin/portefeuilles', '/admin/tarifs', '/admin/commande-rapide', '/admin/preparation', '/admin/commandes', '/admin/livraison',
       '/admin/produits', '/admin/stocks', '/admin/commande-fournisseur', '/admin/achats', '/admin/reception', '/admin/fournisseurs', '/admin/marges', '/admin/journal']);
     expect(nouveau.titres).toEqual([
       { label: 'Ventes', garde: 'tous', avantLien: null }, { label: 'Achats et stock', garde: 'tous', avantLien: null }, { label: 'Gestion', garde: 'viewerIsAdmin', avantLien: null }]);

@@ -4,7 +4,7 @@ import { isAdmin, isStaff, ROLE_LABEL } from '../../lib/roles';
 
 interface Props {
   title: string;
-  activeNav?: 'dashboard' | 'produits' | 'stocks' | 'reappro' | 'commande-fournisseur' | 'fournisseurs' | 'achats' | 'reception' | 'clients' | 'tarifs' | 'commande-rapide' | 'preparation' | 'livraison' | 'commandes' | 'marges' | 'journal' | 'taches' | 'chat';
+  activeNav?: 'dashboard' | 'produits' | 'stocks' | 'reappro' | 'commande-fournisseur' | 'fournisseurs' | 'achats' | 'reception' | 'clients' | 'tarifs' | 'portefeuilles' | 'commande-rapide' | 'preparation' | 'livraison' | 'commandes' | 'marges' | 'journal' | 'taches' | 'chat';
 }
 
 const { title, activeNav } = Astro.props;
@@ -77,6 +77,13 @@ const viewerIsStaff = isStaff((Astro.locals as any).user);
             <path d="M7.5 2a2 2 0 1 1 0 4 2 2 0 0 1 0-4ZM12 3a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3ZM1 11c0-2.2 2.91-4 6.5-4S14 8.8 14 11M12 8.5c1.38.37 2.5 1.16 2.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg>
           Clients
+        </a>
+        <a href="/admin/portefeuilles" class={`nav-link ${activeNav === 'portefeuilles' ? 'nav-link--active' : ''}`}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2 5h12v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M5.5 5V3.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1V5M2 8.5h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          Portefeuilles
         </a>
         <a href="/admin/tarifs" class={`nav-link ${activeNav === 'tarifs' ? 'nav-link--active' : ''}`}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
