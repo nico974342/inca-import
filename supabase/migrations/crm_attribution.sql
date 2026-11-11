@@ -18,6 +18,9 @@
 --   orders.attribution                   'historique' (commandes d'avant M1 : aucune preuve fiable, JAMAIS attribuées automatiquement →
 --                                        « Historique non attribué » dans les statistiques) | 'portefeuille' | 'sans_responsable'
 --                                        (client sans responsable à la création) | 'manuelle' (réservé : attribution explicite future).
+--   orders.rattachement_groupe           classification Groupe Incana / externe du client AU MOMENT de la commande, figée comme le responsable :
+--                                        'interne' | 'externe' | 'non_classe' (toutes les commandes antérieures, et les clients pas encore classés).
+--                                        Une modification ultérieure de la fiche client ne change JAMAIS les commandes passées.
 
 BEGIN;
 
@@ -52,11 +55,13 @@ CREATE INDEX IF NOT EXISTS client_accounts_parent_idx      ON client_accounts (p
 -- attribution : NOT NULL avec défaut 'historique' le temps d'ajouter la colonne (les lignes existantes prennent cette valeur),
 -- puis le défaut est retiré : une commande insérée sans passer par le déclencheur échouerait bruyamment au lieu d'être étiquetée à tort.
 ALTER TABLE orders
-  ADD COLUMN IF NOT EXISTS client_id          uuid,
-  ADD COLUMN IF NOT EXISTS responsable_id     uuid,
-  ADD COLUMN IF NOT EXISTS responsable_email  text,
-  ADD COLUMN IF NOT EXISTS attribution       text NOT NULL DEFAULT 'historique';
+  ADD COLUMN IF NOT EXISTS client_id            uuid,
+  ADD COLUMN IF NOT EXISTS responsable_id       uuid,
+  ADD COLUMN IF NOT EXISTS responsable_email    text,
+  ADD COLUMN IF NOT EXISTS attribution          text NOT NULL DEFAULT 'historique',
+  ADD COLUMN IF NOT EXISTS rattachement_groupe  text NOT NULL DEFAULT 'non_classe';
 ALTER TABLE orders ALTER COLUMN attribution DROP DEFAULT;
+ALTER TABLE orders ALTER COLUMN rattachement_groupe DROP DEFAULT;
 
 ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_client_id_fkey;
 ALTER TABLE orders ADD CONSTRAINT orders_client_id_fkey FOREIGN KEY (client_id) REFERENCES client_accounts(id) ON DELETE SET NULL;
@@ -66,22 +71,27 @@ ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_attribution_coherente;
 ALTER TABLE orders ADD CONSTRAINT orders_attribution_coherente
   CHECK ((attribution IN ('portefeuille', 'manuelle')) = (responsable_id IS NOT NULL) AND (responsable_id IS NULL) = (responsable_email IS NULL));
 
+ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_rattachement_groupe_check;
+ALTER TABLE orders ADD CONSTRAINT orders_rattachement_groupe_check CHECK (rattachement_groupe IN ('interne', 'externe', 'non_classe'));
+
 CREATE INDEX IF NOT EXISTS orders_client_id_idx      ON orders (client_id);
 CREATE INDEX IF NOT EXISTS orders_responsable_id_idx ON orders (responsable_id);
 
 -- ── 3. Déclencheurs de protection et d'attribution ───────────────────────────────────────────────────────────────
 
--- Nouvelle commande : rattache au compte client et FIGE le responsable du moment. Ni le responsable ni l'attribution ne viennent
--- jamais de l'appelant. Le compte est lu FOR SHARE : un transfert de portefeuille simultané (FOR UPDATE) est sérialisé avec la commande.
+-- Nouvelle commande : rattache au compte client et FIGE le responsable et la classification Groupe du moment. Ni le responsable, ni l'attribution,
+-- ni la classification ne viennent jamais de l'appelant. Le compte est lu FOR SHARE : un transfert de portefeuille simultané (FOR UPDATE) est sérialisé avec la commande.
 CREATE OR REPLACE FUNCTION orders_attribuer() RETURNS trigger
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 DECLARE
   v_n        int;
   v_resp_id  uuid;
   v_resp_mel text;
+  v_groupe   text;
 BEGIN
-  NEW.responsable_id    := NULL;
-  NEW.responsable_email := NULL;
+  NEW.responsable_id      := NULL;
+  NEW.responsable_email   := NULL;
+  NEW.rattachement_groupe := 'non_classe';
 
   -- Rattachement par e-mail UNIQUEMENT s'il désigne un seul compte (insensible à la casse et aux espaces) ; sinon la commande reste sans client.
   IF NEW.client_id IS NULL AND nullif(trim(NEW.email), '') IS NOT NULL THEN
@@ -92,10 +102,11 @@ BEGIN
   END IF;
 
   IF NEW.client_id IS NOT NULL THEN
-    SELECT responsable_id, responsable_email INTO v_resp_id, v_resp_mel
+    SELECT responsable_id, responsable_email, rattachement_groupe INTO v_resp_id, v_resp_mel, v_groupe
     FROM client_accounts WHERE id = NEW.client_id FOR SHARE;
-    NEW.responsable_id    := v_resp_id;
-    NEW.responsable_email := v_resp_mel;
+    NEW.responsable_id      := v_resp_id;
+    NEW.responsable_email   := v_resp_mel;
+    NEW.rattachement_groupe := coalesce(v_groupe, 'non_classe');
   END IF;
 
   NEW.attribution := CASE WHEN NEW.responsable_id IS NULL THEN 'sans_responsable' ELSE 'portefeuille' END;
@@ -105,7 +116,7 @@ END $$;
 DROP TRIGGER IF EXISTS trg_orders_attribuer ON orders;
 CREATE TRIGGER trg_orders_attribuer BEFORE INSERT ON orders FOR EACH ROW EXECUTE FUNCTION orders_attribuer();
 
--- Commande existante : le responsable et l'attribution sont figés (même pour un administrateur). Le compte client ne peut pas être
+-- Commande existante : le responsable, l'attribution et la classification Groupe sont figés (même pour un administrateur). Le compte client ne peut pas être
 -- changé non plus ; deux exceptions seulement : (a) le compte est supprimé (ON DELETE SET NULL : le lien disparaît, l'attribution reste) ;
 -- (b) rattachement d'une commande HISTORIQUE encore sans client, par la procédure de remplissage (réglage de transaction explicite).
 CREATE OR REPLACE FUNCTION orders_attribution_proteger() RETURNS trigger
@@ -115,6 +126,10 @@ BEGIN
   OR NEW.responsable_email IS DISTINCT FROM OLD.responsable_email
   OR NEW.attribution       IS DISTINCT FROM OLD.attribution THEN
     RAISE EXCEPTION 'ATTRIBUTION_FIGEE : le responsable d''une commande est figé à sa création';
+  END IF;
+
+  IF NEW.rattachement_groupe IS DISTINCT FROM OLD.rattachement_groupe THEN
+    RAISE EXCEPTION 'CLASSIFICATION_FIGEE : la classification Groupe d''une commande est figée à sa création';
   END IF;
 
   IF NEW.client_id IS DISTINCT FROM OLD.client_id THEN
@@ -131,7 +146,7 @@ BEGIN
 END $$;
 
 DROP TRIGGER IF EXISTS trg_orders_attribution_proteger ON orders;
-CREATE TRIGGER trg_orders_attribution_proteger BEFORE UPDATE OF client_id, responsable_id, responsable_email, attribution ON orders
+CREATE TRIGGER trg_orders_attribution_proteger BEFORE UPDATE OF client_id, responsable_id, responsable_email, attribution, rattachement_groupe ON orders
   FOR EACH ROW EXECUTE FUNCTION orders_attribution_proteger();
 
 -- Compte client : le responsable et le rattachement au Groupe ne changent QUE par les fonctions ci-dessous (qui journalisent).
@@ -426,6 +441,7 @@ GRANT EXECUTE ON FUNCTION client_attribuer(uuid, uuid, text, text, uuid, text, t
   clients_classer_groupe_lot(uuid[], text, text, text, text) TO service_role;
 
 COMMENT ON COLUMN orders.attribution IS 'historique = commande antérieure à M1, jamais attribuée automatiquement ; portefeuille = responsable figé à la création ; sans_responsable = client non attribué à la création ; manuelle = attribution explicite (réservé)';
+COMMENT ON COLUMN orders.rattachement_groupe IS 'classification Groupe Incana / externe du client à la création de la commande (figée) ; non_classe = commande antérieure ou client pas encore classé';
 COMMENT ON COLUMN client_accounts.rattachement_groupe IS 'interne = client du Groupe Incana, externe = portefeuille indépendant, NULL = à classer (jamais déduit automatiquement)';
 COMMENT ON COLUMN client_accounts.parent_id IS 'RÉSERVÉ : entreprise (facturée) → point de vente (livré). Non utilisé en phase CRM 2 ; chaque point de vente garde son propre compte et ses clés de BL.';
 
@@ -439,6 +455,6 @@ COMMIT;
 --      DROP TRIGGER trg_client_accounts_attribution_proteger ON client_accounts;
 --   3. DROP FUNCTION orders_attribuer(), orders_attribution_proteger(), client_accounts_attribution_proteger(), client_attribuer(uuid, uuid, text, text, uuid, text, text, text),
 --        clients_attribuer_lot(uuid[], uuid, text, uuid, text, text, text), client_classer_groupe(uuid, text, text, text, text), clients_classer_groupe_lot(uuid[], text, text, text, text);
---   4. ALTER TABLE orders DROP COLUMN client_id, DROP COLUMN responsable_id, DROP COLUMN responsable_email, DROP COLUMN attribution;
+--   4. ALTER TABLE orders DROP COLUMN client_id, DROP COLUMN responsable_id, DROP COLUMN responsable_email, DROP COLUMN attribution, DROP COLUMN rattachement_groupe;
 --   5. ALTER TABLE client_accounts DROP COLUMN responsable_id, DROP COLUMN responsable_email, DROP COLUMN responsable_depuis,
 --        DROP COLUMN rattachement_groupe, DROP COLUMN rattachement_valide_par, DROP COLUMN rattachement_valide_le, DROP COLUMN parent_id;

@@ -6,7 +6,7 @@
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
-import { actionsPossibles, messagePortefeuille, categorieAttribution, type ActionPortefeuille } from '../src/lib/portefeuille';
+import { actionsPossibles, messagePortefeuille, categorieAttribution, ventilerCA, type ActionPortefeuille } from '../src/lib/portefeuille';
 
 const lire = (f: string) => readFileSync(`supabase/migrations/${f}`, 'utf8');
 const M1 = lire('crm_attribution.sql');
@@ -87,7 +87,7 @@ async function baseAvantM1(): Promise<{ db: PGlite; ids: Record<string, string> 
   // Commandes HISTORIQUES (avant M1), insérées directement comme l'étaient les anciennes
   const cmd = async (email: string | null, statut: string, nom = 'x') => (await un(db, `INSERT INTO orders (nom, email, status) VALUES ($1, $2, $3) RETURNING id`, [nom, email, statut])).id;
   ids.h_a = await cmd('a@x.fr', 'livree'); ids.h_a_variante = await cmd('  A@X.fr ', 'livree'); ids.h_a_annulee = await cmd('a@x.fr', 'annulee'); ids.h_b = await cmd('b@x.fr', 'livree');
-  ids.h_aucune = await cmd('inconnu@x.fr', 'livree'); ids.h_doublon = await cmd('dup@x.fr', 'livree'); ids.h_sans_email = await cmd(null, 'livree'); ids.h_prospect = await cmd('p@x.fr', 'livree');
+  ids.h_aucune = await cmd('inconnu@x.fr', 'livree'); ids.h_sans_email = await cmd(null, 'livree'); ids.h_prospect = await cmd('p@x.fr', 'livree');
   for (const o of [ids.h_a, ids.h_b, ids.h_aucune]) await db.query(`INSERT INTO order_items (order_id, product_id, product_name, quantity, price_ht_snapshot, pump_snapshot) VALUES ($1, $2, 'Cola', 2, 10, 4)`, [o, ids.p1]);
   return { db, ids };
 }
@@ -97,6 +97,28 @@ const creerCommande = (db: PGlite, email: string | null, items: any[], extra: Re
   srv(db, `SELECT * FROM order_create_checked($1::jsonb, $2::jsonb)`, [JSON.stringify({ nom: 'Cli', email, ...extra }), JSON.stringify(items)]);
 const attribuer = (db: PGlite, client: string, nouveau: string | null, action: string, acteur: string, role: string, motif: string | null = null, mel?: string) =>
   srv(db, `SELECT client_attribuer($1, $2, $3, $4, $5, $6, $7, $8) AS r`, [client, nouveau, nouveau ? (mel ?? `${nouveau.slice(0, 4)}@inca.re`) : null, action, acteur, `${acteur.slice(0, 4)}@inca.re`, role, motif]);
+
+
+/** Valeurs attendues du rapport de correspondance, calculées comme l'opérateur le fait en production (même requête que le fichier de remplissage). */
+async function attenduRemplissage(d: PGlite) {
+  const r = await un(d, `WITH c AS (SELECT o.id, count(a.id) n FROM orders o LEFT JOIN client_accounts a ON lower(trim(a.email)) = lower(trim(o.email))
+      WHERE o.client_id IS NULL AND o.attribution = 'historique' AND nullif(trim(o.email), '') IS NOT NULL GROUP BY o.id)
+    SELECT count(*)::text candidats, (count(*) FILTER (WHERE n = 1))::text uniques, (count(*) FILTER (WHERE n = 0))::text aucune FROM c`);
+  const e = await un(d, `SELECT md5(coalesce(string_agg(u.order_id::text || ':' || u.client_id::text, ',' ORDER BY u.order_id), '')) empreinte
+    FROM (SELECT o.id AS order_id, (array_agg(a.id))[1] AS client_id FROM orders o JOIN client_accounts a ON lower(trim(a.email)) = lower(trim(o.email))
+          WHERE o.client_id IS NULL AND o.attribution = 'historique' AND nullif(trim(o.email), '') IS NOT NULL GROUP BY o.id HAVING count(*) = 1) u`);
+  return { candidats: r.candidats, uniques: r.uniques, aucune: r.aucune, empreinte: e.empreinte as string };
+}
+/** Lance le fichier de remplissage comme en production : valeurs attendues posées juste avant, remises à zéro juste après. Renvoie le message d'erreur ('' si réussi). */
+async function remplir(d: PGlite, surcharge: Partial<Awaited<ReturnType<typeof attenduRemplissage>>> | 'sans-valeurs' = {}) {
+  const reglage = (v: Record<string, string>) => d.exec(`SELECT set_config('inca.remplissage_attendu_candidats', '${v.candidats}', false), set_config('inca.remplissage_attendu_uniques', '${v.uniques}', false),
+    set_config('inca.remplissage_attendu_aucune', '${v.aucune}', false), set_config('inca.remplissage_attendu_empreinte', '${v.empreinte}', false)`);
+  const vide = { candidats: '', uniques: '', aucune: '', empreinte: '' };
+  await reglage(surcharge === 'sans-valeurs' ? vide : { ...(await attenduRemplissage(d)), ...surcharge });
+  try { await d.exec(REMPLISSAGE); return ''; }
+  catch (e: any) { try { await d.exec('ROLLBACK'); } catch { /* déjà terminée */ } return String(e.message ?? e); }
+  finally { await reglage(vide); }
+}
 
 test.describe.serial('CRM M1 — rattachement des commandes et attribution commerciale (base locale)', () => {
   let db: PGlite; let ids: Record<string, string>; let avant: any;
@@ -121,8 +143,8 @@ test.describe.serial('CRM M1 — rattachement des commandes et attribution comme
       sequence: await un(db, `SELECT last_value, is_called FROM bl_number_seq`),
     });
     expect(await apres()).toEqual(avant);
-    const nouveaux = await exec(db, `SELECT attribution, count(*)::int n, count(client_id)::int avec_client, count(responsable_id)::int avec_resp FROM orders GROUP BY 1`);
-    expect(nouveaux).toEqual([{ attribution: 'historique', n: 8, avec_client: 0, avec_resp: 0 }]);
+    const nouveaux = await exec(db, `SELECT attribution, rattachement_groupe, count(*)::int n, count(client_id)::int avec_client, count(responsable_id)::int avec_resp FROM orders GROUP BY 1, 2`);
+    expect(nouveaux).toEqual([{ attribution: 'historique', rattachement_groupe: 'non_classe', n: 7, avec_client: 0, avec_resp: 0 }]);
     expect((await un(db, `SELECT count(*)::int n FROM client_accounts WHERE responsable_id IS NOT NULL OR rattachement_groupe IS NOT NULL OR parent_id IS NOT NULL`)).n).toBe(0);
     await db.exec(M1);                                     // rejeu
     expect(await apres()).toEqual(avant);
@@ -131,13 +153,15 @@ test.describe.serial('CRM M1 — rattachement des commandes et attribution comme
   test('colonnes, contraintes et index attendus', async () => {
     const col = async (t: string) => (await exec(db, `SELECT column_name, is_nullable, column_default FROM information_schema.columns WHERE table_name=$1 AND column_name IN ('client_id','responsable_id','responsable_email','attribution','responsable_depuis','rattachement_groupe','rattachement_valide_par','rattachement_valide_le','parent_id') ORDER BY column_name`, [t]));
     const o = await col('orders');
-    expect(o.map(c => c.column_name)).toEqual(['attribution', 'client_id', 'responsable_email', 'responsable_id']);
-    expect(o.find(c => c.column_name === 'attribution')).toMatchObject({ is_nullable: 'NO', column_default: null });   // pas de défaut : une insertion hors déclencheur échoue bruyamment
+    expect(o.map(c => c.column_name)).toEqual(['attribution', 'client_id', 'rattachement_groupe', 'responsable_email', 'responsable_id']);
+    expect(o.find(c => c.column_name === 'attribution')).toMatchObject({ is_nullable: 'NO', column_default: null });
+    expect(o.find(c => c.column_name === 'rattachement_groupe')).toMatchObject({ is_nullable: 'NO', column_default: null });   // pas de défaut : une insertion hors déclencheur échoue bruyamment
     expect((await col('client_accounts')).map(c => c.column_name)).toEqual(['parent_id', 'rattachement_groupe', 'rattachement_valide_le', 'rattachement_valide_par', 'responsable_depuis', 'responsable_email', 'responsable_id']);
     const idx = (await exec(db, `SELECT indexname FROM pg_indexes WHERE tablename IN ('orders','client_accounts')`)).map(r => r.indexname);
     for (const i of ['orders_client_id_idx', 'orders_responsable_id_idx', 'client_accounts_responsable_idx', 'client_accounts_parent_idx']) expect(idx).toContain(i);
     // contraintes de cohérence
     expect((await srv(db, `UPDATE orders SET attribution='n''importe quoi' WHERE id=$1`, [ids.h_a])).error).toMatch(/orders_attribution_check|ATTRIBUTION_FIGEE/);
+    expect((await srv(db, `UPDATE orders SET rattachement_groupe='n''importe quoi' WHERE id=$1`, [ids.h_a])).error).toMatch(/orders_rattachement_groupe_check|CLASSIFICATION_FIGEE/);
     expect((await srv(db, `INSERT INTO client_accounts (nom, email, status, rattachement_groupe) VALUES ('x','x1@x.fr','actif','autre')`)).error).toMatch(/rattachement/);
     expect((await srv(db, `INSERT INTO client_accounts (nom, email, status, responsable_id) VALUES ('x','x2@x.fr','actif','${ADMIN}')`)).error).toMatch(/responsable_coherent/);   // id sans e-mail ni date : refusé
     expect((await srv(db, `UPDATE client_accounts SET parent_id = id WHERE id=$1`, [ids.a])).error).toMatch(/parent_distinct/);
@@ -175,24 +199,59 @@ test.describe.serial('CRM M1 — rattachement des commandes et attribution comme
     expect(def).toContain("SET search_path TO 'public', 'pg_temp'");
   });
 
+  // ───────────────────────────── VERROUS du remplissage : bloqué si les données ont changé ou si une correspondance est ambiguë ─────────────────────────────
+  test('REMPLISSAGE BLOQUÉ : sans valeurs attendues, si les données ont changé, si une correspondance est devenue ambiguë, ou si l\'empreinte diffère — aucune écriture dans tous ces cas', async () => {
+    const etat = () => exec(db, `SELECT id, client_id, attribution, responsable_id FROM orders ORDER BY id`);
+    const avantGarde = await etat();
+    const attendu = await attenduRemplissage(db);
+    expect(attendu).toMatchObject({ candidats: '6', uniques: '5', aucune: '1' });      // 7 commandes dont 1 sans e-mail ; 5 à correspondance unique ; 1 sans compte
+    // (a) valeurs attendues absentes
+    expect(await remplir(db, 'sans-valeurs')).toMatch(/REMPLISSAGE_BLOQUE.*valeurs attendues/);
+    // (b) mauvais nombres attendus
+    expect(await remplir(db, { candidats: '79' })).toMatch(/REMPLISSAGE_BLOQUE.*données ont changé/);
+    expect(await remplir(db, { uniques: '4' })).toMatch(/REMPLISSAGE_BLOQUE.*données ont changé/);
+    expect(await remplir(db, { aucune: '0' })).toMatch(/REMPLISSAGE_BLOQUE.*données ont changé/);
+    // (c) empreinte différente
+    expect(await remplir(db, { empreinte: 'd41d8cd98f00b204e9800998ecf8427e' })).toMatch(/REMPLISSAGE_BLOQUE.*empreinte/);
+    // (d) une correspondance DEVIENT ambiguë : un second compte (casse différente, autorisé par l'unicité sensible à la casse) pour le même e-mail
+    const intrus = (await un(db, `INSERT INTO client_accounts (nom, email, status) VALUES ('Intrus', 'B@X.fr', 'actif') RETURNING id`)).id;
+    expect(await remplir(db, await attenduRemplissage(db).then(a => ({ ...a })))).toMatch(/REMPLISSAGE_BLOQUE.*ambiguë/);
+    // seconde couche, indépendante du verrou : même exécutée SEULE (verrou contourné), l'instruction d'écriture ne rattache JAMAIS une commande ambiguë
+    const ecriture = REMPLISSAGE.slice(REMPLISSAGE.indexOf('WITH cible AS ('), REMPLISSAGE.indexOf('WHERE o.id = cible.order_id;') + 'WHERE o.id = cible.order_id;'.length);
+    expect(ecriture).toContain('HAVING count(*) = 1');
+    const res = await db.exec(`BEGIN; SELECT set_config('inca.rattachement_historique', '1', true); ${ecriture} SELECT id, client_id FROM orders; ROLLBACK;`);
+    const lecture = Object.fromEntries((res.find((r: any) => r.fields?.some((f: any) => f.name === 'client_id')) as any).rows.map((r: any) => [r.id, r.client_id]));
+    expect(lecture[ids.h_b]).toBeNull();                      // b@x.fr est devenu ambigu (b@x.fr / B@X.fr) : non rattachée
+    expect(lecture[ids.h_a]).toBe(ids.a);                     // les correspondances uniques, elles, le seraient
+    expect((await un(db, `SELECT count(client_id)::int n FROM orders`)).n).toBe(0);      // transaction annulée : aucune trace
+    await db.query(`DELETE FROM client_accounts WHERE id = $1`, [intrus]);
+    // (e) les données ont changé depuis le rapport : l'e-mail d'un compte est modifié (la liste « commande → compte » n'est plus la même)
+    const rapport = await attenduRemplissage(db);
+    await db.query(`UPDATE client_accounts SET email = 'b2@x.fr' WHERE id = $1`, [ids.b]);
+    expect(await remplir(db, rapport)).toMatch(/REMPLISSAGE_BLOQUE.*données ont changé/);
+    await db.query(`UPDATE client_accounts SET email = 'b@x.fr' WHERE id = $1`, [ids.b]);
+    // aucun de ces refus n'a écrit quoi que ce soit
+    expect(await etat()).toEqual(avantGarde);
+    expect((await un(db, `SELECT count(client_id)::int n FROM orders`)).n).toBe(0);
+  });
+
   // ───────────────────────────── Remplissage des 78 correspondances (ici : 5 sur 8 commandes de test) ─────────────────────────────
-  test('REMPLISSAGE : seules les correspondances EXACTES et UNIQUES sont rattachées ; casse/espaces tolérés ; doublon, inconnu et sans e-mail restent sans client ; rien d\'autre ne change', async () => {
+  test('REMPLISSAGE : seules les correspondances EXACTES et UNIQUES sont rattachées ; casse/espaces tolérés ; inconnu et sans e-mail restent sans client ; rien d\'autre ne change', async () => {
     const avantRemp = await exec(db, `SELECT id, nom, societe, email, status, created_at, notes, tva_rate, bl_number, attribution, responsable_id, responsable_email FROM orders ORDER BY id`);
     const lignesAvant = await exec(db, `SELECT * FROM order_items ORDER BY id`);
-    await db.exec(REMPLISSAGE);
+    expect(await remplir(db)).toBe('');
     const liees = Object.fromEntries((await exec(db, `SELECT id, client_id FROM orders`)).map(r => [r.id, r.client_id]));
     expect(liees[ids.h_a]).toBe(ids.a); expect(liees[ids.h_a_variante]).toBe(ids.a); expect(liees[ids.h_a_annulee]).toBe(ids.a);      // annulée incluse, e-mail avec espaces/majuscules reconnu
     expect(liees[ids.h_b]).toBe(ids.b); expect(liees[ids.h_prospect]).toBe(ids.prospect);
     expect(liees[ids.h_aucune]).toBeNull();                 // aucun compte : JAMAIS deviné
-    expect(liees[ids.h_doublon]).toBeNull();                // deux comptes (Dup@ et dup@) : JAMAIS choisi au hasard
     expect(liees[ids.h_sans_email]).toBeNull();
     // Aucune autre colonne modifiée : ni responsable, ni attribution, ni montants, ni statuts, ni lignes
     expect(await exec(db, `SELECT id, nom, societe, email, status, created_at, notes, tva_rate, bl_number, attribution, responsable_id, responsable_email FROM orders ORDER BY id`)).toEqual(avantRemp);
     expect(await exec(db, `SELECT * FROM order_items ORDER BY id`)).toEqual(lignesAvant);
     expect((await exec(db, `SELECT DISTINCT attribution FROM orders`)).map(r => r.attribution)).toEqual(['historique']);   // « Historique non attribué »
     expect((await un(db, `SELECT count(*)::int n FROM orders WHERE responsable_id IS NOT NULL`)).n).toBe(0);
-    // rejouable : aucune modification supplémentaire
-    await db.exec(REMPLISSAGE);
+    // rejouable : aucune modification supplémentaire (plus aucun candidat à rattacher : valeurs attendues recalculées)
+    expect(await remplir(db)).toBe('');
     expect(Object.fromEntries((await exec(db, `SELECT id, client_id FROM orders`)).map(r => [r.id, r.client_id]))).toEqual(liees);
     // le réglage de transaction n'a pas fuité : le rattachement direct est de nouveau refusé
     expect((await srv(db, `UPDATE orders SET client_id = $1 WHERE id = $2`, [ids.b, ids.h_aucune])).error).toMatch(/CLIENT_FIGE/);
@@ -242,7 +301,7 @@ test.describe.serial('CRM M1 — rattachement des commandes et attribution comme
     const parResp = Object.fromEntries((await vue()).map(r => [`${r.r}|${r.attribution}`, r.n]));
     expect(parResp['clement@inca.re|portefeuille']).toBe(2);                    // c2 et la commande directe
     expect(parResp['arnaud@inca.re|portefeuille']).toBe(1);
-    expect(parResp['—|historique']).toBe(8);                                      // l'historique reste « non attribué »
+    expect(parResp['—|historique']).toBe(7);                                      // l'historique reste « non attribué »
   });
 
   test('PROTECTIONS : responsable, attribution et client d\'une commande sont figés (même pour le serveur) ; les autres champs restent modifiables ; la suppression d\'un compte garde l\'attribution', async () => {
@@ -430,9 +489,113 @@ test.describe.serial('CRM M1 — rattachement des commandes et attribution comme
       return sortie;
     };
     const sans = await baseAvantM1();
-    const avec = await baseAvantM1(); await avec.db.exec(M1); await avec.db.exec(REMPLISSAGE);
+    const avec = await baseAvantM1(); await avec.db.exec(M1); expect(await remplir(avec.db)).toBe('');
     try { expect(await scenario(avec.db, avec.ids)).toEqual(await scenario(sans.db, sans.ids)); }
     finally { await sans.db.close(); await avec.db.close(); }
+  });
+
+  // ───────────────────────────── Classification Groupe Incana / externe figée sur la commande ─────────────────────────────
+  test('CLASSIFICATION FIGÉE : la classification du client est copiée sur la commande à sa création ; une modification ultérieure de la fiche ne change JAMAIS les commandes passées ; « non classé » par défaut et pour tout l\'historique', async () => {
+    const neuf = async (mel: string) => (await un(db, `INSERT INTO client_accounts (nom, email, status) VALUES ($1, $1, 'actif') RETURNING id`, [mel])).id;
+    const g = await neuf('g1@x.fr');
+    const groupe = async (o: string) => (await un(db, `SELECT rattachement_groupe g FROM orders WHERE id=$1`, [o])).g;
+    const passer = async () => (await creerCommande(db, 'g1@x.fr', [ligne(ids.p1, 1)])).rows[0].r_order_id as string;
+    const classer = (v: string | null) => srv(db, `SELECT client_classer_groupe($1, $2, 'adm@inca.re', 'admin', 'test') r`, [g, v]);
+    const o1 = await passer();                                   // client pas encore classé
+    expect(await groupe(o1)).toBe('non_classe');
+    expect((await classer('interne')).error).toBe('');
+    const o2 = await passer();
+    expect((await classer('externe')).error).toBe('');
+    const o3 = await passer();
+    expect((await classer(null)).error).toBe('');
+    const o4 = await passer();
+    expect([await groupe(o1), await groupe(o2), await groupe(o3), await groupe(o4)]).toEqual(['non_classe', 'interne', 'externe', 'non_classe']);
+    // les changements de classification ne touchent à AUCUNE commande
+    const avantChgt = await exec(db, `SELECT * FROM orders ORDER BY id`);
+    await classer('interne'); await classer('externe');
+    expect(await exec(db, `SELECT * FROM orders ORDER BY id`)).toEqual(avantChgt);
+    // l'appelant ne peut pas choisir la classification, même par insertion directe
+    for (const mel of ['g1@x.fr', 'personne@x.fr']) {
+      const d = await srv(db, `INSERT INTO orders (nom, email, status, rattachement_groupe) VALUES ('d', $1, 'en_attente', 'interne') RETURNING rattachement_groupe g`, [mel]);
+      expect(d.error, mel).toBe(''); expect(d.rows[0].g, mel).toBe(mel === 'g1@x.fr' ? 'externe' : 'non_classe');      // g1 est « externe » à cet instant ; l'inconnu reste « non classé »
+    }
+    // figée : modification refusée, même pour le serveur
+    expect((await srv(db, `UPDATE orders SET rattachement_groupe = 'externe' WHERE id = $1`, [o1])).error).toMatch(/CLASSIFICATION_FIGEE/);
+    expect((await srv(db, `UPDATE orders SET rattachement_groupe = 'x' WHERE id = $1`, [o1])).error).toMatch(/CLASSIFICATION_FIGEE|orders_rattachement_groupe_check/);
+    // tout l'historique reste « non classé », même si son client est classé entre-temps (le client b a été classé plus haut)
+    expect((await un(db, `SELECT count(*)::int n FROM orders WHERE attribution = 'historique' AND rattachement_groupe <> 'non_classe'`)).n).toBe(0);
+    // seul l'administrateur classe (déjà vérifié plus haut) : un commercial est refusé
+    expect((await srv(db, `SELECT client_classer_groupe($1, 'interne', 'c@inca.re', 'commercial', 'non') r`, [g])).error).toMatch(/ACTION_INTERDITE/);
+  });
+
+  // ───────────────────────────── Parcours de commande existants : client, administrateur, commercial ─────────────────────────────
+  test('PARCOURS DE COMMANDE : client (compte connecté), administrateur et commercial (saisie rapide) — mêmes résultats, attribution au responsable du client et non à celui qui saisit', async () => {
+    const neuf = async (mel: string) => (await un(db, `INSERT INTO client_accounts (nom, email, status) VALUES ($1, $1, 'actif') RETURNING id`, [mel])).id;
+    const pc = await neuf('parcours@x.fr');
+    await attribuer(db, pc, CLEMENT, 'attribution', ADMIN, 'admin', null, 'clement@inca.re');
+    await srv(db, `SELECT client_classer_groupe($1, 'externe', 'adm@inca.re', 'admin', 'test') r`, [pc]);
+    const compte = (await un(db, `INSERT INTO auth.users DEFAULT VALUES RETURNING id`)).id;
+    const cache = (await un(db, `INSERT INTO products (name, price_ht, stock_quantity, in_stock, visible_catalogue) VALUES ('Produit masqué', 20, 50, true, false) RETURNING id`)).id;
+    // charges utiles EXACTES envoyées par le site : commande.astro (client) et commande-rapide.astro (administrateur ET commercial : identiques)
+    const charge = {
+      client: { user_id: compte, nom: 'Cli', societe: 'Soc', telephone: '0692', email: 'parcours@x.fr', notes: null },
+      administrateur: { user_id: null, nom: 'Cli', societe: 'Soc', telephone: '0692', email: 'parcours@x.fr', notes: 'saisi par admin', allow_hidden_products: true },
+      commercial: { user_id: null, nom: 'Cli', societe: 'Soc', telephone: '0692', email: 'parcours@x.fr', notes: 'saisi par commercial', allow_hidden_products: true },
+    };
+    const stock0 = Number((await un(db, `SELECT stock_quantity s FROM products WHERE id=$1`, [ids.p1])).s);
+    const cree: Record<string, string> = {};
+    for (const [qui, p] of Object.entries(charge)) {
+      const r = await srv(db, `SELECT * FROM order_create_checked($1::jsonb, $2::jsonb)`, [JSON.stringify(p), JSON.stringify([ligne(ids.p1, 1)])]);
+      expect(r.error, qui).toBe(''); expect(r.rows[0].r_order_id, qui).toBeTruthy(); cree[qui] = r.rows[0].r_order_id;
+      expect(await un(db, `SELECT client_id, responsable_email, attribution, rattachement_groupe FROM orders WHERE id=$1`, [cree[qui]]), qui)
+        .toEqual({ client_id: pc, responsable_email: 'clement@inca.re', attribution: 'portefeuille', rattachement_groupe: 'externe' });
+    }
+    // le client connecté garde son user_id ; la saisie du personnel n'en a pas (comportement d'origine)
+    expect((await un(db, `SELECT user_id FROM orders WHERE id=$1`, [cree.client])).user_id).toBe(compte);
+    expect((await un(db, `SELECT user_id FROM orders WHERE id=$1`, [cree.commercial])).user_id).toBeNull();
+    // produit masqué : refusé au client, autorisé à la saisie du personnel (comportement d'origine)
+    const masque = (p: any) => srv(db, `SELECT * FROM order_create_checked($1::jsonb, $2::jsonb)`, [JSON.stringify(p), JSON.stringify([ligne(cache, 1, 20)])]);
+    const rc = (await masque(charge.client)).rows[0]; expect(rc.r_order_id).toBeNull(); expect(rc.r_conflicts.length).toBe(1);
+    expect((await masque(charge.administrateur)).rows[0].r_order_id).toBeTruthy(); expect((await masque(charge.commercial)).rows[0].r_order_id).toBeTruthy();
+    // comptes non actifs, contact sans compte, e-mail absent : toujours refusés
+    for (const p of [{ ...charge.client, email: 'p@x.fr' }, { ...charge.administrateur, email: 'contact-sans-compte@x.fr' }, { ...charge.commercial, email: null }]) {
+      expect((await srv(db, `SELECT * FROM order_create_checked($1::jsonb, $2::jsonb)`, [JSON.stringify(p), JSON.stringify([ligne(ids.p1, 1)])])).error).toMatch(/COMPTE_NON_ACTIF/);
+    }
+    // modification de la commande, livraison et annulation : inchangées
+    const o = cree.commercial;
+    expect((await srv(db, `SELECT * FROM order_update_checked($1::uuid, $2::jsonb)`, [o, JSON.stringify([ligne(ids.p1, 2)])])).error).toBe('');
+    await srv(db, `UPDATE orders SET status = 'confirmee' WHERE id = $1`, [o]);
+    expect((await srv(db, `SELECT order_mark_livree($1)`, [o])).error).toBe('');
+    expect((await srv(db, `SELECT order_cancel_livree($1)`, [o])).error).toBe('');
+    expect(Number((await un(db, `SELECT stock_quantity s FROM products WHERE id=$1`, [ids.p1])).s)).toBe(stock0);     // le stock physique n'a pas bougé
+    expect(await un(db, `SELECT responsable_email, attribution, rattachement_groupe FROM orders WHERE id=$1`, [o])).toEqual({ responsable_email: 'clement@inca.re', attribution: 'portefeuille', rattachement_groupe: 'externe' });
+    // un transfert du portefeuille ne change pas ces commandes ; la suivante porte le nouveau responsable
+    expect((await attribuer(db, pc, ARNAUD, 'transfert', ADMIN, 'admin', 'Réorganisation', 'arnaud@inca.re')).error).toBe('');
+    expect((await un(db, `SELECT responsable_email e FROM orders WHERE id=$1`, [cree.client])).e).toBe('clement@inca.re');
+    const apres = (await srv(db, `SELECT * FROM order_create_checked($1::jsonb, $2::jsonb)`, [JSON.stringify(charge.administrateur), JSON.stringify([ligne(ids.p1, 1)])])).rows[0].r_order_id;
+    expect((await un(db, `SELECT responsable_email e FROM orders WHERE id=$1`, [apres])).e).toBe('arnaud@inca.re');
+  });
+
+  // ───────────────────────────── Statistiques : CA historique dans le global, hors performances individuelles ─────────────────────────────
+  test('STATISTIQUES : le CA « Historique non attribué » reste dans le global et sort des performances individuelles ; la somme des catégories égale le global', async () => {
+    const lignes = (await exec(db, `SELECT o.attribution, o.responsable_email, o.rattachement_groupe,
+        coalesce(sum(i.quantity * i.price_ht_snapshot), 0)::float8 AS ca_ht
+      FROM orders o LEFT JOIN order_items i ON i.order_id = o.id WHERE o.status <> 'annulee' GROUP BY o.id, o.attribution, o.responsable_email, o.rattachement_groupe`));
+    const total = Number((await un(db, `SELECT coalesce(sum(i.quantity * i.price_ht_snapshot), 0)::float8 s FROM order_items i JOIN orders o ON o.id = i.order_id WHERE o.status <> 'annulee'`)).s);
+    const v = ventilerCA(lignes as any);
+    expect(v.global).toBeCloseTo(total, 6);
+    expect(v.historiqueNonAttribue.ca).toBeGreaterThan(0);                          // l'historique pèse dans le global…
+    expect(v.historiqueNonAttribue.commandes).toBeGreaterThan(0);
+    expect(v.performancesIndividuelles + v.historiqueNonAttribue.ca + v.sansResponsable.ca).toBeCloseTo(v.global, 6);   // …et la somme des catégories égale le global
+    expect(Object.values(v.parResponsable).reduce((s, r) => s + r.ca, 0)).toBeCloseTo(v.performancesIndividuelles, 6);
+    expect(Object.keys(v.parResponsable).sort()).toEqual(expect.arrayContaining(['clement@inca.re']));
+    expect(v.parGroupe.interne + v.parGroupe.externe + v.parGroupe.non_classe).toBeCloseTo(v.global, 6);
+    // l'historique n'est dans AUCUNE performance individuelle
+    const hist = lignes.filter((l: any) => l.attribution === 'historique');
+    const sansHist = ventilerCA((lignes as any).filter((l: any) => l.attribution !== 'historique'));
+    expect(v.performancesIndividuelles).toBeCloseTo(sansHist.performancesIndividuelles, 6);
+    expect(hist.every((l: any) => l.responsable_email === null)).toBe(true);
+    expect(v.parGroupe.non_classe).toBeGreaterThanOrEqual(v.historiqueNonAttribue.ca);   // toutes les commandes historiques sont « non classé »
   });
 
   test('STATIQUE : aucune suppression ni réécriture de données dans les migrations ; le remplissage ne modifie que orders.client_id ; aucune TVA', () => {
