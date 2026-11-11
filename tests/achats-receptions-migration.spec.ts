@@ -12,7 +12,7 @@ const MIGRATION = lire('achats_receptions_partielles.sql');
 const MIGRATIONS_AVANT = [
   'orders_bl_number.sql', 'order_items_price_snapshots.sql', 'order_items_picked_column.sql', 'stock_rpc_functions.sql', 'product_adjust_stock_rpc.sql',
   'product_adjust_stock_fix.sql', 'shipments_table.sql', 'shipments_annule_receptions_partielles.sql', 'shipment_items_dlc.sql', 'suppliers_table.sql', 'stock_reserve.sql',
-  'order_update_checked.sql', 'order_update_checked_price_refresh.sql', 'price_groups.sql', 'suppliers_stable_id_matching.sql', 'dlc_lots.sql', 'products_nouveau.sql',
+  'order_update_checked.sql', 'order_update_checked_price_refresh.sql', 'price_groups.sql', 'products_delai_override_moq.sql', 'commande_fournisseur_drafts_et_idempotence.sql', 'suppliers_couverture_cible.sql', 'suppliers_stable_id_matching.sql', 'dlc_lots.sql', 'products_nouveau.sql',
   'order_create_checked_active_client.sql', 'products_visible_catalogue.sql', 'client_product_access.sql', 'bl_sequence.sql', 'bl_signatures.sql', 'bl_commandes.sql', 'securite_phase0.sql',
 ];
 
@@ -139,6 +139,67 @@ test.describe.serial('Réceptions partielles — migration et fonctions (base lo
     const apres = await exec(avant, `SELECT shipment_id, cle_idempotence, bl_fournisseur, created_by, annulee_le FROM stock_receptions`);
     expect(apres.every(r => Object.values(r).every(v => v === null))).toBe(true);                     // toutes les réceptions existantes restent « historiques »
     expect(await avant.query(`SELECT 1`)).toBeTruthy(); expect(hist.ids.length + cours.ids.length).toBe(4);
+    await avant.close();
+  });
+
+  test('COPIE REPRÉSENTATIVE de la production (126 produits, 3 expéditions, 44 lignes dont 20 avec un ancien cumul, 40 réceptions dont 30 avec stock, 172 lignes de réception) : rien ne bouge à la migration, aucune double entrée en stock, la suite continue le cumul existant', async () => {
+    const avant = await baseAchats(false);
+    await avant.exec(`
+      INSERT INTO products (id, name, price_ht, stock_quantity, tva_rate, in_stock, prix_achat_moyen_ht)
+        SELECT ('00000000-0000-4000-8000-' || lpad(g::text, 12, '0'))::uuid, 'Produit ' || g, 10, (g * 7) % 90 + 1, 0.085, true, 3 + (g % 5) FROM generate_series(1, 126) g;
+      INSERT INTO shipments (id, supplier_name, reference, status) VALUES
+        ('10000000-0000-4000-8000-000000000001', 'SOLO IMPORT OI', 'EXP-A', 'commande'),
+        ('10000000-0000-4000-8000-000000000002', 'SOLO IMPORT OI', 'EXP-B', 'dedouanement'),
+        ('10000000-0000-4000-8000-000000000003', 'SOLO IMPORT OI', 'EXP-C', 'receptionne');
+      -- 44 lignes : 10 + 20 + 14 ; EXP-C entièrement reçue ; 20 lignes avec un ancien cumul (19 × 109 + 111 = 2 182), aucune au-dessus du commandé
+      INSERT INTO shipment_items (id, shipment_id, product_id, quantity, unit_cost_ht, received_quantity)
+        SELECT ('20000000-0000-4000-8000-' || lpad(g::text, 12, '0'))::uuid,
+               CASE WHEN g <= 10 THEN '10000000-0000-4000-8000-000000000001' WHEN g <= 30 THEN '10000000-0000-4000-8000-000000000002' ELSE '10000000-0000-4000-8000-000000000003' END::uuid,
+               ('00000000-0000-4000-8000-' || lpad(g::text, 12, '0'))::uuid, 200, 4.5,
+               CASE WHEN g BETWEEN 11 AND 30 THEN 109 WHEN g > 30 THEN 200 ELSE NULL END
+        FROM generate_series(1, 44) g;
+      UPDATE shipment_items SET received_quantity = 200 WHERE shipment_id = '10000000-0000-4000-8000-000000000003';
+      UPDATE shipment_items SET received_quantity = 111 WHERE id = '20000000-0000-4000-8000-000000000011';
+      UPDATE shipment_items SET received_quantity = 109 WHERE id <> '20000000-0000-4000-8000-000000000011' AND shipment_id = '10000000-0000-4000-8000-000000000002';
+      -- 40 réceptions historiques (30 avec stock appliqué) et 172 lignes (12 réceptions de 5 lignes + 28 de 4)
+      INSERT INTO stock_receptions (id, supplier_name, received_at, notes, stock_applied, created_at)
+        SELECT ('30000000-0000-4000-8000-' || lpad(g::text, 12, '0'))::uuid, 'SOLO IMPORT OI', date '2026-01-01' + g, 'ancienne ' || g, g <= 30, timestamptz '2026-01-01 10:00+00' + g * interval '1 day' FROM generate_series(1, 40) g;
+      INSERT INTO stock_reception_items (id, reception_id, product_id, quantity, unit_cost_ht)
+        SELECT gen_random_uuid(), ('30000000-0000-4000-8000-' || lpad(r::text, 12, '0'))::uuid, ('00000000-0000-4000-8000-' || lpad(((r * 3 + k) % 126 + 1)::text, 12, '0'))::uuid, 10 + k, 4.5
+        FROM generate_series(1, 40) r, generate_series(1, 5) k WHERE k <= CASE WHEN r <= 12 THEN 5 ELSE 4 END;`);
+    const n = async (q: string) => (await un(avant, q)).n as number;
+    expect([await n(`SELECT count(*)::int n FROM products`), await n(`SELECT count(*)::int n FROM shipment_items`), await n(`SELECT sum(received_quantity)::int n FROM shipment_items WHERE shipment_id <> '10000000-0000-4000-8000-000000000003'`),
+      await n(`SELECT count(*)::int n FROM stock_receptions WHERE stock_applied`), await n(`SELECT count(*)::int n FROM stock_reception_items`)]).toEqual([126, 44, 2182, 30, 172]);   // la copie a bien le volume de la production
+    const stockAvant = await n(`SELECT sum(stock_quantity)::int n FROM products`);
+    const photo = await commun(avant);
+    await avant.exec(MIGRATION);
+    expect(await commun(avant)).toEqual(photo);                                                            // commandes, lignes, coûts, réceptions, lignes de réception, produits, PUMP, stock : strictement identiques
+    expect(await n(`SELECT sum(stock_quantity)::int n FROM products`)).toBe(stockAvant);                    // aucune entrée en stock à la migration
+    expect(await n(`SELECT count(*)::int n FROM stock_receptions WHERE shipment_id IS NOT NULL OR cle_idempotence IS NOT NULL OR annulee_le IS NOT NULL`)).toBe(0);
+    expect(await n(`SELECT count(*)::int n FROM stock_reception_items WHERE shipment_item_id IS NOT NULL`)).toBe(0);
+    expect(await n(`SELECT count(*)::int n FROM stock_reception_items_annulees`) + await n(`SELECT count(*)::int n FROM shipment_item_quantites_historique`)).toBe(0);
+    const etats = (id: string) => un(avant, `SELECT shipment_reception_etat($1::uuid) e`, [id]).then(r => r.e);
+    expect(await etats('10000000-0000-4000-8000-000000000001')).toMatchObject({ statut: 'attente', recu: 0, reste: 2000 });
+    expect(await etats('10000000-0000-4000-8000-000000000002')).toMatchObject({ statut: 'partielle', cumul: 2182, reste: 20 * 200 - 2182 });
+    expect(await etats('10000000-0000-4000-8000-000000000003')).toMatchObject({ statut: 'integrale', reste: 0 });   // l'expédition déjà « réceptionnée » reste intégrale, jamais rouverte
+    expect(await n(`SELECT count(*)::int n FROM shipments WHERE status = 'receptionne'`)).toBe(1);
+    expect(await commun(avant)).toEqual(photo);                                                            // consulter les états n'a rien modifié
+
+    // suite : la réception d'une expédition antérieure reprend son cumul, une seule entrée en stock, plafond respecté
+    const ligne = '20000000-0000-4000-8000-000000000012'; const produitLigne = '00000000-0000-4000-8000-000000000012';
+    const s0 = (await un(avant, `SELECT stock_quantity s FROM products WHERE id = $1`, [produitLigne])).s as number;
+    const cle = uuid();
+    const faire = (q: number, k = cle) => srv(avant, `SELECT reception_commande_enregistrer($1::uuid, '10000000-0000-4000-8000-000000000002'::uuid, ((now() AT TIME ZONE 'UTC') + interval '4 hours')::date, NULL, NULL, $2::jsonb, $3::uuid, 'admin@inca.re', 'admin') AS r`,
+      [k, JSON.stringify([{ shipment_item_id: ligne, quantity: q, unit_cost_ht: 5 }]), ADMIN]);
+    expect((await faire(91)).error).toBe('');                                                               // 109 déjà reçus + 91 = 200 (le plafond exact)
+    expect((await faire(91)).error).toBe('');                                                               // renvoi de la même clé : aucune seconde entrée
+    expect((await un(avant, `SELECT stock_quantity s FROM products WHERE id = $1`, [produitLigne])).s).toBe(s0 + 91);
+    expect((await un(avant, `SELECT received_quantity r FROM shipment_items WHERE id = $1`, [ligne])).r).toBe(200);
+    expect((await faire(1, uuid())).error).toContain('DEPASSEMENT_COMMANDE');                              // jamais au-delà du commandé
+    expect((await un(avant, `SELECT stock_quantity s FROM products WHERE id = $1`, [produitLigne])).s).toBe(s0 + 91);
+    // cohérence réceptions / cumuls / stock : cumul = ancien cumul + lignes de réception rattachées ; stock = départ + lignes rattachées
+    expect(await n(`SELECT coalesce(sum(quantity), 0)::int n FROM stock_reception_items WHERE shipment_item_id = '${ligne}'`)).toBe(91);
+    expect(await n(`SELECT count(*)::int n FROM stock_receptions WHERE shipment_id = '10000000-0000-4000-8000-000000000002'`)).toBe(1);
     await avant.close();
   });
 

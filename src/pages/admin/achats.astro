@@ -383,7 +383,7 @@ function fmtEUR2(n: number): string {
                           </td>
                           <td class="it-qty">
                             <span class="it-cartons">{it.cartons.toLocaleString('fr-FR')} cartons</span>
-                            {(it.received_quantity ?? 0) > 0 && <span class="it-recu">dont {(it.received_quantity ?? 0).toLocaleString('fr-FR')} reçus</span>}
+                            {(it.received_quantity ?? 0) > 0 && <span class="it-recu">dont {(it.received_quantity ?? 0).toLocaleString('fr-FR')} reçus{it.quantity - (it.received_quantity ?? 0) > 0 ? ` · reste ${(it.quantity - (it.received_quantity ?? 0)).toLocaleString('fr-FR')}` : ' · soldé'}</span>}
                             {it.unitsPerCarton != null && (
                               <span class="it-pack">
                                 {it.unitsPerCarton}/carton · {it.totalUnits!.toLocaleString('fr-FR')} unités

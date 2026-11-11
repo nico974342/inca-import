@@ -11,7 +11,7 @@ export const MIGRATION = lire('achats_receptions_partielles.sql');
 export const MIGRATIONS_AVANT = [
   'orders_bl_number.sql', 'order_items_price_snapshots.sql', 'order_items_picked_column.sql', 'stock_rpc_functions.sql', 'product_adjust_stock_rpc.sql',
   'product_adjust_stock_fix.sql', 'shipments_table.sql', 'shipments_annule_receptions_partielles.sql', 'shipment_items_dlc.sql', 'suppliers_table.sql', 'stock_reserve.sql',
-  'order_update_checked.sql', 'order_update_checked_price_refresh.sql', 'price_groups.sql', 'suppliers_stable_id_matching.sql', 'dlc_lots.sql', 'products_nouveau.sql',
+  'order_update_checked.sql', 'order_update_checked_price_refresh.sql', 'price_groups.sql', 'products_delai_override_moq.sql', 'commande_fournisseur_drafts_et_idempotence.sql', 'suppliers_couverture_cible.sql', 'suppliers_stable_id_matching.sql', 'dlc_lots.sql', 'products_nouveau.sql',
   'order_create_checked_active_client.sql', 'products_visible_catalogue.sql', 'client_product_access.sql', 'bl_sequence.sql', 'bl_signatures.sql', 'bl_commandes.sql', 'securite_phase0.sql',
 ];
 
