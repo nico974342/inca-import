@@ -65,6 +65,23 @@ const ETAT_PROD_FONCTIONS = `
     order_cancel_livree(uuid), product_adjust_stock(uuid, integer), price_group_set_default(uuid), stock_reserving_statuses()
     FROM PUBLIC, anon, authenticated;`;
 
+// Tables du BL telles qu'en production : jamais ouvertes à anon/authenticated, et service_role volontairement limité
+// (bl_signatures : ni suppression ni purge ; delivery_note_orders : insertion et lecture seulement).
+const TABLES_BL_RESTREINTES = `
+  CREATE TABLE bl_signatures (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), role text, annulee_le timestamptz);
+  CREATE TABLE delivery_note_orders (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), order_id uuid);
+  REVOKE ALL ON bl_signatures, delivery_note_orders FROM anon, authenticated;
+  REVOKE DELETE, TRUNCATE, TRIGGER, REFERENCES ON bl_signatures FROM service_role;
+  REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES ON delivery_note_orders FROM service_role;`;
+
+/** Droits effectifs de service_role sur chaque table, vue et fonction du schéma public. */
+const droitsService = async (db: PGlite) => JSON.stringify({
+  tables: (await db.query<any>(`SELECT c.relname, (SELECT string_agg(p, ',' ORDER BY p) FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p
+    WHERE has_table_privilege('service_role', c.oid, p)) droits FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND c.relkind IN ('r','v') ORDER BY 1`)).rows,
+  fonctions: (await db.query<any>(`SELECT p.proname||'('||pg_get_function_identity_arguments(p.oid)||')' f, has_function_privilege('service_role', p.oid, 'EXECUTE') x FROM pg_proc p
+    WHERE p.pronamespace='public'::regnamespace AND p.prokind='f' ORDER BY 1`)).rows,
+});
+
 const as = async (db: PGlite, role: string, q: string, p: unknown[] = []) => {
   await db.exec(`SET ROLE ${role}`);
   try { const r = await db.query(q, p); return { rows: r.rows as any[], error: '' }; }
@@ -80,6 +97,7 @@ async function creerBase(): Promise<PGlite> {
   }
   await db.exec(RLS);
   await db.exec(ETAT_PROD_FONCTIONS);
+  await db.exec(TABLES_BL_RESTREINTES);
   await db.exec(`INSERT INTO commande_fournisseur_drafts (admin_email, quantity) VALUES ('a@b.fr', 3)`);
   return db;
 }
@@ -135,7 +153,8 @@ test.describe.serial('Phase 0 — sécurité Supabase (base locale)', () => {
   let avant: PGlite; let apres: PGlite;
   let attendu: Record<string, unknown>;
 
-  test.beforeAll(async () => { avant = await creerBase(); apres = await creerBase(); });
+  let droitsAvant: string;
+  test.beforeAll(async () => { avant = await creerBase(); apres = await creerBase(); droitsAvant = await droitsService(apres); });
   test.afterAll(async () => { await avant.close(); await apres.close(); });
 
   test('AVANT correction : les défauts existent (brouillons ouverts, PUMP lisible, insertion de commande à prix libre, fonction ouverte)', async () => {
@@ -181,6 +200,12 @@ test.describe.serial('Phase 0 — sécurité Supabase (base locale)', () => {
     }
     expect((await as(apres, 'service_role', `SELECT count(*)::int n FROM commande_fournisseur_drafts`)).error).toBe('');
     for (const t of TABLES_SENSIBLES) expect((await as(apres, 'service_role', `SELECT 1 FROM ${t} LIMIT 1`)).error, `service_role ${t}`).toBe('');
+  });
+
+  test("APRÈS correction : les droits de service_role sont EXACTEMENT les mêmes qu'avant (aucun droit rendu ni retiré, notamment sur les tables du BL)", async () => {
+    expect(await droitsService(apres)).toBe(droitsAvant);
+    expect((await apres.query<any>(`SELECT has_table_privilege('service_role','bl_signatures','DELETE') d, has_table_privilege('service_role','bl_signatures','TRUNCATE') t,
+      has_table_privilege('service_role','delivery_note_orders','UPDATE') u, has_table_privilege('service_role','delivery_note_orders','DELETE') e`)).rows[0]).toEqual({ d: false, t: false, u: false, e: false });
   });
 
   test('APRÈS correction : RLS actif sur les brouillons ; politiques d\'insertion retirées, politiques de lecture conservées', async () => {

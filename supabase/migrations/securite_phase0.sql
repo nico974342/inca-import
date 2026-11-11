@@ -26,14 +26,14 @@ REVOKE ALL ON commande_fournisseur_drafts FROM anon, authenticated;
 --     sans passer par order_create_checked. Une seule erreur de RLS sur une future table suffirait à tout exposer.
 REVOKE ALL ON ALL TABLES    IN SCHEMA public FROM anon, authenticated;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated;
-GRANT  ALL ON ALL TABLES    IN SCHEMA public TO service_role;
-GRANT  ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
+-- service_role n'est volontairement PAS regranté ici : il a déjà les droits utiles, et certains lui sont retirés exprès
+-- (bl_signatures : ni suppression ni purge ; delivery_note_orders : insertion et lecture seulement). Un GRANT ALL les rendrait.
 
 -- A3. Fonctions : exécution réservée au serveur. Couvre order_update_checked (encore ouverte à anon/authenticated/PUBLIC)
 --     et la fonction de déclencheur products_nouveau_premiere_entree. Les déclencheurs continuent de s'exécuter : le droit
 --     EXECUTE n'est vérifié qu'à la création d'un déclencheur, pas à son déclenchement.
 REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon, authenticated;
-GRANT  EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO service_role;
+-- service_role garde son EXECUTE existant (non modifié).
 
 -- A4. search_path figé sur les 11 fonctions signalées par l'analyseur (aucune ne référence un autre schéma que public :
 --     vérifié en production par lecture du code de chacune).
@@ -69,14 +69,17 @@ COMMIT;
 --   * Les droits par défaut du rôle supabase_admin ne peuvent pas être modifiés depuis ce rôle ; les tables créées par
 --     migration (rôle postgres) sont couvertes. Toute table créée à la main par un autre rôle doit être contrôlée.
 --
--- Retour arrière (dans l'ordre inverse) :
+-- Retour arrière EXACT (relévé en production le 2026-11-11 avant application ; ne rouvre QUE ce qui l'était) :
 --   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated;
 --   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated;
 --   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon, authenticated;
 --   ALTER DEFAULT PRIVILEGES GRANT EXECUTE ON FUNCTIONS TO PUBLIC;
+--   GRANT ALL ON TABLE admin_audit_logs, admin_messages, cart_items, charges, client_accounts, commande_fournisseur_drafts, contact_requests,
+--     order_items, orders, price_group_items, price_groups, products, shipment_costs, shipment_items, shipments, stock_lots, stock_mouvements,
+--     stock_products, stock_reception_items, stock_receptions, suite_kv, suppliers, testimonials, transporters, weekly_tasks TO anon, authenticated;
+--   GRANT EXECUTE ON FUNCTION order_update_checked(uuid, jsonb), products_nouveau_premiere_entree() TO PUBLIC, anon, authenticated;
 --   CREATE POLICY "Users insert own orders" ON orders FOR INSERT WITH CHECK (auth.uid() = user_id);
 --   CREATE POLICY "Users insert own order items" ON order_items FOR INSERT WITH CHECK (EXISTS (SELECT 1 FROM orders o WHERE o.id = order_items.order_id AND o.user_id = auth.uid()));
---   ALTER FUNCTION <chaque fonction de A4> RESET search_path;
---   GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO anon, authenticated;
---   GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated;  GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated;
+--   ALTER FUNCTION <chacune des 11 fonctions de A4> RESET search_path;
 --   ALTER TABLE commande_fournisseur_drafts DISABLE ROW LEVEL SECURITY;
+--   (bl_signatures, delivery_notes, delivery_note_orders, client_product_access, product_availability, bl_number_seq : jamais ouverts à anon / authenticated, donc rien à rouvrir.)
