@@ -224,6 +224,11 @@ const mail = (e: string) => e.split('@')[0];
   </div>
 </section>
 
+<script>
+  import { initDateChoisie } from '../../scripts/dateChoisie';
+  initDateChoisie();
+</script>
+
 <style>
 .crm { margin-bottom: var(--space-6); display: flex; flex-direction: column; gap: var(--space-3); }
 .crm-flash { margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); font-size: var(--text-sm); }
@@ -240,6 +245,10 @@ const mail = (e: string) => e.split('@')[0];
 .crm-case strong { font-size: var(--text-sm); color: var(--color-ink); overflow-wrap: anywhere; }
 .crm-mail { font-size: var(--text-xs); color: var(--color-muted); overflow-wrap: anywhere; }
 .crm-alerte { color: oklch(0.50 0.19 25) !important; }
+@media (min-width: 768px) {
+  /* ordinateur : un bouton de taille normale, pas une barre sur toute la largeur (sur téléphone il reste pleine largeur, facile au pouce) */
+  .crm-appeler { align-self: flex-start; padding: 0 var(--space-8, 2rem); }
+}
 .crm-appeler { display: flex; align-items: center; justify-content: center; min-height: 52px; border-radius: var(--radius-md); background: var(--color-primary); color: #fff; font-weight: 700; text-decoration: none; }
 .crm-boutons { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-2); }
 .crm-btn { display: flex; align-items: center; justify-content: center; min-height: 48px; padding: 0 var(--space-3); border-radius: var(--radius-md); border: 1.5px solid var(--color-primary); color: var(--color-primary-deep); font-weight: 600; font-size: var(--text-sm); text-decoration: none; background: var(--color-bg); text-align: center; }
@@ -263,6 +272,7 @@ const mail = (e: string) => e.split('@')[0];
 .crm-det { display: inline-block; }
 .crm-det[open] { display: block; width: 100%; }
 .crm-form { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-2); max-width: 420px; }
+.crm-form input[hidden] { display: none; }
 .crm-form input[type="text"], .crm-form input[type="date"], .crm-form select, .crm-form textarea { min-height: 44px; padding: 0.5rem 0.75rem; font-size: 16px; border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-sm); background: var(--color-bg); font-family: var(--font-body); width: 100%; }
 .crm-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .crm-chip { position: relative; }

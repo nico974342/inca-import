@@ -149,6 +149,11 @@ const mail = (e: string) => e.split('@')[0];
   </div>
 </AdminLayout>
 
+<script>
+  import { initDateChoisie } from '../../scripts/dateChoisie';
+  initDateChoisie();
+</script>
+
 <style>
 .ac { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--space-4); padding-bottom: 5rem; }
 .ac-h1 { font-family: var(--font-display); font-size: 1.6rem; font-weight: 700; margin: 0; color: var(--color-ink); }
@@ -158,6 +163,7 @@ const mail = (e: string) => e.split('@')[0];
 .ac-flash--err { background: oklch(0.97 0.04 25); color: oklch(0.50 0.19 25); border: 1px solid oklch(0.88 0.07 25); }
 .ac-filtre { display: flex; gap: var(--space-2); align-items: center; font-size: var(--text-sm); }
 .ac select, .ac input[type="text"], .ac input[type="date"], .ac input[type="time"] { min-height: 44px; padding: 0 var(--space-3); font-size: 16px; border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-sm); background: var(--color-bg); width: 100%; max-width: 420px; font-family: var(--font-body); }
+.ac input[hidden] { display: none; }
 .ac-bloc { background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); }
 .ac-titre { display: flex; gap: var(--space-2); align-items: center; margin: 0 0 var(--space-3); font-size: var(--text-base); font-weight: 700; color: var(--color-ink); }
 .ac-n { margin-left: auto; font-size: var(--text-sm); color: var(--color-muted); }
