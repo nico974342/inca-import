@@ -462,6 +462,7 @@ test.describe.serial('CRM M1 — rattachement des commandes et attribution comme
   });
 
   test('NON-RÉGRESSION GLOBALE : le même scénario métier (commande, survente, modification, livraison, annulation, réception, ajustement) donne EXACTEMENT les mêmes résultats avec et sans M1', async () => {
+    test.setTimeout(180_000);        // construit deux bases locales complètes : peut dépasser 60 s quand la machine est chargée
     const scenario = async (d: PGlite, i: Record<string, string>) => {
       const S = async (q: string, p: unknown[] = []) => { const r = await srv(d, q, p); if (r.error) throw new Error(`${q.slice(0, 50)} → ${r.error}`); return r.rows; };
       const sortie: Record<string, unknown> = {};
