@@ -51,7 +51,7 @@ if (shipmentId) {
       unit_cost_ht: it.unit_cost_ht != null ? Number(it.unit_cost_ht) : null,
     }));
     // Coût rendu (prix fournisseur + frais d'import répartis, voir
-    // /admin/transit/[id]/couts) plutôt que le prix fournisseur brut : c'est
+    // /admin/achats/[id]/couts) plutôt que le prix fournisseur brut : c'est
     // ce montant qui doit alimenter le stock et le PUMP à la réception. Sans
     // frais saisis, landedUnitCost retombe sur unit_cost_ht — comportement
     // inchangé pour les expéditions sans coût rendu calculé.
