@@ -11,10 +11,11 @@ const { title, activeNav } = Astro.props;
 
 // Rubriques repliables du menu : à quelle rubrique appartient la page courante (ouverte par défaut, les autres fermées).
 // « reappro » n'a pas de lien dans le menu mais appartient au stock ; dashboard, tâches et chat n'appartiennent à aucune rubrique.
-const RUBRIQUES: Record<'ventes' | 'stocks' | 'achats' | 'gestion', string[]> = {
-  ventes: ['aujourdhui', 'clients', 'portefeuilles', 'activites', 'tarifs', 'commande-rapide', 'preparation', 'commandes', 'livraison'],
+const RUBRIQUES: Record<'ventes' | 'stocks' | 'achats' | 'commercial' | 'gestion', string[]> = {
+  ventes: ['clients', 'tarifs', 'commande-rapide', 'preparation', 'commandes', 'livraison'],
   stocks: ['produits', 'stocks', 'reappro'],
   achats: ['commande-fournisseur', 'achats', 'reception', 'fournisseurs'],
+  commercial: ['aujourdhui', 'portefeuilles', 'activites'],
   gestion: ['marges', 'journal'],
 };
 const groupeActif = (Object.keys(RUBRIQUES) as (keyof typeof RUBRIQUES)[]).find(g => activeNav && RUBRIQUES[g].includes(activeNav)) ?? null;
@@ -40,10 +41,18 @@ const viewerIsStaff = isStaff((Astro.locals as any).user);
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="Inca Admin" />
   <!-- Rubriques du menu : l'état mémorisé est appliqué AVANT l'affichage (pas de clignotement). Sans mémoire ou sans stockage : état par défaut du serveur. -->
-  <script is:inline>
+  <!-- Mémoire : { o: rubriques ouvertes, c: rubriques connues au moment de l'enregistrement } (ancien format : simple liste des ouvertes, rubriques connues = les quatre d'origine).
+       Une rubrique INCONNUE de la mémoire (ajoutée depuis) suit l'état par défaut : ouverte si c'est la page courante. -->
+  <script is:inline define:vars={{ courant: groupeActif }}>
     try {
-      var o = JSON.parse(localStorage.getItem('inca_admin_menu_ouverts') || 'null');
-      if (Array.isArray(o)) document.documentElement.setAttribute('data-menu-ouverts', o.filter(function (x) { return /^[a-z]{3,12}$/.test(x); }).join(' '));
+      var m = JSON.parse(localStorage.getItem('inca_admin_menu_ouverts') || 'null'), o = null, c = null;
+      if (Array.isArray(m)) { o = m; c = ['ventes', 'achats', 'stocks', 'gestion']; }
+      else if (m && Array.isArray(m.o) && Array.isArray(m.c)) { o = m.o; c = m.c; }
+      if (o) {
+        var l = o.filter(function (x) { return /^[a-z]{3,12}$/.test(x); });
+        if (courant && c.indexOf(courant) < 0 && l.indexOf(courant) < 0) l.push(courant);
+        document.documentElement.setAttribute('data-menu-ouverts', l.join(' '));
+      }
     } catch (e) { /* stockage indisponible : état par défaut */ }
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -96,34 +105,12 @@ const viewerIsStaff = isStaff((Astro.locals as any).user);
             </button>
           </h2>
           <div class="nav-sous" id="nav-sous-ventes" role="group" aria-labelledby="nav-btn-ventes" hidden={groupeActif !== 'ventes'}>
-        <a href="/admin/aujourdhui" class={`nav-link ${activeNav === 'aujourdhui' ? 'nav-link--active' : ''}`}>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <rect x="2" y="3" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
-            <path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3M5.5 10l1.5 1.5L10.5 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          Aujourd'hui
-        </a>
         <a href="/admin/clients" class={`nav-link ${activeNav === 'clients' ? 'nav-link--active' : ''}`}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path d="M7.5 2a2 2 0 1 1 0 4 2 2 0 0 1 0-4ZM12 3a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3ZM1 11c0-2.2 2.91-4 6.5-4S14 8.8 14 11M12 8.5c1.38.37 2.5 1.16 2.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg>
           Clients
         </a>
-        <a href="/admin/portefeuilles" class={`nav-link ${activeNav === 'portefeuilles' ? 'nav-link--active' : ''}`}>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M2 5h12v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-            <path d="M5.5 5V3.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1V5M2 8.5h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-          Portefeuilles
-        </a>
-        {viewerIsAdmin && (
-        <a href="/admin/activites" class={`nav-link ${activeNav === 'activites' ? 'nav-link--active' : ''}`}>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M2 8h2.5l1.5-4.5 3 9 1.5-4.5H14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          Activités
-        </a>
-        )}
         <a href="/admin/tarifs" class={`nav-link ${activeNav === 'tarifs' ? 'nav-link--active' : ''}`}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path d="M2 2h5l7 7-5 5-7-7V2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
@@ -226,6 +213,38 @@ const viewerIsStaff = isStaff((Astro.locals as any).user);
           </svg>
           Stocks
         </a>
+          </div>
+        </div>
+        <div class="nav-groupe" data-groupe="commercial" data-courant={groupeActif === 'commercial' ? 'true' : 'false'}>
+          <h2 class="nav-groupe-titre">
+            <button type="button" class="nav-groupe-btn" id="nav-btn-commercial" aria-expanded={groupeActif === 'commercial' ? 'true' : 'false'} aria-controls="nav-sous-commercial">
+              <span class="nav-groupe-label">Commercial</span>
+              <svg class="nav-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true" focusable="false"><path d="M4 2.5 7.5 6 4 9.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </h2>
+          <div class="nav-sous" id="nav-sous-commercial" role="group" aria-labelledby="nav-btn-commercial" hidden={groupeActif !== 'commercial'}>
+        <a href="/admin/aujourdhui" class={`nav-link ${activeNav === 'aujourdhui' ? 'nav-link--active' : ''}`}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <rect x="2" y="3" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3M5.5 10l1.5 1.5L10.5 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Aujourd'hui
+        </a>
+        <a href="/admin/portefeuilles" class={`nav-link ${activeNav === 'portefeuilles' ? 'nav-link--active' : ''}`}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2 5h12v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M5.5 5V3.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1V5M2 8.5h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          Portefeuilles
+        </a>
+        {viewerIsAdmin && (
+        <a href="/admin/activites" class={`nav-link ${activeNav === 'activites' ? 'nav-link--active' : ''}`}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2 8h2.5l1.5-4.5 3 9 1.5-4.5H14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Activités
+        </a>
+        )}
           </div>
         </div>
         {viewerIsAdmin && (
@@ -676,9 +695,11 @@ const viewerIsStaff = isStaff((Astro.locals as any).user);
   html[data-menu-ouverts~="ventes"] .nav-groupe[data-groupe="ventes"] .nav-sous,
   html[data-menu-ouverts~="stocks"] .nav-groupe[data-groupe="stocks"] .nav-sous,
   html[data-menu-ouverts~="achats"] .nav-groupe[data-groupe="achats"] .nav-sous,
+  html[data-menu-ouverts~="commercial"] .nav-groupe[data-groupe="commercial"] .nav-sous,
   html[data-menu-ouverts~="gestion"] .nav-groupe[data-groupe="gestion"] .nav-sous { display: flex; }
   html[data-menu-ouverts~="ventes"] .nav-groupe[data-groupe="ventes"] .nav-chevron,
   html[data-menu-ouverts~="stocks"] .nav-groupe[data-groupe="stocks"] .nav-chevron,
   html[data-menu-ouverts~="achats"] .nav-groupe[data-groupe="achats"] .nav-chevron,
+  html[data-menu-ouverts~="commercial"] .nav-groupe[data-groupe="commercial"] .nav-chevron,
   html[data-menu-ouverts~="gestion"] .nav-groupe[data-groupe="gestion"] .nav-chevron { transform: rotate(90deg); }
 </style>

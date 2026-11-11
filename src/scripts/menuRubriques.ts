@@ -1,27 +1,39 @@
 /**
- * Rubriques repliables du menu d'administration (Ventes, Stocks, Achats, Gestion).
+ * Rubriques repliables du menu d'administration (Ventes, Achats, Stocks, Commercial, Gestion).
  * - Un clic (ou Entrée / Espace au clavier) sur le titre ouvre ou ferme la rubrique ; plusieurs peuvent être ouvertes.
  * - Par défaut (aucun choix mémorisé) : seule la rubrique de la page courante est ouverte (`data-courant="true"`, posé par le serveur).
- * - Le choix est mémorisé dans ce navigateur (liste des rubriques ouvertes) et retrouvé à chaque page et après actualisation.
+ * - Le choix est mémorisé dans ce navigateur : rubriques ouvertes (`o`) et rubriques connues au moment de l'enregistrement (`c`).
+ *   Une rubrique absente de `c` (ajoutée depuis) n'a jamais fait l'objet d'un choix : elle suit l'état par défaut.
+ *   Ancien format (simple liste des rubriques ouvertes) : lu comme `c` = les quatre rubriques d'origine.
  *   Sans stockage disponible, le menu fonctionne quand même, avec l'état par défaut à chaque page.
  * - Accessibilité : le titre est un vrai bouton (`aria-expanded`, `aria-controls`) ; un sous-menu fermé est retiré de l'ordre de tabulation
  *   et des lecteurs d'écran (`hidden`). Les liens, permissions et pages ne sont pas touchés : ce script ne fait que replier ou déplier.
  */
 const CLE = 'inca_admin_menu_ouverts';
+const RUBRIQUES_D_ORIGINE = ['ventes', 'achats', 'stocks', 'gestion'];
 
-function lire(): string[] | null {
+type Memoire = { ouverts: string[]; connus: string[] };
+const textes = (l: unknown[]) => l.filter((x): x is string => typeof x === 'string');
+
+function lire(): Memoire | null {
   try {
     const v = JSON.parse(localStorage.getItem(CLE) ?? 'null');
-    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : null;
-  } catch { return null; }
+    if (Array.isArray(v)) return { ouverts: textes(v), connus: RUBRIQUES_D_ORIGINE };
+    if (v && Array.isArray(v.o) && Array.isArray(v.c)) return { ouverts: textes(v.o), connus: textes(v.c) };
+  } catch { /* mémoire illisible : état par défaut */ }
+  return null;
 }
-function ecrire(ouverts: string[]) { try { localStorage.setItem(CLE, JSON.stringify(ouverts)); } catch { /* stockage indisponible : pas de mémoire */ } }
+function ecrire(ouverts: string[], connus: string[]) {
+  try { localStorage.setItem(CLE, JSON.stringify({ o: ouverts, c: connus })); } catch { /* stockage indisponible : pas de mémoire */ }
+}
 
 export function initMenuRubriques(racine: ParentNode = document) {
   const groupes = Array.from(racine.querySelectorAll<HTMLElement>('.nav-groupe'));
   if (groupes.length === 0) return;
+  const tous = groupes.map(g => g.dataset.groupe!);
   const defaut = groupes.filter(g => g.dataset.courant === 'true').map(g => g.dataset.groupe!);
-  let ouverts = lire() ?? defaut;
+  const m = lire();
+  let ouverts = m ? tous.filter(id => m.ouverts.includes(id) || (!m.connus.includes(id) && defaut.includes(id))) : defaut;
 
   const appliquer = () => {
     for (const g of groupes) {
@@ -39,7 +51,7 @@ export function initMenuRubriques(racine: ParentNode = document) {
       const id = g.dataset.groupe!;
       ouverts = ouverts.includes(id) ? ouverts.filter(x => x !== id) : [...ouverts, id];
       appliquer();
-      ecrire(ouverts);
+      ecrire(ouverts, tous);
     });
   }
 }
