@@ -548,3 +548,73 @@ test.describe.serial('CRM M2 — moindre privilège de service_role (crm_activit
     expect(f.filter(x => !x.srv).map(x => x.proname).sort()).toEqual(['client_interactions_proteger', 'crm_delegations_proteger', 'weekly_tasks_proteger']);
   });
 });
+
+const RETOUR = readFileSync('supabase/retours/crm_activites_droits_retour.sql', 'utf8');
+
+test.describe.serial('CRM M2 — retour arrière des droits (base locale)', () => {
+  let db: PGlite; let ids: Record<string, string>;
+  const acl = async () => exec(db, `SELECT c.relname, coalesce(c.relacl::text, '') acl FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'S') ORDER BY 1`);
+  const aclFonctions = async () => exec(db, `SELECT p.oid::regprocedure::text f, coalesce(p.proacl::text, '') acl FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace ORDER BY 1`);
+  const donnees = async () => un(db, `SELECT md5(coalesce((SELECT string_agg(t::text, '|' ORDER BY id) FROM weekly_tasks t), '')) t, md5(coalesce((SELECT string_agg(t::text, '|' ORDER BY id) FROM client_interactions t), '')) i,
+    md5(coalesce((SELECT string_agg(t::text, '|' ORDER BY id) FROM client_contacts t), '')) c, md5(coalesce((SELECT string_agg(t::text, '|' ORDER BY id) FROM crm_delegations t), '')) d, (SELECT count(*)::int FROM orders) o, (SELECT count(*)::int FROM admin_audit_logs) j`);
+  let avantDroits: { tables: any[]; fonctions: any[] }; let apresDroits: { tables: any[]; fonctions: any[] }; let donneesAvant: any;
+
+  test.beforeAll(async () => {
+    ({ db, ids } = await baseM2()); await db.exec(M2);
+    // des données réelles de M2 existent AVANT le retour : il ne doit rien y toucher
+    for (const r of [1, 2]) await noter(db, { client: ids.clem, action: 'rappeler', echeance: jour(r) });
+    await rpc(db, 'contact_enregistrer', [null, ids.clem, 'Mme Payet', null, null, null, true, null, ...acteurArgs(CLEMENT)], ['uuid', 'uuid', 'text', 'text', 'text', 'text', 'boolean', 'text', 'uuid', 'text', 'text']);
+    await rpc(db, 'delegation_accorder', [CLEMENT, MEL[CLEMENT], ARNAUD, MEL[ARNAUD], null, 'Congés', ...acteurArgs(ADMIN)], ['uuid', 'text', 'uuid', 'text', 'date', 'text', 'uuid', 'text', 'text']);
+    avantDroits = { tables: await acl(), fonctions: await aclFonctions() };
+    await db.exec(DROITS); apresDroits = { tables: await acl(), fonctions: await aclFonctions() };
+    donneesAvant = await donnees();
+  });
+  test.afterAll(async () => { await db.close(); });
+
+  test('le retour rend EXACTEMENT les droits d\'avant la migration de droits (tables et fonctions), et rien de plus', async () => {
+    expect(apresDroits.tables).not.toEqual(avantDroits.tables);                       // la migration de droits a bien changé quelque chose
+    await db.exec(RETOUR);
+    expect(await acl()).toEqual(avantDroits.tables);
+    expect(await aclFonctions()).toEqual(avantDroits.fonctions);
+    for (const r of ['anon', 'authenticated']) for (const t of ['client_interactions', 'client_contacts', 'crm_delegations', 'crm_suggestions_masquees', 'weekly_tasks'])
+      expect((await un(db, `SELECT has_table_privilege('${r}', '${t}', 'SELECT') a`)).a, `${r} ${t}`).toBe(false);
+  });
+
+  test('aucune donnée n\'est touchée ; les déclencheurs interdisent toujours de supprimer ou vider activités, relances et délégations ; les fonctions marchent', async () => {
+    expect(await donnees()).toEqual(donneesAvant);
+    ERR((await srv(db, `DELETE FROM client_interactions`)).error, 'INTERACTION_NON_SUPPRIMABLE');
+    ERR((await srv(db, `DELETE FROM crm_delegations`)).error, 'DELEGATION_NON_SUPPRIMABLE');
+    ERR((await srv(db, `TRUNCATE weekly_tasks`)).error, 'RELANCE_NON_SUPPRIMABLE');
+    expect((await noter(db, { client: ids.clem, action: 'rappeler', echeance: jour(3) })).error).toBe('');
+  });
+
+  test('rejouable sans effet, et la migration de droits peut être ré-appliquée ensuite', async () => {
+    const avant = await acl(); await db.exec(RETOUR); expect(await acl()).toEqual(avant);
+    await db.exec(DROITS); expect(await acl()).toEqual(apresDroits.tables); expect(await aclFonctions()).toEqual(apresDroits.fonctions);
+  });
+
+  test('indépendant : uniquement des GRANT dans une transaction, hors du dossier des migrations, sans référence aux autres fichiers', async () => {
+    const code = RETOUR.replace(/--[^\n]*/g, '');
+    const instructions = code.split(';').map(s => s.trim()).filter(Boolean);
+    for (const i of instructions) expect(i, i).toMatch(/^(BEGIN|COMMIT|GRANT\b[\s\S]*\bTO service_role)$/);
+    expect(code).not.toMatch(/\b(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE\s+FROM|TRUNCATE\s+\w|REVOKE|SELECT)\b/i);
+    expect(code).not.toMatch(/\b(anon|authenticated|PUBLIC)\b/i);
+    expect(code).not.toMatch(/\b(orders|order_items|products|stock|delivery_notes|bl_signatures|client_accounts|admin_audit_logs)\b/i);
+    // chaque objet nommé existe dans M2 : le retour ne dépend de rien d'autre que de l'existence de ces objets
+    for (const o of ['client_interactions', 'crm_delegations', 'crm_suggestions_masquees', 'weekly_tasks', 'client_contacts', 'client_interactions_proteger', 'weekly_tasks_proteger', 'crm_delegations_proteger']) expect(M2).toContain(o);
+    expect(readFileSync('supabase/migrations/crm_activites_droits.sql', 'utf8')).not.toContain('crm_activites_droits_retour');
+    // même ensemble d'objets que la migration de droits (rien d'oublié, rien en trop)
+    const noms = (s: string) => [...s.replace(/--[^\n]*/g, '').matchAll(/\b(client_interactions_proteger|weekly_tasks_proteger|crm_delegations_proteger|client_interactions|crm_delegations|crm_suggestions_masquees|weekly_tasks|client_contacts)\b/g)].map(m => m[1]).sort();
+    expect(noms(RETOUR)).toEqual(noms(DROITS));
+  });
+
+  test('exécuté SEUL, sans M1 ni M2 ni droits rejoués : refusé proprement si les objets n\'existent pas (aucune création implicite)', async () => {
+    const vide = new PGlite();
+    await vide.exec(`CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN;`);
+    let erreur = ''; try { await vide.exec(RETOUR); } catch (e: any) { erreur = String(e.message ?? e); }
+    expect(erreur).toContain('does not exist');
+    await vide.exec('ROLLBACK');                                                       // la transaction échouée est annulée : rien n'a été modifié
+    expect((await vide.query<any>(`SELECT count(*)::int n FROM pg_class WHERE relnamespace = 'public'::regnamespace`)).rows[0].n).toBe(0);
+    await vide.close();
+  });
+});
