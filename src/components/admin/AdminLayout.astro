@@ -1,6 +1,6 @@
 ---
 import '../../styles/global.css';
-import { isAdmin, isStaff } from '../../lib/roles';
+import { isAdmin, isStaff, ROLE_LABEL } from '../../lib/roles';
 
 interface Props {
   title: string;
@@ -9,6 +9,8 @@ interface Props {
 
 const { title, activeNav } = Astro.props;
 const viewerIsAdmin = isAdmin((Astro.locals as any).user);
+// Badge du menu : « Admin » pour un administrateur, « Commercial » pour tout autre compte du personnel.
+const badgeRole = viewerIsAdmin ? ROLE_LABEL.admin : ROLE_LABEL.commercial;
 // Produits est accessible au commercial (catalogue en lecture seule, sans
 // coûts) — voir /admin/produits/index.astro pour la version expurgée.
 const viewerIsStaff = isStaff((Astro.locals as any).user);
@@ -45,7 +47,7 @@ const viewerIsStaff = isStaff((Astro.locals as any).user);
     </button>
     <span class="topbar-wordmark">
       <span class="wm-inca">Inca</span><span class="wm-import">Import</span>
-      <span class="wm-admin">Admin</span>
+      <span class="wm-admin" data-testid="badge-role-mobile">{badgeRole}</span>
     </span>
   </header>
 
@@ -56,7 +58,7 @@ const viewerIsStaff = isStaff((Astro.locals as any).user);
         <a href="/" class="sidebar-wordmark" aria-label="Aller au site public">
           <span class="wm-inca">Inca</span><span class="wm-import">Import</span>
         </a>
-        <span class="sidebar-badge">Admin</span>
+        <span class="sidebar-badge" data-testid="badge-role">{badgeRole}</span>
       </div>
 
       <nav class="sidebar-nav">

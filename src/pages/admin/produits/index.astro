@@ -9,6 +9,7 @@ import { fetchAvailability, toAvailability } from '../../../lib/stock';
 import { reunionMonthStart } from '../../../lib/datetime';
 import { fetchDlcBadges } from '../../../lib/dlc';
 import { isAdmin, isStaff } from '../../../lib/roles';
+import { cleTriProduits, type CleTriProduits } from '../../../lib/produitsTri';
 
 const viewer = (Astro.locals as any).user;
 if (!isStaff(viewer)) return Astro.redirect('/admin');
@@ -121,11 +122,11 @@ const filteredProducts = (products ?? []).filter(p =>
 // ── Sortable columns ───────────────────────────────────────────────────
 // Marge and the monthly sales totals are computed values, so sorting happens in-memory
 // here rather than pushed down to the DB query.
-const SORT_KEYS = ['nom', 'prix', 'stock', 'marge', 'ventes_mois', 'ventes_prec'] as const;
-type SortKey = (typeof SORT_KEYS)[number];
+type SortKey = CleTriProduits;
 
 const sortParam = Astro.url.searchParams.get('sort') ?? '';
-const currentSort: SortKey | '' = (SORT_KEYS as readonly string[]).includes(sortParam) ? (sortParam as SortKey) : '';
+// Le tri par marge est refusé côté serveur à un commercial (voir cleTriProduits) : pas seulement masqué dans l'interface.
+const currentSort: SortKey | '' = cleTriProduits(sortParam, canManage);
 const currentDir: 'asc' | 'desc' = Astro.url.searchParams.get('dir') === 'desc' ? 'desc' : 'asc';
 
 function sortUrl(key: SortKey): string {
