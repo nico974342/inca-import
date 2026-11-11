@@ -464,8 +464,16 @@ test.describe.serial('CRM M2 — activités, relances, délégations (base local
 const DROITS = lire('crm_activites_droits.sql');
 
 test.describe.serial('CRM M2 — moindre privilège de service_role (crm_activites_droits.sql, base locale)', () => {
-  let db: PGlite; let ids: Record<string, string>;
-  test.beforeAll(async () => { ({ db, ids } = await baseM2()); await db.exec(M2); await db.exec(DROITS); });
+  let db: PGlite; let ids: Record<string, string>; let avantDroits: { tables: any[]; fonctions: any[]; colonnes: any[] };
+  // Autorisations de TOUT ce qui n'est pas visé par la migration de droits (BL, commandes, stocks, clients, produits, journal…)
+  const hors = ['client_interactions', 'crm_delegations', 'crm_suggestions_masquees', 'weekly_tasks', 'client_contacts'];
+  const instantane = async () => ({
+    tables: await exec(db, `SELECT table_name, grantee, privilege_type FROM information_schema.role_table_grants WHERE table_schema = 'public' AND table_name <> ALL($1) ORDER BY 1, 2, 3`, [hors]),
+    colonnes: await exec(db, `SELECT table_name, column_name, grantee, privilege_type FROM information_schema.column_privileges WHERE table_schema = 'public' AND table_name <> ALL($1) AND grantee IN ('anon','authenticated','service_role') ORDER BY 1, 2, 3, 4`, [hors]),
+    fonctions: await exec(db, `SELECT p.oid::regprocedure::text f, r.rolname, has_function_privilege(r.oid, p.oid, 'EXECUTE') x FROM pg_proc p CROSS JOIN pg_roles r WHERE p.pronamespace = 'public'::regnamespace AND r.rolname IN ('anon','authenticated','service_role')
+      AND p.proname NOT IN ('client_interactions_proteger', 'weekly_tasks_proteger', 'crm_delegations_proteger') ORDER BY 1, 2`),
+  });
+  test.beforeAll(async () => { ({ db, ids } = await baseM2()); await db.exec(M2); avantDroits = await instantane(); await db.exec(DROITS); });
   test.afterAll(async () => { await db.close(); });
 
   test('droits : plus aucun DELETE/TRUNCATE sur activités, relances, délégations ni suggestions ; DELETE conservé seulement pour les interlocuteurs', async () => {
@@ -513,6 +521,20 @@ test.describe.serial('CRM M2 — moindre privilège de service_role (crm_activit
     expect(await un(db, `SELECT client_id, client_libelle FROM client_interactions WHERE id = $1`, [n.rows[0].r.interaction_id])).toEqual({ client_id: null, client_libelle: 'Éphémère' });
     expect((await un(db, `SELECT client_id FROM weekly_tasks WHERE id = $1`, [n.rows[0].r.relance_id])).client_id).toBeNull();
     expect(await un(db, `SELECT (SELECT count(*) FROM client_contacts WHERE client_id = $1)::int c, (SELECT count(*) FROM crm_suggestions_masquees WHERE client_id = $1)::int s`, [c])).toEqual({ c: 0, s: 0 });
+  });
+
+  test('rien d\'autre ne change : les autorisations des BL, commandes, stocks, clients, produits, journal et de toutes les autres fonctions (dont les SECURITY DEFINER existantes) sont identiques avant et après', async () => {
+    const apres = await instantane();
+    expect(avantDroits.tables.length).toBeGreaterThan(50);
+    expect(apres.tables).toEqual(avantDroits.tables);
+    expect(apres.colonnes).toEqual(avantDroits.colonnes);
+    expect(apres.fonctions).toEqual(avantDroits.fonctions);
+    // les fonctions SECURITY DEFINER déjà présentes (numéro de BL, signatures) continuent de fonctionner pour service_role
+    const definer = await exec(db, `SELECT proname FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND prosecdef ORDER BY 1`);
+    expect(definer.length).toBeGreaterThan(0);
+    expect((await srv(db, `SELECT next_bl_number() AS n`)).error).toBe('');
+    // aucune des tables de BL ne recouvre de droit de suppression (inchangé depuis la phase 0)
+    expect((await un(db, `SELECT has_table_privilege('service_role', 'bl_signatures', 'DELETE') a`)).a).toBe(false);
   });
 
   test('rejouable sans effet ; aucune fonction SECURITY DEFINER dans M2 (20 fonctions : 14 appelées par le serveur, 3 aides internes, 3 déclencheurs)', async () => {
