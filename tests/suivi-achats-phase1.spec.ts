@@ -43,21 +43,29 @@ test.describe('Phase 1 — Suivi des achats', () => {
       .replace('    Marchandises parties de chez le fournisseur et pas encore arrivées.\n', '    Achats et expéditions en cours : marchandises commandées ou parties de chez le fournisseur, et pas encore arrivées.\n')
       .replaceAll('← Retour au suivi transit', '← Retour au Suivi des achats')
       .replace("Les tables de transit n'existent pas encore", "Les tables du Suivi des achats n'existent pas encore");
+    // couts.astro n'a pas bougé depuis : identité stricte.
+    expect(lire('src/pages/admin/achats/[id]/couts.astro')).toBe(transforme(avant('src/pages/admin/transit/[id]/couts.astro')));
+    // La liste et la modification de commande ont été VOLONTAIREMENT étendues par les réceptions partielles (tests/achats-receptions-ecrans.spec.ts) :
+    // on vérifie ici que ce qui comptait avant la phase 1 est toujours là (titre, route, garde administrateur, journal, formulaire de commande).
     for (const [ancien, nouveau] of [
       ['src/pages/admin/transit.astro', 'src/pages/admin/achats.astro'],
       ['src/pages/admin/transit/[id]/edit.astro', 'src/pages/admin/achats/[id]/edit.astro'],
-      ['src/pages/admin/transit/[id]/couts.astro', 'src/pages/admin/achats/[id]/couts.astro'],
-    ]) expect(lire(nouveau), nouveau).toBe(transforme(avant(ancien)));
+    ]) {
+      const n = lire(nouveau); const o = transforme(avant(ancien));
+      expect(n, nouveau).not.toContain('/admin/transit'); expect(n, nouveau).toContain('isAdmin(');
+      for (const action of o.match(/action:\s*'[a-z_.]+'/g) ?? []) expect(n, `${nouveau} : ${action}`).toContain(action);   // chaque action du journal d'origine existe toujours
+    }
   });
 
   test('les autres fichiers ne changent que par leurs liens et textes (réception, commande fournisseur, route marquer-commande)', () => {
     const changements: [string, (s: string) => string][] = [
       ['src/pages/admin/reception.astro', s => s.replaceAll('/admin/transit', '/admin/achats').replace('le suivi transit</a>', 'le Suivi des achats</a>')],
-      ['src/pages/admin/reception/new.astro', s => s.replaceAll('/admin/transit', '/admin/achats')],
       ['src/pages/admin/commande-fournisseur.astro', s => s.replaceAll('/admin/transit', '/admin/achats')],
       ['src/pages/api/admin/commande-fournisseur/marquer-commande.ts', s => s.replaceAll('/admin/transit', '/admin/achats')],
     ];
     for (const [f, t] of changements) expect(lire(f), f).toBe(t(avant(f)));
+    // reception/new.astro : étendu volontairement (?shipment= renvoie vers l'écran de réception par commande) ; ses liens ont bien migré
+    expect(lire('src/pages/admin/reception/new.astro')).not.toContain('/admin/transit');
   });
 
   test('plus aucun lien interne vers /admin/transit en dehors des redirections', () => {

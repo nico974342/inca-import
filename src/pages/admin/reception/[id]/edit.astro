@@ -10,11 +10,13 @@ if (!id) return Astro.redirect('/admin/reception', 302);
 
 const { data: reception } = await supabaseAdmin
   .from('stock_receptions')
-  .select('id, supplier_name, received_at, notes, stock_applied, stock_reception_items(product_id, quantity, unit_cost_ht, dlc, products(name, sku, stock_quantity, prix_achat_moyen_ht))')
+  .select('id, supplier_name, received_at, notes, stock_applied, shipment_id, stock_reception_items(product_id, quantity, unit_cost_ht, dlc, products(name, sku, stock_quantity, prix_achat_moyen_ht))')
   .eq('id', id)
   .single();
 
 if (!reception) return Astro.redirect('/admin/reception', 302);
+// Réception rattachée à une commande : elle ne se modifie pas ici (annulation motivée sur la page de la commande, stock et cumuls régularisés ensemble).
+if ((reception as any).shipment_id) return Astro.redirect(`/admin/achats/${(reception as any).shipment_id}`, 302);
 
 const { data: products } = await supabaseAdmin
   .from('products')

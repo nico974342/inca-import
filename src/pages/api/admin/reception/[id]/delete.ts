@@ -15,6 +15,14 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
   const { id } = params;
   if (!id) return new Response('Non trouvé', { status: 404 });
 
+  // Une réception rattachée à une COMMANDE ne se modifie ni ne se supprime ici : seule l'annulation motivée (page de la commande) régularise le stock et les
+  // cumuls de façon cohérente et traçable. La base le refuse aussi ; ce renvoi explique pourquoi.
+  const { data: liee } = await supabaseAdmin.from('stock_receptions').select('shipment_id').eq('id', id).maybeSingle();
+  if (liee?.shipment_id) {
+    const message = encodeURIComponent('Cette réception est rattachée à une commande : utilisez « Annuler cette réception » (motif obligatoire) sur la page de la commande.');
+    return Response.redirect(new URL(`/admin/achats/${liee.shipment_id}?err=${message}`, request.url), 303);
+  }
+
   // Fetch metadata for the audit log before the atomic delete
   const { data: rec, error: fetchErr } = await supabaseAdmin
     .from('stock_receptions')

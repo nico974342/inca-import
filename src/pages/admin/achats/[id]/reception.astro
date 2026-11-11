@@ -1,0 +1,189 @@
+---
+import AdminLayout from '../../../../components/admin/AdminLayout.astro';
+import { isAdmin } from '../../../../lib/roles';
+import { estUuid } from '../../../../lib/crm';
+import { achats, LIBELLE_RECEPTION } from '../../../../lib/achatsReception';
+import { traiterReception } from '../../../../lib/achatsActions';
+import { chargerCommande } from '../../../../lib/achatsCommande';
+import { todayReunionISO } from '../../../../lib/datetime';
+
+/**
+ * Enregistrer une livraison reçue d'une commande fournisseur (réception partielle ou totale). Une seule opération atomique côté base : réception, lignes,
+ * stock, PUMP, cumuls et état. Les lignes non livrées restent à 0. Une quantité supérieure au reste à recevoir est refusée (jamais augmentée en douce) ;
+ * la clé d'envoi, créée à l'affichage, empêche tout doublon (double clic, nouvel essai après une coupure réseau).
+ */
+const utilisateur = (Astro.locals as any).user;
+if (!isAdmin(utilisateur)) return Astro.redirect('/admin');
+const { id } = Astro.params;
+if (!estUuid(id)) return Astro.redirect('/admin/achats?err=introuvable');
+
+const c = await chargerCommande(id);
+if (!c) return Astro.redirect('/admin/achats?err=introuvable');
+const detail = `/admin/achats/${id}`;
+if (c.status === 'annule') return Astro.redirect(`${detail}?err=${encodeURIComponent('Cette commande est annulée : aucune réception possible.')}`);
+if (c.etat.statut === 'integrale') return Astro.redirect(`${detail}?err=${encodeURIComponent("Cette commande est déjà entièrement réceptionnée : il n'y a plus rien à recevoir.")}`);
+if (c.lignes.length === 0) return Astro.redirect(`${detail}?err=${encodeURIComponent("Cette commande n'a aucune ligne produit.")}`);
+
+const aujourdhui = todayReunionISO();
+let erreur = ''; let cle = crypto.randomUUID();
+let saisie: Record<string, { q: string; cout: string; dlc: string }> = {};
+let entete = { received_at: aujourdhui, bl: '', notes: '' };
+
+if (Astro.request.method === 'POST') {
+  const f = await Astro.request.formData();
+  const r = await traiterReception(achats, utilisateur, id, f);
+  if (r.ok) return Astro.redirect(`${detail}?ok=${encodeURIComponent(r.message)}`);
+  erreur = r.message;
+  // la saisie est conservée : une erreur ne fait jamais perdre les quantités tapées (la même clé reste valable : rien n'a été enregistré)
+  const k = String(f.get('cle') ?? ''); if (/^[0-9a-f-]{36}$/i.test(k)) cle = k;
+  const ids = f.getAll('ligne_id[]'), q = f.getAll('quantity[]'), co = f.getAll('unit_cost_ht[]'), d = f.getAll('dlc[]');
+  ids.forEach((lid, i) => { saisie[String(lid)] = { q: String(q[i] ?? ''), cout: String(co[i] ?? ''), dlc: String(d[i] ?? '') }; });
+  entete = { received_at: String(f.get('received_at') ?? aujourdhui), bl: String(f.get('bl_fournisseur') ?? ''), notes: String(f.get('notes') ?? '') };
+}
+const nombre = (n: number) => n.toLocaleString('fr-FR');
+const coutDefaut = (v: number | null) => (v == null ? '' : String(Math.round(v * 10000) / 10000));
+---
+<AdminLayout title="Enregistrer une réception" activeNav="achats">
+  <div class="rc">
+    <a href={detail} class="rc-retour">← {c.supplier_name}{c.reference ? ` · ${c.reference}` : ''}</a>
+    <h1 class="rc-h1">Enregistrer une réception</h1>
+    <p class="rc-sub">{LIBELLE_RECEPTION[c.etat.statut]} · {nombre(c.etat.recu)} / {nombre(c.etat.commande)} cartons reçus · reste {nombre(c.etat.reste)}. Saisissez seulement ce qui a réellement été livré ; laissez 0 pour les produits non livrés.</p>
+
+    {erreur && <p class="rc-erreur" role="alert" data-testid="erreur">{erreur}</p>}
+
+    <form method="post" class="rc-form" id="rcForm" novalidate>
+      <input type="hidden" name="cle" value={cle} />
+      <div class="rc-entete">
+        <div class="rc-champ"><label for="received_at">Date de livraison</label><input type="date" id="received_at" name="received_at" value={entete.received_at} max={aujourdhui} required /></div>
+        <div class="rc-champ"><label for="bl_fournisseur">Référence BL fournisseur <span class="rc-opt">(facultatif)</span></label><input type="text" id="bl_fournisseur" name="bl_fournisseur" maxlength="120" value={entete.bl} autocomplete="off" /></div>
+        <div class="rc-champ rc-champ--large"><label for="notes">Commentaire <span class="rc-opt">(facultatif)</span></label><input type="text" id="notes" name="notes" maxlength="500" value={entete.notes} autocomplete="off" placeholder="Palette abîmée, livraison du matin…" /></div>
+      </div>
+
+      <ul class="rc-lignes" data-testid="lignes-reception">
+        {c.lignes.map(l => {
+          const s = saisie[l.id];
+          if (l.reste === 0) return (
+            <li class="rc-ligne rc-ligne--soldee" data-ligne={l.id} data-reste="0">
+              <div class="rc-nom"><strong>{l.nom}</strong>{l.sku && <span class="rc-sku"> {l.sku}</span>}</div>
+              <dl class="rc-chiffres">
+                <div><dt>Commandé</dt><dd data-col="commande">{nombre(l.quantity)}</dd></div>
+                <div><dt>Déjà reçu</dt><dd data-col="recu">{nombre(l.recu)}</dd></div>
+                <div><dt>Reste à recevoir</dt><dd data-col="reste" class="rc-ok">0</dd></div>
+              </dl>
+              <p class="rc-aide">Ligne soldée : rien à recevoir.</p>
+            </li>
+          );
+          return (
+            <li class="rc-ligne" data-ligne={l.id} data-reste={l.reste}>
+              <input type="hidden" name="ligne_id[]" value={l.id} />
+              <div class="rc-nom"><strong>{l.nom}</strong>{l.sku && <span class="rc-sku"> {l.sku}</span>}</div>
+              <dl class="rc-chiffres">
+                <div><dt>Commandé</dt><dd data-col="commande">{nombre(l.quantity)}</dd></div>
+                <div><dt>Déjà reçu</dt><dd data-col="recu">{nombre(l.recu)}</dd></div>
+                <div><dt>Reste à recevoir</dt><dd data-col="reste" class={l.reste === 0 ? 'rc-ok' : ''}>{nombre(l.reste)}</dd></div>
+              </dl>
+              <div class="rc-saisie">
+                <div class="rc-champ">
+                  <label for={`q-${l.id}`}>Reçu cette fois (cartons)</label>
+                  <div class="rc-qte">
+                    <input type="text" inputmode="numeric" pattern="[0-9]*" id={`q-${l.id}`} name="quantity[]" value={s?.q ?? ''} placeholder="0" autocomplete="off" aria-describedby={`m-${l.id}`} />
+                    <button type="button" class="rc-tout" data-tout={l.reste} aria-label={`Recevoir tout le reste (${l.reste}) de ${l.nom}`}>Tout le reste ({nombre(l.reste)})</button>
+                  </div>
+                  <p class="rc-msg" id={`m-${l.id}`} role="status" hidden></p>
+                </div>
+                <div class="rc-champ"><label for={`c-${l.id}`}>Coût unitaire HT (€ / carton)</label><input type="text" inputmode="decimal" id={`c-${l.id}`} name="unit_cost_ht[]" value={s?.cout ?? coutDefaut(l.cout_rendu)} autocomplete="off" /></div>
+                <div class="rc-champ"><label for={`d-${l.id}`}>DLC <span class="rc-opt">(facultatif)</span></label><input type="date" id={`d-${l.id}`} name="dlc[]" value={s?.dlc ?? l.dlc ?? ''} /></div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <p class="rc-aide">Le coût proposé est le coût rendu (prix fournisseur + frais d'import répartis) : il alimente le prix d'achat moyen. Il ne modifie jamais le prix de la commande.{c.coutsEstimes ? ' ⚠ Frais d\'import encore estimés.' : ''}</p>
+
+      <div class="rc-pied">
+        <p class="rc-total" id="rcTotal" aria-live="polite">Total de cette livraison : 0 carton</p>
+        <p class="rc-msg rc-msg--bloc" id="rcBloc" role="alert" hidden></p>
+        <button type="submit" class="rc-envoyer" id="rcEnvoyer">Enregistrer la réception</button>
+        <a href={detail} class="rc-annuler">Annuler</a>
+      </div>
+    </form>
+  </div>
+</AdminLayout>
+
+<style>
+.rc { max-width: 760px; margin: 0 auto; padding-bottom: 6rem; display: flex; flex-direction: column; gap: var(--space-4); }
+.rc-retour { font-size: var(--text-sm); color: var(--color-muted); text-decoration: none; min-height: 32px; display: inline-flex; align-items: center; overflow-wrap: anywhere; }
+.rc-h1 { font-family: var(--font-display); font-size: 1.5rem; font-weight: 700; margin: 0; color: var(--color-ink); }
+.rc-sub { margin: 0; font-size: var(--text-sm); color: var(--color-muted); }
+.rc-erreur { margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); background: oklch(0.97 0.04 25); color: oklch(0.50 0.19 25); border: 1px solid oklch(0.88 0.07 25); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.rc-form { display: flex; flex-direction: column; gap: var(--space-4); }
+.rc-entete { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+.rc-champ { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.rc-champ--large { grid-column: 1 / -1; }
+.rc label { font-size: var(--text-sm); font-weight: 500; color: var(--color-ink); }
+.rc-opt { font-weight: 400; color: var(--color-muted); }
+.rc input[type="text"], .rc input[type="date"] { min-height: 48px; padding: 0 var(--space-3); font-size: 16px; border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-sm); background: var(--color-bg); font-family: var(--font-body); width: 100%; }
+.rc input:disabled { background: var(--color-surface); color: var(--color-muted); }
+.rc-lignes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.rc-ligne { background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
+.rc-ligne--soldee { background: var(--color-surface); }
+.rc-ligne--depasse { border-color: oklch(0.80 0.12 25); }
+.rc-nom { font-size: var(--text-base); overflow-wrap: anywhere; }
+.rc-sku { font-size: var(--text-xs); color: var(--color-muted); }
+.rc-chiffres { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-2); margin: 0; }
+.rc-chiffres div { background: var(--color-surface); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); }
+.rc-chiffres dt { font-size: var(--text-xs); color: var(--color-muted); }
+.rc-chiffres dd { margin: 0; font-family: var(--font-mono); font-size: var(--text-base); font-weight: 700; color: var(--color-ink); }
+.rc-ok { color: oklch(0.38 0.12 150) !important; }
+.rc-saisie { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: var(--space-3); align-items: start; }
+.rc-qte { display: flex; gap: var(--space-2); }
+.rc-qte input { flex: 1; min-width: 0; font-size: 20px !important; font-weight: 700; }
+.rc-tout { min-height: 48px; padding: 0 var(--space-3); border-radius: var(--radius-sm); border: 1.5px solid var(--color-primary); background: var(--color-bg); color: var(--color-primary-deep); font: 600 var(--text-xs)/1.2 var(--font-body); cursor: pointer; white-space: nowrap; }
+.rc-msg { margin: 0; font-size: var(--text-xs); color: oklch(0.50 0.19 25); }
+.rc-msg[hidden] { display: none; }
+.rc-aide { margin: 0; font-size: var(--text-xs); color: var(--color-muted); }
+.rc-pied { position: sticky; bottom: 0; background: var(--color-bg); border-top: 1px solid var(--color-border); padding: var(--space-3) 0 var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
+.rc-total { margin: 0; font-weight: 700; color: var(--color-ink); }
+.rc-msg--bloc { font-size: var(--text-sm); }
+.rc-envoyer { min-height: 56px; border: 0; border-radius: var(--radius-md); background: var(--color-primary); color: #fff; font-size: var(--text-base); font-weight: 700; cursor: pointer; }
+.rc-envoyer:disabled { opacity: 0.6; cursor: progress; }
+.rc-annuler { text-align: center; font-size: var(--text-sm); color: var(--color-muted); min-height: 44px; display: flex; align-items: center; justify-content: center; }
+@media (max-width: 640px) { .rc-entete { grid-template-columns: 1fr; } .rc-saisie { grid-template-columns: 1fr 1fr; } .rc-saisie > .rc-champ:first-child { grid-column: 1 / -1; } }
+</style>
+
+<script>
+  const form = document.getElementById('rcForm') as HTMLFormElement | null;
+  if (form) {
+    const bouton = document.getElementById('rcEnvoyer') as HTMLButtonElement;
+    const total = document.getElementById('rcTotal') as HTMLElement;
+    const bloc = document.getElementById('rcBloc') as HTMLElement;
+    const lignes = Array.from(form.querySelectorAll<HTMLElement>('.rc-ligne:not(.rc-ligne--soldee)'));
+    const quantite = (li: HTMLElement) => { const v = (li.querySelector('input[name="quantity[]"]') as HTMLInputElement).value.trim(); return v === '' ? 0 : /^\d{1,7}$/.test(v) ? Number(v) : NaN; };
+    const verifier = () => {
+      let somme = 0; let probleme = '';
+      for (const li of lignes) {
+        const reste = Number(li.dataset.reste); const q = quantite(li); const msg = li.querySelector('.rc-msg') as HTMLElement;
+        let m = '';
+        if (Number.isNaN(q)) m = 'Nombre entier de cartons uniquement.';
+        else if (q > reste) m = `Dépasse le reste à recevoir (${reste.toLocaleString('fr-FR')}) : refusé. Un administrateur peut d'abord modifier la quantité commandée.`;
+        li.classList.toggle('rc-ligne--depasse', !!m); msg.textContent = m; msg.hidden = !m;
+        if (m && !probleme) probleme = m; if (!m) somme += q;
+      }
+      total.textContent = `Total de cette livraison : ${somme.toLocaleString('fr-FR')} carton${somme > 1 ? 's' : ''}`;
+      return { somme, probleme };
+    };
+    form.addEventListener('input', verifier);
+    form.querySelectorAll<HTMLButtonElement>('.rc-tout').forEach(b => b.addEventListener('click', () => {
+      const champ = b.closest('.rc-qte')!.querySelector('input') as HTMLInputElement; champ.value = b.dataset.tout ?? ''; verifier();
+    }));
+    form.addEventListener('submit', (e) => {
+      const { somme, probleme } = verifier();
+      const message = probleme || (somme === 0 ? 'Saisissez au moins une quantité reçue (les lignes non livrées restent à 0).' : '');
+      if (message) { e.preventDefault(); bloc.textContent = message; bloc.hidden = false; return; }
+      bloc.hidden = true;
+      bouton.disabled = true; bouton.textContent = 'Enregistrement…';             // un seul envoi : la clé d'envoi protège aussi contre un renvoi réseau
+    });
+    window.addEventListener('pageshow', () => { bouton.disabled = false; bouton.textContent = 'Enregistrer la réception'; });
+    verifier();
+  }
+</script>

@@ -17,6 +17,7 @@ const sansCommentaires = (s: string) => s.split('\n').filter(l => !/^\s*(\/\/|\*
 
 // Pages et routes qui exigent un administrateur : le contrôle doit précéder TOUT accès aux données.
 const PAGES_ADMIN = ['src/pages/admin/achats.astro', 'src/pages/admin/achats/[id]/edit.astro', 'src/pages/admin/achats/[id]/couts.astro',
+    'src/pages/admin/achats/[id]/index.astro', 'src/pages/admin/achats/[id]/reception.astro',
   'src/pages/admin/reception.astro', 'src/pages/admin/reception/new.astro', 'src/pages/admin/reception/[id]/edit.astro',
   'src/pages/admin/commande-fournisseur.astro', 'src/pages/admin/fournisseurs.astro', 'src/pages/admin/reappro.astro', 'src/pages/admin/marges.astro',
   'src/pages/admin/journal.astro', 'src/pages/admin/stocks/audit.astro', 'src/pages/admin/clients/performances.astro',

@@ -17,6 +17,12 @@ export const POST: APIRoute = async ({ request, cookies }) => {
 
   const form = await request.formData();
 
+  // Une réception issue d'une COMMANDE fournisseur passe EXCLUSIVEMENT par l'enregistrement atomique (page « Enregistrer une réception » de la commande) :
+  // réception + lignes + stock + PUMP + cumuls + rattachement + état en UNE transaction, avec clé d'idempotence. Ce chemin historique mettait à jour les
+  // cumuls APRÈS COUP, hors transaction (un échec laissait un stock augmenté sans cumul) : il ne sert plus qu'aux réceptions hors commande.
+  const commandeId = (form.get('shipment_id') as string | null)?.trim() || null;
+  if (commandeId) return Response.redirect(new URL(`/admin/achats/${encodeURIComponent(commandeId)}/reception`, request.url), 303);
+
   const supplierName = (form.get('supplier_name') as string | null)?.trim() ?? '';
   const receivedAt   = (form.get('received_at') as string | null)?.trim() ?? '';
   const notes        = (form.get('notes') as string | null)?.trim() || null;
@@ -79,58 +85,6 @@ export const POST: APIRoute = async ({ request, cookies }) => {
     return Response.redirect(new URL('/admin/reception/new', request.url), 303);
   }
 
-  // Réception issue d'une expédition en transit : chaque ligne reçue
-  // s'accumule sur shipment_items.received_quantity plutôt que de clore
-  // l'expédition entière d'un coup — une réception qui ne couvre qu'une
-  // partie des lignes (ou une quantité inférieure à celle commandée) laisse
-  // le reliquat visible et l'expédition active, au lieu de le faire
-  // disparaître silencieusement. Le statut ne passe à « Réceptionné » que
-  // lorsque toutes les lignes sont intégralement couvertes. Non bloquant —
-  // le stock est déjà appliqué et validé, et refuser la réception pour un
-  // statut de suivi serait pire que de la signaler.
-  const shipmentId = (form.get('shipment_id') as string | null)?.trim() || null;
-  let shipmentWarning = false;
-  if (shipmentId) {
-    const { data: shipmentItems, error: fetchErr } = await supabaseAdmin
-      .from('shipment_items')
-      .select('id, product_id, quantity, received_quantity')
-      .eq('shipment_id', shipmentId);
-
-    if (fetchErr || !shipmentItems) {
-      shipmentWarning = true;
-      console.error('[reception] lecture lignes expédition échouée:', shipmentId, fetchErr?.message);
-    } else {
-      const receivedByProduct = new Map(rows.map(r => [r.productId, r.quantity]));
-      let allFulfilled = true;
-      for (const item of shipmentItems) {
-        const justReceived = receivedByProduct.get(item.product_id) ?? 0;
-        const newReceived = (item.received_quantity ?? 0) + justReceived;
-        if (justReceived > 0) {
-          const { error: itemErr } = await supabaseAdmin
-            .from('shipment_items')
-            .update({ received_quantity: newReceived })
-            .eq('id', item.id);
-          if (itemErr) {
-            shipmentWarning = true;
-            console.error('[reception] mise à jour received_quantity échouée:', item.id, itemErr.message);
-          }
-        }
-        if (newReceived < item.quantity) allFulfilled = false;
-      }
-
-      if (allFulfilled) {
-        const { error: shipErr } = await supabaseAdmin
-          .from('shipments')
-          .update({ status: 'receptionne' })
-          .eq('id', shipmentId);
-        if (shipErr) {
-          shipmentWarning = true;
-          console.error('[reception] passage en receptionne échoué:', shipmentId, shipErr.message);
-        }
-      }
-    }
-  }
-
   await logAdminAction({
     adminEmail:   user.email ?? 'inconnu',
     action:       'reception.creation',
@@ -143,16 +97,8 @@ export const POST: APIRoute = async ({ request, cookies }) => {
       products_count: rows.length,
       total_units:    rows.reduce((s, r) => s + r.quantity, 0),
       total_cost_ht:  rows.reduce((s, r) => s + r.quantity * r.unitCost, 0),
-      shipment_id:    shipmentId,
     },
   });
-
-  if (shipmentWarning) {
-    return Response.redirect(
-      new URL('/admin/reception?success=1&shipment_warning=1', request.url),
-      303,
-    );
-  }
 
   return Response.redirect(
     new URL(`/admin/reception?success=${stockApplied ? '1' : 'historical'}`, request.url),
