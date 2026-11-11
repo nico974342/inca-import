@@ -6,10 +6,16 @@ import { logAdminAction } from '../../../../lib/audit';
 import { SHIPMENT_STATUSES, SHIPMENT_STATUS_LABEL, type ShipmentStatus } from '../../../../lib/constants';
 import { isAdmin } from '../../../../lib/roles';
 import { parseDlc } from '../../../../lib/dlc';
+import { etatTransition, ecritureAutorisee, MESSAGE_TRANSITION } from '../../../../lib/achatsTransition';
 
 if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
 const { id } = Astro.params;
+// Garde SERVEUR : la modification d'une commande existante (en-tête, lignes) n'est possible que dans l'état « actif » (envoi du formulaire compris).
+{
+  const transition = await etatTransition();
+  if (!ecritureAutorisee(transition)) return Astro.redirect(`/admin/achats/${id}?err=${encodeURIComponent(MESSAGE_TRANSITION[transition])}`);
+}
 
 // ── Comme la liste : on n'écrit que sur shipments / shipment_items. Aucun
 //    mouvement de stock ni recalcul de PUMP ici. ──

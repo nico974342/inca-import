@@ -74,6 +74,8 @@ Aucune commande n'est rouverte ni modifiée. Les 40 réceptions existantes reste
 
 ## 4. Procédure de mise en production (proposée — chaque étape attend votre accord)
 
+> **Remplacée par la procédure de déploiement coordonné : `docs/achats-deploiement-coordonne.md`** (gel des réceptions, vérification « rien en cours », migration, interface fermée par défaut, réouverture progressive). Les sections ci-dessous restent la référence pour la liste des objets, les contrôles et le retour arrière.
+
 1. Confirmation d'une sauvegarde récente (plan Supabase Pro : sauvegarde physique ; date et heure à me communiquer).
 2. Vérifier l'empreinte SHA-256 du fichier (section 1).
 3. Lancer en lecture seule le **relevé** (`supabase/verifications/achats_receptions_partielles_releve.sql`, 7 sections : commandes, lignes et cumuls, réceptions, stocks, historiques, permissions, objets de la migration) et la section 1 du fichier de contrôle ; conserver les résultats « avant ».

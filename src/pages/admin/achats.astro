@@ -12,9 +12,12 @@ import {
 import { formatDateReunion, todayReunionISO } from '../../lib/datetime';
 import { parseDlc } from '../../lib/dlc';
 import { isAdmin } from '../../lib/roles';
+import { etatTransition, ecritureAutorisee, MESSAGE_TRANSITION } from '../../lib/achatsTransition';
 import { etatReception, LIBELLE_RECEPTION, FILTRES_ACHATS, LIBELLE_FILTRE_ACHATS, parseFiltreAchats, correspondFiltre } from '../../lib/achatsReception';
 
 if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
+const transition = await etatTransition();
+const ecritureOk = ecritureAutorisee(transition);
 
 // ── Écritures : uniquement sur shipments / shipment_items. Ni products,
 //    ni stock, ni PUMP — le transit est du suivi, pas du mouvement. ──
@@ -84,6 +87,9 @@ if (Astro.request.method === 'POST') {
     });
     return Astro.redirect('/admin/achats?ok=cree');
   }
+
+  // Garde SERVEUR : changer le statut ou supprimer une commande existante n'est possible que dans l'état « actif » ; la création d'une NOUVELLE commande reste possible (aucune réception).
+  if ((action === 'set_status' || action === 'delete') && !ecritureOk) return Astro.redirect('/admin/achats?err=transition');
 
   if (action === 'set_status') {
     const id = data.get('id') as string;
@@ -201,6 +207,7 @@ const OK_MSG: Record<string, string> = {
   receptionne: "Réception validée — l'expédition est passée en « Réceptionné » et sort du suivi.",
 };
 const ERR_MSG: Record<string, string> = {
+  transition: MESSAGE_TRANSITION[transition] || 'Opération suspendue pendant la mise en service.',
   fournisseur_requis: 'Le nom du fournisseur est obligatoire.',
   creation: "L'expédition n'a pas pu être créée.",
   lignes: "Les lignes produits n'ont pas pu être enregistrées — l'expédition a été annulée.",
@@ -238,6 +245,7 @@ function fmtEUR2(n: number): string {
     <>
       {ok  && <div class="alert alert--ok"    role="status">{OK_MSG[ok] ?? 'Enregistré.'}</div>}
       {err && <div class="alert alert--error" role="alert">{ERR_MSG[err] ?? 'Une erreur est survenue.'}</div>}
+      {!ecritureOk && <div class="alert alert--error" role="status" data-testid="transition" data-etat={transition}>{MESSAGE_TRANSITION[transition]}</div>}
 
       <details class="create-panel">
         <summary class="create-summary">+ Nouvelle expédition</summary>
@@ -335,6 +343,8 @@ function fmtEUR2(n: number): string {
                   <div class="sh-actions">
                     {(s.status === 'receptionne' || s.status === 'annule') ? (
                       <span class="badge-log" data-testid="statut-logistique">{SHIPMENT_STATUS_LABEL[s.status as ShipmentStatus]}</span>
+                    ) : !ecritureOk ? (
+                      <span class="badge-log" data-testid="statut-logistique">{SHIPMENT_STATUS_LABEL[s.status as ShipmentStatus]}</span>
                     ) : (
                     <form method="post" class="status-form">
                       <input type="hidden" name="action" value="set_status" />
@@ -351,7 +361,7 @@ function fmtEUR2(n: number): string {
                     <a href={`/admin/achats/${s.id}/couts`} class="link-action">
                       {s.landed.costsStatus === 'aucun' ? '+ Frais / coût rendu' : 'Voir détail coût rendu'}
                     </a>
-                    {s.etat.statut !== 'integrale' && s.status !== 'annule' && s.items.length > 0 && <a href={`/admin/achats/${s.id}/reception`} class="btn btn-primary btn-sm" data-testid="enregistrer-reception">Enregistrer une réception</a>}
+                    {ecritureOk && s.etat.statut !== 'integrale' && s.status !== 'annule' && s.items.length > 0 && <a href={`/admin/achats/${s.id}/reception`} class="btn btn-primary btn-sm" data-testid="enregistrer-reception">Enregistrer une réception</a>}
                   </div>
                 </header>
 

@@ -5,6 +5,7 @@ import { estUuid } from '../../../../lib/crm';
 import { achats, LIBELLE_RECEPTION } from '../../../../lib/achatsReception';
 import { traiterCorrection } from '../../../../lib/achatsActions';
 import { chargerCommande } from '../../../../lib/achatsCommande';
+import { etatTransition, ecritureAutorisee, MESSAGE_TRANSITION } from '../../../../lib/achatsTransition';
 import { SHIPMENT_STATUS_LABEL, type ShipmentStatus } from '../../../../lib/constants';
 import { formatDateReunion, formatDateTimeReunion } from '../../../../lib/datetime';
 
@@ -18,7 +19,11 @@ if (!isAdmin(utilisateur)) return Astro.redirect('/admin');
 const { id } = Astro.params;
 if (!estUuid(id)) return Astro.redirect('/admin/achats?err=introuvable');
 
+const transition = await etatTransition();
+const ecritureOk = ecritureAutorisee(transition);
 if (Astro.request.method === 'POST') {
+  // Garde SERVEUR : aucune correction (annulation, quantité) hors de l'état « actif », quelle que soit la page d'où part la requête.
+  if (!ecritureOk) return Astro.redirect(`/admin/achats/${id}?err=${encodeURIComponent(MESSAGE_TRANSITION[transition])}`);
   const r = await traiterCorrection(achats, utilisateur, await Astro.request.formData());
   return Astro.redirect(`/admin/achats/${id}?${r.ok ? 'ok' : 'err'}=${encodeURIComponent(r.message)}`);
 }
@@ -28,7 +33,7 @@ if (!c) return Astro.redirect('/admin/achats?err=introuvable');
 const ok = Astro.url.searchParams.get('ok'); const err = Astro.url.searchParams.get('err');
 const e = c.etat;
 const nombre = (n: number) => n.toLocaleString('fr-FR');
-const peutRecevoir = e.statut !== 'integrale' && c.status !== 'annule';
+const peutRecevoir = ecritureOk && e.statut !== 'integrale' && c.status !== 'annule';
 const sansLigne = c.lignes.length === 0;
 const logistique = SHIPMENT_STATUS_LABEL[c.status as ShipmentStatus] ?? c.status;
 const mailCourt = (m: string | null) => (m ?? '—').split('@')[0];
@@ -50,6 +55,7 @@ const actives = c.receptions.filter(r => !r.annulee_le);
 
     {ok && <p class="ach-flash ach-flash--ok" role="status">{ok}</p>}
     {err && <p class="ach-flash ach-flash--err" role="alert">{err}</p>}
+    {!ecritureOk && <p class="ach-flash ach-flash--err" role="status" data-testid="transition" data-etat={transition}>{MESSAGE_TRANSITION[transition]}</p>}
 
     <section class="ach-bloc" aria-label="Progression de la réception">
       <div class="ach-prog-t"><strong data-testid="progression">{nombre(e.recu)} / {nombre(e.commande)} cartons reçus</strong><span class="ach-prog-p">{e.pourcentage} %</span></div>
@@ -77,7 +83,7 @@ const actives = c.receptions.filter(r => !r.annulee_le);
                   <td class="n" data-col="recu" data-label="Déjà reçu">{nombre(l.recu)}</td>
                   <td class={`n ${l.reste === 0 ? 'ach-ok' : ''}`} data-col="reste" data-label="Reste à recevoir">{nombre(l.reste)}</td>
                   <td class="ach-cell-act">
-                    {c.status !== 'annule' && !e.historique && (
+                    {ecritureOk && c.status !== 'annule' && !e.historique && (
                       <details class="ach-det"><summary class="ach-mini">Modifier la quantité commandée</summary>
                         <form method="post" class="ach-form">
                           <input type="hidden" name="operation" value="quantite" /><input type="hidden" name="ligne_id" value={l.id} />
@@ -114,7 +120,7 @@ const actives = c.receptions.filter(r => !r.annulee_le);
               <ul class="ach-rec-lignes">{r.lignes.map(x => <li>{x.produit} : <strong>{nombre(x.quantity)}</strong></li>)}</ul>
               {r.notes && <p class="ach-meta">{r.notes}</p>}
               {r.annulee_le && <p class="ach-meta ach-alerte">Annulée par {mailCourt(r.annulee_par)} le {formatDateTimeReunion(r.annulee_le)} : {r.annulation_motif}</p>}
-              {!r.annulee_le && (
+              {ecritureOk && !r.annulee_le && (
                 <details class="ach-det"><summary class="ach-mini">Annuler cette réception</summary>
                   <form method="post" class="ach-form">
                     <input type="hidden" name="operation" value="annuler" /><input type="hidden" name="reception_id" value={r.id} />

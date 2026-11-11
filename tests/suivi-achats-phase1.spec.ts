@@ -59,13 +59,14 @@ test.describe('Phase 1 — Suivi des achats', () => {
 
   test('les autres fichiers ne changent que par leurs liens et textes (réception, commande fournisseur, route marquer-commande)', () => {
     const changements: [string, (s: string) => string][] = [
-      ['src/pages/admin/reception.astro', s => s.replaceAll('/admin/transit', '/admin/achats').replace('le suivi transit</a>', 'le Suivi des achats</a>')],
       ['src/pages/admin/commande-fournisseur.astro', s => s.replaceAll('/admin/transit', '/admin/achats')],
       ['src/pages/api/admin/commande-fournisseur/marquer-commande.ts', s => s.replaceAll('/admin/transit', '/admin/achats')],
     ];
     for (const [f, t] of changements) expect(lire(f), f).toBe(t(avant(f)));
     // reception/new.astro : étendu volontairement (?shipment= renvoie vers l'écran de réception par commande) ; ses liens ont bien migré
     expect(lire('src/pages/admin/reception/new.astro')).not.toContain('/admin/transit');
+    // reception.astro : bandeau « réceptions suspendues » ajouté par la transition sécurisée (achats-transition.spec.ts) ; ses liens ont bien migré
+    expect(lire('src/pages/admin/reception.astro')).not.toContain('/admin/transit'); expect(lire('src/pages/admin/reception.astro')).toContain('le Suivi des achats</a>');
   });
 
   test('plus aucun lien interne vers /admin/transit en dehors des redirections', () => {

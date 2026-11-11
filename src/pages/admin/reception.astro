@@ -12,6 +12,7 @@ const successHisto    = successParam === 'historical';
 const successUpdate   = successParam === 'updated';
 const successDeleted  = successParam === 'deleted';
 const shipmentWarning = !!Astro.url.searchParams.get('shipment_warning');
+const suspendu = Astro.url.searchParams.get('err') === 'suspendu';
 
 const { data: receptions } = await supabaseAdmin
   .from('stock_receptions')
@@ -29,6 +30,9 @@ function formatPrice(p: number) {
 ---
 <AdminLayout title="Réceptions fournisseurs" activeNav="reception">
 
+  {suspendu && (
+    <div class="alert alert--error" role="alert" data-testid="reception-suspendue">Les réceptions sont temporairement suspendues (mise en service en cours). Rien n'a été enregistré : elles reprendront dès que le nouveau parcours aura été vérifié.</div>
+  )}
   {success && (
     <div class="alert alert--success" role="alert">
       Réception enregistrée — stock et PUMP mis à jour.

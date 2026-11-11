@@ -5,6 +5,7 @@ import { estUuid } from '../../../../lib/crm';
 import { achats, LIBELLE_RECEPTION } from '../../../../lib/achatsReception';
 import { traiterReception } from '../../../../lib/achatsActions';
 import { chargerCommande } from '../../../../lib/achatsCommande';
+import { etatTransition, ecritureAutorisee, MESSAGE_TRANSITION } from '../../../../lib/achatsTransition';
 import { todayReunionISO } from '../../../../lib/datetime';
 
 /**
@@ -17,6 +18,9 @@ if (!isAdmin(utilisateur)) return Astro.redirect('/admin');
 const { id } = Astro.params;
 if (!estUuid(id)) return Astro.redirect('/admin/achats?err=introuvable');
 
+// Garde SERVEUR (page ET envoi du formulaire) : tant que le service n'est pas rouvert, aucune réception, même depuis une page restée ouverte.
+const transition = await etatTransition();
+if (!ecritureAutorisee(transition)) return Astro.redirect(`/admin/achats/${id}?err=${encodeURIComponent(MESSAGE_TRANSITION[transition])}`);
 const c = await chargerCommande(id);
 if (!c) return Astro.redirect('/admin/achats?err=introuvable');
 const detail = `/admin/achats/${id}`;

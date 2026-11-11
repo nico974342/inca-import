@@ -3,6 +3,7 @@ import { createAuthClient, supabaseAdmin } from '../../../../lib/supabase';
 import { logAdminAction } from '../../../../lib/audit';
 import { todayReunionISO } from '../../../../lib/datetime';
 import { isAdmin } from '../../../../lib/roles';
+import { etatTransition, receptionLibreAutorisee } from '../../../../lib/achatsTransition';
 import { matchSupplierName } from '../../../../lib/constants';
 import { parseDlc } from '../../../../lib/dlc';
 
@@ -14,6 +15,9 @@ export const POST: APIRoute = async ({ request, cookies }) => {
   if (!user || !isAdmin(user)) {
     return new Response('Non autorisé', { status: 401 });
   }
+
+  // Garde SERVEUR de la transition : suspendu tant que le service n'est pas rouvert (migration appliquée sans réouverture, ou état invérifiable).
+  if (!receptionLibreAutorisee(await etatTransition())) return Response.redirect(new URL('/admin/reception?err=suspendu', request.url), 303);
 
   const form = await request.formData();
 
@@ -82,6 +86,8 @@ export const POST: APIRoute = async ({ request, cookies }) => {
 
   if (rpcErr || !receptionId) {
     console.error('reception_create RPC error:', rpcErr);
+    // Gel de la base (transition) : la base refuse l'exécution (permission denied, 42501) → message clair, rien n'a été enregistré.
+    if (rpcErr?.code === '42501') return Response.redirect(new URL('/admin/reception?err=suspendu', request.url), 303);
     return Response.redirect(new URL('/admin/reception/new', request.url), 303);
   }
 
