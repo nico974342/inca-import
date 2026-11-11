@@ -1,0 +1,148 @@
+---
+import AdminLayout from '../../components/admin/AdminLayout.astro';
+import PortefeuillesListe from '../../components/admin/PortefeuillesListe.astro';
+import { supabaseAdmin } from '../../lib/supabase';
+import { acteurDepuisSession, portefeuille } from '../../lib/portefeuille';
+import {
+  FILTRES, LIBELLE_FILTRE, parseFiltre, filtrerLignes, compterFiltres, compterParResponsable, agregerCommandes, decrireJournal, ACTIONS_JOURNAL, partieLocale,
+  type LigneClient, type EntreeJournal,
+} from '../../lib/portefeuillesVue';
+import { formatDateTimeReunion } from '../../lib/datetime';
+
+/**
+ * Portefeuilles : qui est responsable de quel client, et classement Groupe Incana / externe.
+ * Accessible au personnel (administrateur et commercial). Le commercial voit tous les clients et ne peut que PRENDRE EN CHARGE ceux qui n'ont
+ * pas de responsable ; l'administrateur attribue, transfère, retire et classe. Aucune donnée d'achat ni de marge n'est lue ici.
+ */
+const acteur = acteurDepuisSession((Astro.locals as any).user);
+if (!acteur) return Astro.redirect('/admin');
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const filtre = parseFiltre(Astro.url.searchParams.get('f'));
+const q = (Astro.url.searchParams.get('q') ?? '').slice(0, 80);
+const respParam = Astro.url.searchParams.get('responsable');
+const responsableId = respParam && UUID.test(respParam) ? respParam : null;
+const clientParam = Astro.url.searchParams.get('client');
+const clientHistorique = clientParam && UUID.test(clientParam) ? clientParam : null;
+const ok = Astro.url.searchParams.get('ok'); const err = Astro.url.searchParams.get('err');
+
+const requeteJournal = supabaseAdmin.from('admin_audit_logs').select('id, admin_email, action, target_id, target_label, details, created_at')
+  .in('action', [...ACTIONS_JOURNAL]).order('created_at', { ascending: false }).limit(clientHistorique ? 100 : 60);
+const [{ data: clientsBruts, error: errClients }, { data: commandes }, personnel, { data: journalBrut }] = await Promise.all([
+  supabaseAdmin.from('client_accounts').select('id, nom, societe, email, telephone, status, type, commune, created_at, responsable_id, responsable_email, rattachement_groupe').order('created_at', { ascending: false }),
+  supabaseAdmin.from('orders').select('client_id, created_at, status').not('client_id', 'is', null),
+  acteur.role === 'admin' ? portefeuille.personnel().catch(() => []) : Promise.resolve([]),
+  clientHistorique ? requeteJournal.eq('target_id', clientHistorique) : requeteJournal,
+]);
+
+const stats = agregerCommandes((commandes ?? []) as any[]);
+const toutes: LigneClient[] = (clientsBruts ?? []).map((c: any) => ({
+  ...c, nb_commandes: stats.get(c.id)?.nb ?? 0, derniere_commande: stats.get(c.id)?.derniere ?? null,
+}));
+// plus récent d'abord ; à égalité, les clients qui commandent passent avant les prospects
+const lignes = filtrerLignes(toutes, { filtre, q, viewerId: acteur.id, responsableId })
+  .sort((a, b) => (a.responsable_id == null ? 0 : 1) - (b.responsable_id == null ? 0 : 1) || (b.derniere_commande ?? '').localeCompare(a.derniere_commande ?? '') || b.created_at.localeCompare(a.created_at));
+const compteurs = compterFiltres(toutes, acteur.id);
+const parResp = compterParResponsable(toutes);
+const interne = toutes.filter(l => l.rattachement_groupe === 'interne').length;
+const externe = toutes.filter(l => l.rattachement_groupe === 'externe').length;
+const historique = ((journalBrut ?? []) as EntreeJournal[]).map(decrireJournal);
+
+const adresse = (o: Record<string, string | null>) => {
+  const p = new URLSearchParams();
+  const val = { f: filtre === 'tous' ? null : filtre, q: q || null, responsable: responsableId, client: clientHistorique, ...o } as Record<string, string | null>;
+  for (const [k, v] of Object.entries(val)) if (v) p.set(k, v);
+  const s = p.toString(); return `/admin/portefeuilles${s ? `?${s}` : ''}`;
+};
+const retour = adresse({});
+---
+<AdminLayout title="Portefeuilles" activeNav="portefeuilles">
+  <div class="pfp">
+    <header class="pfp-tete">
+      <h1 class="pfp-h1">Portefeuilles</h1>
+      <p class="pfp-intro">
+        {acteur.role === 'admin'
+          ? 'Attribuez les clients aux commerciaux et classez-les (Groupe Incana ou externe). Chaque changement est journalisé ; les commandes passées ne changent jamais.'
+          : 'Repérez les clients sans responsable et prenez en charge ceux que vous suivez. Chaque prise en charge est enregistrée à votre nom.'}
+      </p>
+    </header>
+
+    {ok && <div class="pfp-alerte pfp-alerte--ok" role="status" data-testid="pfp-ok">{ok}</div>}
+    {err && <div class="pfp-alerte pfp-alerte--err" role="alert" data-testid="pfp-err">{err}</div>}
+    {errClients && <div class="pfp-alerte pfp-alerte--err" role="alert">Chargement des clients impossible : réessayez.</div>}
+
+    <div class="pfp-tuiles" data-testid="pfp-tuiles">
+      <a class={`pfp-tuile ${compteurs.non_attribues > 0 ? 'pfp-tuile--alerte' : ''}`} href={adresse({ f: 'non_attribues', responsable: null })} data-testid="tuile-non-attribues"><strong>{compteurs.non_attribues}</strong><span>non attribués</span></a>
+      <a class={`pfp-tuile ${compteurs.non_classes > 0 ? 'pfp-tuile--alerte' : ''}`} href={adresse({ f: 'non_classes', responsable: null })} data-testid="tuile-non-classes"><strong>{compteurs.non_classes}</strong><span>non classés</span></a>
+      <a class="pfp-tuile" href={adresse({ f: 'interne', responsable: null })} data-testid="tuile-interne"><strong>{interne}</strong><span>Groupe Incana</span></a>
+      <a class="pfp-tuile" href={adresse({ f: 'externe', responsable: null })} data-testid="tuile-externe"><strong>{externe}</strong><span>externes</span></a>
+    </div>
+
+    <nav class="pfp-filtres" aria-label="Filtres">
+      {FILTRES.map(f => (
+        <a class={`pfp-chip ${filtre === f && !responsableId ? 'pfp-chip--actif' : ''}`} href={adresse({ f: f === 'tous' ? null : f, responsable: null })} data-testid={`filtre-${f}`}
+           aria-current={filtre === f && !responsableId ? 'true' : undefined}>{LIBELLE_FILTRE[f]} <span class="pfp-n">{compteurs[f]}</span></a>
+      ))}
+    </nav>
+
+    <form method="get" class="pfp-recherche" role="search">
+      {filtre !== 'tous' && <input type="hidden" name="f" value={filtre} />}
+      {responsableId && <input type="hidden" name="responsable" value={responsableId} />}
+      <input type="search" name="q" value={q} placeholder="Nom, société, commune, téléphone…" aria-label="Rechercher un client" data-testid="pfp-recherche" />
+      <button type="submit" class="btn btn-ghost">Rechercher</button>
+    </form>
+
+    <div class="pfp-resp" aria-label="Par responsable">
+      {parResp.map(r => (
+        <a class={`pfp-pilule ${r.id && responsableId === r.id ? 'pfp-pilule--actif' : ''}`} href={r.id ? adresse({ responsable: r.id, f: null }) : adresse({ f: 'non_attribues', responsable: null })}>
+          {r.id ? partieLocale(r.email) : 'Non attribué'} <span class="pfp-n">{r.n}</span>
+        </a>
+      ))}
+    </div>
+
+    <PortefeuillesListe lignes={lignes} personnel={personnel as any} viewer={{ id: acteur.id, role: acteur.role }} retour={retour} maintenant={new Date().toISOString()} />
+
+    <details class="pfp-histo" open={!!clientHistorique} data-testid="pfp-histo">
+      <summary>Historique des changements{clientHistorique ? ' de ce client' : ' (60 derniers)'} <span class="pfp-n">{historique.length}</span></summary>
+      {clientHistorique && <p class="pfp-note"><a href={adresse({ client: null })}>Voir tout l'historique</a></p>}
+      {historique.length === 0 ? <p class="pfp-note">Aucun changement enregistré.</p> : (
+        <ul class="pfp-histo-liste">
+          {historique.map(h => (
+            <li data-testid="pfp-histo-ligne">
+              <div class="pfp-histo-t"><a href={adresse({ client: h.clientId })}>{h.client}</a> — {h.texte}</div>
+              <div class="pfp-histo-m">{formatDateTimeReunion(h.quand)} · par {partieLocale(h.par)}{h.motif ? ` · motif : ${h.motif}` : ''}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
+  </div>
+</AdminLayout>
+
+<style>
+  .pfp { display: grid; gap: var(--space-4); max-width: 900px; }
+  .pfp-h1 { margin: 0 0 var(--space-1); font-size: var(--text-2xl); }
+  .pfp-intro, .pfp-note { margin: 0; color: var(--color-muted); font-size: var(--text-sm); }
+  .pfp-alerte { padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); font-weight: 600; font-size: var(--text-sm); }
+  .pfp-alerte--ok { background: oklch(0.95 0.06 150); border: 1px solid oklch(0.8 0.1 150); }
+  .pfp-alerte--err { background: oklch(0.95 0.05 25); border: 1px solid oklch(0.8 0.1 25); }
+  .pfp-tuiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-2); }
+  @media (min-width: 640px) { .pfp-tuiles { grid-template-columns: repeat(4, 1fr); } }
+  .pfp-tuile { display: grid; gap: 2px; padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg); text-decoration: none; color: var(--color-ink); min-height: 64px; }
+  .pfp-tuile strong { font-size: var(--text-2xl); line-height: 1; }
+  .pfp-tuile span { font-size: var(--text-sm); color: var(--color-muted); }
+  .pfp-tuile--alerte { border-color: oklch(0.78 0.14 60); background: oklch(0.97 0.04 70); }
+  .pfp-filtres, .pfp-resp { display: flex; gap: var(--space-2); overflow-x: auto; padding-bottom: var(--space-1); -webkit-overflow-scrolling: touch; }
+  .pfp-chip, .pfp-pilule { flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 var(--space-3); border: 1px solid var(--color-border-strong); border-radius: var(--radius-full); text-decoration: none; color: var(--color-ink); font-size: var(--text-sm); background: var(--color-bg); }
+  .pfp-chip--actif, .pfp-pilule--actif { background: var(--color-ink); color: white; border-color: var(--color-ink); }
+  .pfp-n { font-weight: 700; opacity: 0.75; }
+  .pfp-recherche { display: flex; gap: var(--space-2); }
+  .pfp-recherche input { flex: 1; min-width: 0; min-height: 48px; padding: 8px 12px; font: inherit; border: 2px solid var(--color-border-strong); border-radius: var(--radius-md); }
+  .pfp-recherche .btn { min-height: 48px; }
+  .pfp-histo { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); background: var(--color-bg); }
+  .pfp-histo summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; gap: var(--space-2); }
+  .pfp-histo-liste { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: grid; gap: var(--space-3); }
+  .pfp-histo-t { font-size: var(--text-sm); overflow-wrap: anywhere; }
+  .pfp-histo-t a { color: var(--color-ink); font-weight: 600; }
+  .pfp-histo-m { font-size: var(--text-xs); color: var(--color-muted); }
+</style>

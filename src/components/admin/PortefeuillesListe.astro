@@ -1,0 +1,262 @@
+---
+import { LIBELLE_STATUT, LIBELLE_GROUPE, nomAffiche, partieLocale, ancienneteCommande, type LigneClient } from '../../lib/portefeuillesVue';
+
+/**
+ * Liste des clients et prospects avec leur responsable commercial et leur classement Groupe Incana / externe, et les actions groupées.
+ * ADMINISTRATEUR : coche n'importe quel client → Attribuer / transférer, Classer, Retirer le responsable.
+ * COMMERCIAL : ne peut cocher que les clients SANS responsable → Prendre en charge (la base refuse tout le reste).
+ * Chaque action passe par une fenêtre de confirmation (case « Je confirme » obligatoire, vérifiée aussi côté serveur) ; les formulaires
+ * ne transportent que des choix : l'identité et le rôle viennent de la session serveur.
+ */
+interface Props {
+  lignes: LigneClient[];
+  personnel: { id: string; email: string; role: 'admin' | 'commercial' }[];
+  viewer: { id: string; role: 'admin' | 'commercial' };
+  retour: string;
+  maintenant: string;
+}
+const { lignes, personnel, viewer, retour, maintenant } = Astro.props;
+const admin = viewer.role === 'admin';
+const now = new Date(maintenant);
+const selectionnable = (l: LigneClient) => admin || l.responsable_id == null;
+const ACTION = '/api/admin/portefeuilles/action';
+const MOTIFS = ['Portefeuille initial', 'Réorganisation des portefeuilles', 'Départ du commercial', 'Demande du commercial'];
+const GROUPES = [['interne', 'Interne — Groupe Incana'], ['externe', 'Externe — client indépendant'], ['non_classe', 'Non classé']] as const;
+---
+<section class="pf" data-testid="pf" data-role={viewer.role}>
+  {lignes.length === 0 ? (
+    <p class="pf-vide" data-testid="pf-vide">Aucun client ne correspond à ces critères.</p>
+  ) : (
+    <>
+      <div class="pf-entete">
+        <label class="pf-toutes"><input type="checkbox" id="pf-toutes" data-testid="pf-toutes" /> <span>Tout sélectionner ({lignes.filter(selectionnable).length})</span></label>
+        <span class="pf-total">{lignes.length} client{lignes.length > 1 ? 's' : ''}</span>
+      </div>
+      <ul class="pf-liste">
+        {lignes.map(l => (
+          <li class="pf-ligne" data-testid="pf-ligne" data-id={l.id} data-attribue={l.responsable_id ? '1' : '0'} data-resp={l.responsable_email ?? ''} data-groupe={l.rattachement_groupe ?? ''}>
+            {selectionnable(l)
+              ? <label class="pf-coche" aria-label={`Sélectionner ${nomAffiche(l)}`}><input type="checkbox" class="pf-case" data-testid="pf-case" value={l.id} /></label>
+              : <span class="pf-coche pf-coche--vide" aria-hidden="true"></span>}
+            <div class="pf-corps">
+              <div class="pf-titre">
+                <a href={`/admin/clients/${l.id}`} class="pf-nom">{nomAffiche(l)}</a>
+                <span class={`pf-badge pf-badge--${l.status}`}>{LIBELLE_STATUT[l.status] ?? l.status}</span>
+              </div>
+              {l.societe?.trim() && l.nom && <div class="pf-sous">{l.nom}</div>}
+              <div class="pf-meta">
+                {[l.commune, l.type === 'station_service' ? 'Station' : l.type === 'superette' ? 'Supérette' : null].filter(Boolean).join(' · ') || '—'}
+                · {ancienneteCommande(l.derniere_commande, now)}{l.nb_commandes > 0 ? ` (${l.nb_commandes} cmd)` : ''}
+              </div>
+              <div class="pf-etiquettes">
+                {l.responsable_id
+                  ? <span class="pf-resp" data-testid="pf-resp">{partieLocale(l.responsable_email)}</span>
+                  : <span class="pf-resp pf-resp--aucun" data-testid="pf-resp">Non attribué</span>}
+                <span class={`pf-groupe pf-groupe--${l.rattachement_groupe ?? 'aucun'}`} data-testid="pf-groupe">{LIBELLE_GROUPE(l.rattachement_groupe)}</span>
+                {l.telephone && <a href={`tel:${l.telephone.replace(/[^+\d]/g, '')}`} class="pf-tel" aria-label={`Appeler ${nomAffiche(l)}`}>📞 {l.telephone}</a>}
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      <div class="pf-barre" data-testid="pf-barre" hidden>
+        <span class="pf-compte" data-testid="pf-compte" aria-live="polite">0 sélectionné</span>
+        <div class="pf-barre-actions">
+          {admin ? (
+            <>
+              <button type="button" class="btn btn-primary" data-ouvre="pf-dlg-attribuer" data-testid="pf-ouvrir-attribuer">Attribuer…</button>
+              <button type="button" class="btn btn-ghost" data-ouvre="pf-dlg-classer" data-testid="pf-ouvrir-classer">Classer…</button>
+              <button type="button" class="btn btn-ghost pf-retirer" data-ouvre="pf-dlg-retirer" data-testid="pf-ouvrir-retirer">Retirer le responsable</button>
+            </>
+          ) : (
+            <button type="button" class="btn btn-primary" data-ouvre="pf-dlg-prendre" data-testid="pf-ouvrir-prendre">Prendre en charge</button>
+          )}
+        </div>
+      </div>
+    </>
+  )}
+
+  {admin && (
+    <>
+      <dialog id="pf-dlg-attribuer" class="pf-dlg" aria-labelledby="pf-t-attribuer" data-testid="pf-dlg-attribuer">
+        <form method="post" action={ACTION} class="pf-dlg-form">
+          <input type="hidden" name="retour" value={retour} />
+          <h3 id="pf-t-attribuer" class="pf-dlg-titre">Attribuer ou transférer</h3>
+          <p class="pf-resume" data-pf-resume data-testid="pf-resume"></p>
+          <label class="pf-champ">Nouveau responsable
+            <select name="responsable_id" required data-testid="pf-responsable">
+              <option value="">Choisir…</option>
+              {personnel.map(p => <option value={p.id}>{p.email} — {p.role === 'admin' ? 'Administrateur' : 'Commercial'}</option>)}
+            </select>
+          </label>
+          <label class="pf-champ">Motif (obligatoire)
+            <input type="text" name="motif" required minlength="3" maxlength="300" autocomplete="off" data-testid="pf-motif" />
+          </label>
+          <div class="pf-motifs">{MOTIFS.map(m => <button type="button" class="pf-chip" data-motif={m}>{m}</button>)}</div>
+          <label class="pf-confirme"><input type="checkbox" name="confirme" value="oui" required data-testid="pf-confirme" /> <span>Je confirme cette attribution.</span></label>
+          <div class="pf-dlg-actions">
+            <button type="button" class="btn btn-ghost" data-ferme>Annuler</button>
+            <button type="submit" name="operation" value="attribuer" class="btn btn-primary" data-testid="pf-valider-attribuer">Confirmer</button>
+          </div>
+        </form>
+      </dialog>
+
+      <dialog id="pf-dlg-classer" class="pf-dlg" aria-labelledby="pf-t-classer" data-testid="pf-dlg-classer">
+        <form method="post" action={ACTION} class="pf-dlg-form">
+          <input type="hidden" name="retour" value={retour} />
+          <h3 id="pf-t-classer" class="pf-dlg-titre">Classer les clients</h3>
+          <p class="pf-resume" data-pf-resume data-testid="pf-resume"></p>
+          <fieldset class="pf-radios">
+            <legend>Classification</legend>
+            {GROUPES.map(([v, t]) => <label class="pf-radio"><input type="radio" name="valeur" value={v} required data-testid={`pf-valeur-${v}`} /> <span>{t}</span></label>)}
+          </fieldset>
+          <p class="pf-note">Les commandes déjà passées ne sont pas modifiées : seule la fiche client change.</p>
+          <label class="pf-champ">Motif (facultatif)<input type="text" name="motif" maxlength="300" autocomplete="off" /></label>
+          <label class="pf-confirme"><input type="checkbox" name="confirme" value="oui" required data-testid="pf-confirme" /> <span>Je confirme ce classement.</span></label>
+          <div class="pf-dlg-actions">
+            <button type="button" class="btn btn-ghost" data-ferme>Annuler</button>
+            <button type="submit" name="operation" value="classer" class="btn btn-primary" data-testid="pf-valider-classer">Confirmer</button>
+          </div>
+        </form>
+      </dialog>
+
+      <dialog id="pf-dlg-retirer" class="pf-dlg" aria-labelledby="pf-t-retirer" data-testid="pf-dlg-retirer">
+        <form method="post" action={ACTION} class="pf-dlg-form">
+          <input type="hidden" name="retour" value={retour} />
+          <h3 id="pf-t-retirer" class="pf-dlg-titre">Retirer le responsable</h3>
+          <p class="pf-resume" data-pf-resume data-testid="pf-resume"></p>
+          <p class="pf-note">Les clients redeviennent « non attribués ». Les commandes passées gardent leur responsable d'origine.</p>
+          <label class="pf-champ">Motif (obligatoire)<input type="text" name="motif" required minlength="3" maxlength="300" autocomplete="off" data-testid="pf-motif" /></label>
+          <div class="pf-motifs">{MOTIFS.map(m => <button type="button" class="pf-chip" data-motif={m}>{m}</button>)}</div>
+          <label class="pf-confirme"><input type="checkbox" name="confirme" value="oui" required data-testid="pf-confirme" /> <span>Je confirme ce retrait.</span></label>
+          <div class="pf-dlg-actions">
+            <button type="button" class="btn btn-ghost" data-ferme>Annuler</button>
+            <button type="submit" name="operation" value="retirer" class="btn btn-primary" data-testid="pf-valider-retirer">Confirmer</button>
+          </div>
+        </form>
+      </dialog>
+    </>
+  )}
+
+  {!admin && (
+    <dialog id="pf-dlg-prendre" class="pf-dlg" aria-labelledby="pf-t-prendre" data-testid="pf-dlg-prendre">
+      <form method="post" action={ACTION} class="pf-dlg-form">
+        <input type="hidden" name="retour" value={retour} />
+        <h3 id="pf-t-prendre" class="pf-dlg-titre">Prendre en charge</h3>
+        <p class="pf-resume" data-pf-resume data-testid="pf-resume"></p>
+        <p class="pf-note">Vous deviendrez le responsable de ces clients. Le changement est enregistré à votre nom.</p>
+        <label class="pf-confirme"><input type="checkbox" name="confirme" value="oui" required data-testid="pf-confirme" /> <span>Je confirme la prise en charge.</span></label>
+        <div class="pf-dlg-actions">
+          <button type="button" class="btn btn-ghost" data-ferme>Annuler</button>
+          <button type="submit" name="operation" value="prendre" class="btn btn-primary" data-testid="pf-valider-prendre">Confirmer</button>
+        </div>
+      </form>
+    </dialog>
+  )}
+</section>
+
+<script>
+  // Sélection, barre d'actions, fenêtres de confirmation. Les formulaires reçoivent les identifiants cochés au moment de l'ouverture.
+  const racine = document.querySelector<HTMLElement>('[data-testid="pf"]');
+  if (racine) {
+    const cases = () => [...racine.querySelectorAll<HTMLInputElement>('input.pf-case')];
+    const cochees = () => cases().filter(c => c.checked);
+    const barre = racine.querySelector<HTMLElement>('[data-testid="pf-barre"]');
+    const compte = racine.querySelector<HTMLElement>('[data-testid="pf-compte"]');
+    const toutes = racine.querySelector<HTMLInputElement>('#pf-toutes');
+    const ligneDe = (c: HTMLInputElement) => c.closest<HTMLElement>('[data-testid="pf-ligne"]')!;
+
+    const majBarre = () => {
+      const n = cochees().length;
+      if (barre) barre.hidden = n === 0;
+      if (compte) compte.textContent = `${n} sélectionné${n > 1 ? 's' : ''}`;
+      if (toutes) toutes.checked = n > 0 && n === cases().length;
+    };
+    racine.addEventListener('change', e => { if ((e.target as HTMLElement).classList?.contains('pf-case')) majBarre(); });
+    toutes?.addEventListener('change', () => { cases().forEach(c => (c.checked = toutes.checked)); majBarre(); });
+
+    const resume = (dlg: HTMLDialogElement) => {
+      const lignes = cochees().map(ligneDe);
+      const libres = lignes.filter(l => l.dataset.attribue === '0').length;
+      const parResp = new Map<string, number>();
+      lignes.filter(l => l.dataset.attribue === '1').forEach(l => parResp.set(l.dataset.resp ?? '', (parResp.get(l.dataset.resp ?? '') ?? 0) + 1));
+      const parties = [`${lignes.length} client${lignes.length > 1 ? 's' : ''} sélectionné${lignes.length > 1 ? 's' : ''}`];
+      if (dlg.id === 'pf-dlg-attribuer') {
+        if (libres) parties.push(`${libres} sans responsable (attribution)`);
+        if (parResp.size) parties.push(`déjà confiés (transfert) : ${[...parResp].map(([e, n]) => `${e.split('@')[0]} ×${n}`).join(', ')}`);
+      } else if (dlg.id === 'pf-dlg-retirer') {
+        if (libres) parties.push(`${libres} n'ont pas de responsable (ils seront refusés)`);
+      }
+      dlg.querySelectorAll<HTMLElement>('[data-pf-resume]').forEach(p => (p.textContent = parties.join(' — ')));
+    };
+    const ouvrir = (id: string) => {
+      const dlg = document.getElementById(id) as HTMLDialogElement | null; const form = dlg?.querySelector('form');
+      if (!dlg || !form || cochees().length === 0) return;
+      form.querySelectorAll('input[name="client_ids"]').forEach(i => i.remove());
+      cochees().forEach(c => { const h = document.createElement('input'); h.type = 'hidden'; h.name = 'client_ids'; h.value = c.value; form.append(h); });
+      resume(dlg); dlg.showModal();
+    };
+    racine.querySelectorAll<HTMLButtonElement>('button[data-ouvre]').forEach(b => b.addEventListener('click', () => ouvrir(b.dataset.ouvre ?? '')));
+    racine.querySelectorAll<HTMLDialogElement>('dialog.pf-dlg').forEach(d => {
+      d.querySelectorAll('[data-ferme]').forEach(b => b.addEventListener('click', () => d.close()));
+      d.addEventListener('click', e => { if (e.target === d) d.close(); });
+      d.querySelectorAll<HTMLButtonElement>('button[data-motif]').forEach(b => b.addEventListener('click', () => {
+        const champ = d.querySelector<HTMLInputElement>('input[name="motif"]'); if (champ) { champ.value = b.dataset.motif ?? ''; champ.focus(); }
+      }));
+    });
+  }
+</script>
+
+<style>
+  .pf { display: grid; gap: var(--space-3); }
+  .pf-vide { color: var(--color-muted); padding: var(--space-6) 0; text-align: center; }
+  .pf-entete { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); font-size: var(--text-sm); color: var(--color-muted); }
+  .pf-toutes { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 44px; cursor: pointer; }
+  .pf-toutes input, .pf-case { width: 22px; height: 22px; }
+  .pf-liste { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); padding-bottom: 88px; }
+  .pf-ligne { display: flex; gap: var(--space-2); align-items: flex-start; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3) var(--space-2) 0; }
+  .pf-coche { flex: none; width: 48px; min-height: 48px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .pf-coche--vide { cursor: default; }
+  .pf-corps { min-width: 0; flex: 1; display: grid; gap: 2px; padding-top: var(--space-1); }
+  .pf-titre { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+  .pf-nom { font-weight: 600; color: var(--color-ink); text-decoration: none; overflow-wrap: anywhere; }
+  .pf-sous, .pf-meta { font-size: var(--text-sm); color: var(--color-muted); }
+  .pf-etiquettes { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; margin-top: var(--space-1); }
+  .pf-badge, .pf-resp, .pf-groupe { font-size: var(--text-xs); font-weight: 600; padding: 2px 8px; border-radius: var(--radius-full); border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-ink); }
+  .pf-badge--actif { background: oklch(0.95 0.06 150); border-color: oklch(0.8 0.1 150); }
+  .pf-badge--prospect { background: oklch(0.95 0.05 250); border-color: oklch(0.82 0.08 250); }
+  .pf-badge--en_attente { background: oklch(0.96 0.07 85); border-color: oklch(0.82 0.12 85); }
+  .pf-badge--suspendu { background: oklch(0.95 0.05 25); border-color: oklch(0.8 0.1 25); }
+  .pf-resp--aucun { background: oklch(0.96 0.07 70); border-color: oklch(0.78 0.14 60); color: oklch(0.4 0.12 50); }
+  .pf-groupe--aucun { color: var(--color-muted); border-style: dashed; }
+  .pf-groupe--interne { background: oklch(0.94 0.04 210); border-color: oklch(0.78 0.08 210); }
+  .pf-groupe--externe { background: oklch(0.95 0.05 120); border-color: oklch(0.8 0.09 120); }
+  .pf-tel { font-size: var(--text-sm); color: var(--color-primary-deep); text-decoration: none; min-height: 32px; display: inline-flex; align-items: center; }
+  .pf-barre { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap;
+    padding: var(--space-3) var(--space-4); background: var(--color-bg); border-top: 2px solid var(--color-border-strong); box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08); }
+  .pf-barre[hidden] { display: none; }
+  .pf-compte { font-weight: 600; }
+  .pf-barre-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+  .pf-barre .btn { min-height: 44px; }
+  .pf-retirer { color: var(--color-danger); }
+  @media (min-width: 900px) { .pf-barre { left: 220px; } }
+  .pf-dlg { width: min(92vw, 520px); max-height: 92vh; overflow-y: auto; margin: auto; padding: 0; border: 2px solid var(--color-border-strong); border-radius: var(--radius-md); background: var(--color-bg); color: var(--color-ink); }
+  .pf-dlg::backdrop { background: rgba(0, 0, 0, 0.45); }
+  .pf-dlg-form { display: grid; gap: var(--space-3); padding: var(--space-5); }
+  .pf-dlg-titre { margin: 0; font-size: var(--text-lg); }
+  .pf-resume { margin: 0; font-size: var(--text-sm); color: var(--color-muted); }
+  .pf-note { margin: 0; font-size: var(--text-sm); color: var(--color-muted); }
+  .pf-champ { display: grid; gap: var(--space-1); font-size: var(--text-sm); font-weight: 600; }
+  .pf-champ select, .pf-champ input { width: 100%; box-sizing: border-box; min-height: 48px; padding: 8px 12px; font: inherit; border: 2px solid var(--color-border-strong); border-radius: var(--radius-md); background: var(--color-bg); }
+  .pf-motifs { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  .pf-chip { min-height: 40px; padding: 4px 12px; font: inherit; font-size: var(--text-sm); border: 1px solid var(--color-border-strong); border-radius: var(--radius-full); background: var(--color-surface); cursor: pointer; }
+  .pf-radios { border: 0; padding: 0; margin: 0; display: grid; gap: var(--space-2); }
+  .pf-radios legend { font-size: var(--text-sm); font-weight: 600; margin-bottom: var(--space-1); }
+  .pf-radio { display: flex; align-items: center; gap: var(--space-2); min-height: 48px; padding: 0 var(--space-3); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); cursor: pointer; }
+  .pf-radio input, .pf-confirme input { width: 22px; height: 22px; flex: none; }
+  .pf-confirme { display: flex; align-items: flex-start; gap: var(--space-2); font-size: var(--text-sm); font-weight: 600; }
+  .pf-dlg-actions { display: grid; gap: var(--space-2); }
+  .pf-dlg-actions .btn { min-height: 48px; justify-content: center; }
+  @media (min-width: 560px) { .pf-dlg-actions { grid-template-columns: 1fr 1fr; } }
+</style>
