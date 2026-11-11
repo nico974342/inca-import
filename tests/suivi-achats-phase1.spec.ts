@@ -86,8 +86,9 @@ test.describe('Phase 1 — Suivi des achats', () => {
       const nav = src.slice(src.indexOf('<nav class="sidebar-nav">'), src.indexOf('</nav>'));
       for (const l of nav.split('\n')) {
         const g = l.match(/\{(viewerIsAdmin|viewerIsStaff) && (\(|<p)/);
-        const titre = l.match(/<p class="nav-group"[^>]*>([^<]+)<\/p>/);
-        if (titre) { titres.push({ label: titre[1], garde: g ? g[1] : 'tous', avantLien: null }); continue; }
+        // avant : simple titre <p class="nav-group"> ; depuis : bouton de rubrique repliable <span class="nav-groupe-label">
+        const titre = l.match(/<p class="nav-group"[^>]*>([^<]+)<\/p>/) ?? l.match(/<span class="nav-groupe-label">([^<]+)<\/span>/);
+        if (titre) { titres.push({ label: titre[1], garde: g ? g[1] : garde, avantLien: null }); continue; }
         if (g && g[2] === '(') garde = g[1] === 'viewerIsAdmin' ? 'admin' : 'staff';
         const a = l.match(/<a href="([^"]+)" class=\{`nav-link/);
         if (a) { liens.push({ href: a[1], garde }); dernier = a[1]; }
@@ -107,10 +108,10 @@ test.describe('Phase 1 — Suivi des achats', () => {
     expect(ordre).toEqual(['/admin', '/admin/aujourdhui', '/admin/clients', '/admin/portefeuilles', '/admin/activites', '/admin/tarifs', '/admin/commande-rapide', '/admin/preparation', '/admin/commandes', '/admin/livraison',
       '/admin/produits', '/admin/stocks', '/admin/commande-fournisseur', '/admin/achats', '/admin/reception', '/admin/fournisseurs', '/admin/marges', '/admin/journal']);
     expect(nouveau.titres).toEqual([
-      { label: 'Ventes', garde: 'tous', avantLien: null }, { label: 'Achats et stock', garde: 'tous', avantLien: null }, { label: 'Gestion', garde: 'viewerIsAdmin', avantLien: null }]);
-    // Le titre « Gestion » (marges, journal : administrateur seulement) est lui-même réservé à l'administrateur
+      { label: 'Ventes', garde: 'tous', avantLien: null }, { label: 'Stocks', garde: 'tous', avantLien: null }, { label: 'Achats', garde: 'admin', avantLien: null }, { label: 'Gestion', garde: 'admin', avantLien: null }]);
+    // Les rubriques « Achats » et « Gestion » (liens réservés à l'administrateur) sont elles-mêmes réservées à l'administrateur : le commercial n'en voit pas même le titre
     const src = lire('src/components/admin/AdminLayout.astro');
-    expect(src).toMatch(/\{viewerIsAdmin && <p class="nav-group" role="presentation">Gestion<\/p>\}/);
+    for (const g of ['achats', 'gestion']) expect(src).toMatch(new RegExp(`\\{viewerIsAdmin && \\(\\n\\s+<div class="nav-groupe" data-groupe="${g}"`));
     expect(src).toContain('Suivi des achats');
     expect(src).not.toMatch(/>\s*Transit\s*</);
     expect(src).toMatch(/activeNav\?: [^\n]*'achats'/); expect(src).not.toMatch(/activeNav\?: [^\n]*'transit'/);
