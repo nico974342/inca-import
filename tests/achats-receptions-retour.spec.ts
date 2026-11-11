@@ -136,3 +136,45 @@ test.describe('Contrôles avant/après (lecture seule)', () => {
     await db.close();
   });
 });
+
+test.describe('Relevé de production avant/après (lecture seule)', () => {
+  const sql = readFileSync('supabase/verifications/achats_receptions_partielles_releve.sql', 'utf8');
+  const sections = sql.split(/-- ═══ \d\./).slice(1).map(b => b.slice(b.indexOf('\n') + 1));
+  test('le relevé est en lecture seule ; les sections 1 à 6 sont identiques avant et après la migration ; seule la section 7 (objets de la migration) change', async () => {
+    expect(sections).toHaveLength(7);
+    expect(sql.replace(/--.*$/gm, '').replace(/'[^']*'/g, "''")).not.toMatch(/\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE)\b/i);
+    const db = await baseAchats(false);
+    const p = await produit(db, 'Cola', 100); await commande(db, [{ p, q: 100, recu: 30 }]); await commande(db, [{ p, q: 20, recu: 20 }], { statut: 'receptionne' });
+    expect((await srv(db, `SELECT reception_create('Fournisseur', now()::date, 'ancienne', true, $1::jsonb)`, [JSON.stringify([{ product_id: p, quantity: 30, unit_cost_ht: 4 }])])).error).toBe('');
+    const lire = async () => { const r: any[] = []; for (const b of sections) r.push((await db.exec(b)).map(x => x.rows)); return r; };
+    const avant = await lire();
+    expect(avant[6][1][0]).toEqual({ fonctions: 0, colonnes: 0, tables_: 0 }); expect(avant[6][0]).toEqual([]);   // rien de la migration n'existe encore
+    await db.exec(MIGRATION);
+    const apres = await lire();
+    for (let i = 0; i < 6; i++) expect(apres[i], `section ${i + 1}`).toEqual(avant[i]);                      // commandes, lignes, réceptions, stocks, historiques, permissions : identiques
+    expect(apres[6][1][0]).toEqual({ fonctions: 10, colonnes: 11, tables_: 2 }); expect(apres[6][0]).toHaveLength(7);
+    expect(avant[3][0].length).toBeGreaterThan(0); expect(avant[2][0].length).toBe(1);                       // le relevé contient bien des données
+    await db.close();
+  });
+});
+
+test.describe('Retour arrière — cas limites', () => {
+  test('même une réception ANNULÉE (archivée) interdit le retrait complet : la trace est conservée ; et un retrait fait avant toute réception permet de ré-appliquer la migration', async () => {
+    const db = await baseAchats(true);
+    const p = await produit(db, 'Cola', 0); const c = await commande(db, [{ p, q: 100 }]);
+    const r = await recevoir(db, c.s, c.ids[0], 40); expect(r.error).toBe('');
+    expect((await srv(db, `SELECT reception_commande_annuler($1::uuid, 'erreur de saisie', $2::uuid, 'admin@inca.re', 'admin')`, [r.rows[0].r.reception_id, ADMIN])).error).toBe('');
+    let erreur = ''; try { await db.exec(RETOUR); } catch (e: any) { erreur = String(e.message ?? e); }
+    await db.exec('ROLLBACK');
+    expect(erreur).toContain('RETOUR_REFUSE');                                                             // le stock est revenu à 0, mais l'archive et le journal restent : on ne les supprime pas
+    expect((await un(db, `SELECT count(*)::int n FROM stock_reception_items_annulees`)).n).toBe(1);
+    await db.close();
+
+    const db2 = await baseAchats(true);                                                                    // aucune réception : retrait puis nouvelle application
+    const p2 = await produit(db2, 'Cola', 5); await commande(db2, [{ p: p2, q: 10, recu: 4 }]);
+    const avant = await donnees(db2);
+    await db2.exec(RETOUR); await db2.exec(MIGRATION);
+    expect(await donnees(db2)).toEqual(avant);
+    await db2.close();
+  });
+});

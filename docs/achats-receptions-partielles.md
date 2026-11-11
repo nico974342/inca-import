@@ -63,13 +63,22 @@ Ces empreintes sont celles du 11 novembre 2026. **À relever de nouveau juste av
 
 Aucune commande n'est rouverte ni modifiée. Les 40 réceptions existantes restent des réceptions historiques (non rattachées à une commande) et ne génèrent aucune entrée en stock supplémentaire.
 
+## 3 bis. Rejeu des 3 commandes réelles et compatibilité avec l'interface actuelle
+
+**Rejeu local fidèle** (les 44 lignes réelles relevées en lecture seule, chargées dans une base locale avec leurs réceptions, puis migration) : toutes les données restent identiques, le stock total ne bouge pas, aucun cumul n'est modifié. États calculés : MSMU6919953 « Réceptionnée intégralement » (2 291 sur 2 291, `historique: false`) ; FA/1 « En attente » (0 sur 590) ; la commande en dédouanement « En attente » (0 sur 1 300). Aucune quantité n'est déduite : le cumul est celui qui est enregistré. Pour MSMU6919953, les 21 lignes ont un cumul égal, produit par produit, aux quantités des réceptions déjà enregistrées pour son fournisseur (2 291 contre 2 291).
+
+**Avec la migration seule (interface actuelle encore en ligne)** — rejoué avec les appels de l'ancienne interface (`tests/achats-receptions-ancienne-interface.spec.ts`) :
+- inchangé : créer, corriger et supprimer une réception hors commande ; corriger l'ancienne réception ; créer, modifier et supprimer une commande non reçue ; changer son statut logistique ; ajuster le stock à la main.
+- **change, volontairement** : (a) l'ancien écran « réceptionner cette commande » crée la réception (stock + quantité) mais son écriture séparée du cumul est refusée (`CUMUL_PROTEGE`) ; l'ancienne interface affiche alors son avertissement existant (« shipment_warning »). (b) l'ancien écran de modification d'une commande **déjà reçue** échoue au lieu de remettre silencieusement le cumul à zéro. Les deux commandes ouvertes (FA/1, dédouanement) restent modifiables.
+- **Conséquence pratique** : entre la migration et le déploiement de la nouvelle interface, **ne pas utiliser le bouton de réception d'une commande** (la réception serait comptée en stock sans mise à jour du cumul de la commande). Les réceptions hors commande et tout le reste fonctionnent normalement. Fenêtre à garder la plus courte possible ; si une telle réception a lieu quand même, elle reste visible dans l'historique des réceptions ; le cumul de la commande ne pouvant plus s'écrire à la main, la régularisation serait une correction SQL préparée et validée avec vous au cas par cas.
+
 ## 4. Procédure de mise en production (proposée — chaque étape attend votre accord)
 
 1. Confirmation d'une sauvegarde récente (plan Supabase Pro : sauvegarde physique ; date et heure à me communiquer).
 2. Vérifier l'empreinte SHA-256 du fichier (section 1).
-3. Lancer en lecture seule la section 1 du fichier de contrôle : noter les résultats « avant ».
+3. Lancer en lecture seule le **relevé** (`supabase/verifications/achats_receptions_partielles_releve.sql`, 7 sections : commandes, lignes et cumuls, réceptions, stocks, historiques, permissions, objets de la migration) et la section 1 du fichier de contrôle ; conserver les résultats « avant ».
 4. Appliquer **uniquement** `achats_receptions_partielles.sql` (une transaction, durée attendue : moins d'une seconde ; les `ALTER TABLE` prennent un verrou bref sur 4 petites tables).
-5. Relancer la section 1 (résultats identiques au 3), puis la section 2 (tout à `true`) et la section 3 (états des 3 commandes comme dans le tableau ci-dessus).
+5. Relancer le relevé (sections 1 à 6 strictement identiques ; seule la section 7 change : 10 fonctions, 11 colonnes, 2 tables, 7 déclencheurs) et la section 1 du contrôle (identique au 3), puis la section 2 (tout à `true`) et la section 3 (états des 3 commandes comme dans le tableau ci-dessus).
 6. Contrôle de non-régression en lecture seule : stock total, nombre de lignes et empreintes inchangés.
 7. **Seulement ensuite**, et sur votre accord distinct : fusion, push et déploiement de l'interface. Tant que l'interface n'est pas déployée, la migration est sans effet visible (colonnes et fonctions inutilisées).
 8. Première réception réelle : effectuée par vous sur une commande réelle (pas de donnée fictive en production). Vérification en lecture seule : stock +quantité exacte, cumul, une ligne de journal « reception.commande ».
