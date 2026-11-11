@@ -8,7 +8,7 @@ import { isAdmin } from '../../../../lib/roles';
 // une commande réellement passée. Réutilise le module Transit (shipments +
 // shipment_items, statut 'commande') plutôt que d'inventer un système
 // parallèle — une fois créée ici, l'expédition est une commande fournisseur
-// active comme une autre : elle apparaît sur /admin/transit, et surtout ses
+// active comme une autre : elle apparaît sur /admin/achats, et surtout ses
 // quantités sont désormais nettes des futures suggestions de cette page
 // (voir arrivalsByProduct dans commande-fournisseur.astro), donc un rechargement
 // ne propose plus une commande identique en ignorant celle-ci. Copier le

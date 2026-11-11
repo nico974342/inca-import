@@ -48,6 +48,12 @@ const ACTION_LABELS: Record<string, string> = {
   'reception.creation':     'Réception stock',
   'reception.modification': 'Réception modifiée',
   'reception.suppression':  'Réception supprimée',
+  // Suivi des achats (ex-Transit) : les clés techniques « transit.* » restent celles de l'historique déjà enregistré.
+  'transit.creation':       'Achat créé',
+  'transit.modification':   'Achat modifié',
+  'transit.suppression':    'Achat supprimé',
+  'transit.frais_import':   "Frais d'import",
+  'commande_fournisseur.marquer_commande': 'Commande fournisseur passée',
 };
 
 const ACTION_COLOR: Record<string, string> = {
@@ -75,6 +81,11 @@ const ACTION_COLOR: Record<string, string> = {
   'reception.creation':     'green',
   'reception.modification': 'blue',
   'reception.suppression':  'red',
+  'transit.creation':       'green',
+  'transit.modification':   'blue',
+  'transit.suppression':    'red',
+  'transit.frais_import':   'purple',
+  'commande_fournisseur.marquer_commande': 'green',
 };
 
 function formatDateTime(iso: string) {

@@ -1189,7 +1189,7 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
       }
       btn.disabled = false;
       btn.textContent = original;
-      alert('Échec de l’enregistrement — réessayez, ou passez par /admin/transit directement.');
+      alert('Échec de l’enregistrement — réessayez, ou passez par /admin/achats directement.');
       return false;
     } catch {
       btn.disabled = false;
@@ -1335,7 +1335,7 @@ const ambiguousDelaiCount = rows.filter(r => r.aVerifierDelai).length;
     if (!dialogBlock) return;
     const btn = e.currentTarget as HTMLButtonElement;
     const ok = await markOrdered(dialogBlock, btn);
-    if (ok) setTimeout(() => { window.location.href = '/admin/transit'; }, 900);
+    if (ok) setTimeout(() => { window.location.href = '/admin/achats'; }, 900);
   });
 
   // ── Brouillon : les quantités retenues à la main sont sauvegardées côté
