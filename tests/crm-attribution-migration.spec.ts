@@ -485,8 +485,8 @@ test.describe.serial('CRM M1 — rattachement des commandes et attribution comme
       await S(`SELECT product_adjust_stock($1::uuid, -3)`, [i.p2]);
       sortie.ajustement = (await S(`SELECT stock_quantity FROM products WHERE id = $1`, [i.p2]))[0];
       // état final des colonnes d'origine (les nouvelles colonnes n'existent pas sans M1)
-      sortie.commandes = await S(`SELECT nom, email, status, bl_number, notes, tva_rate FROM orders ORDER BY created_at, email, status`);
-      sortie.lignes = await S(`SELECT product_name, quantity, unit, price_ht_snapshot, tva_rate_snapshot, pump_snapshot, stock_decremented FROM order_items ORDER BY created_at, product_name, quantity`);
+      sortie.commandes = await S(`SELECT nom, email, status, bl_number, notes, tva_rate FROM orders ORDER BY coalesce(email, ''), status, nom, coalesce(notes, ''), bl_number NULLS FIRST`);
+      sortie.lignes = await S(`SELECT product_name, quantity, unit, price_ht_snapshot, tva_rate_snapshot, pump_snapshot, stock_decremented FROM order_items ORDER BY product_name, quantity, price_ht_snapshot, coalesce(unit, ''), stock_decremented NULLS FIRST`);
       return sortie;
     };
     const sans = await baseAvantM1();
