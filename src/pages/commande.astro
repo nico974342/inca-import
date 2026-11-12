@@ -7,10 +7,12 @@ import { Resend } from 'resend';
 import { generateOrderPDF } from '../lib/pdf';
 import { sanitizeText } from '../lib/sanitize';
 import { normalizeEmail, findClientByEmail, fetchClientPriceOverrides, resolveClientPrice } from '../lib/clients';
-import { fetchGrantedForUser } from '../lib/catalogue';
-import { createOrderChecked, describeConflicts, fetchAvailability, sellableQty } from '../lib/stock';
+import { createOrderIdempotent, idempotenceDisponible } from '../lib/stock';
 import { COMPANY, RESEND_DEFAULT_FROM } from '../lib/constants';
 import { todayReunion } from '../lib/datetime';
+import { depotCommande } from '../lib/commandeSupabase';
+import { etatPanier, retirerLigne, reduireLigne, apercuAjustement, confirmerAjustement, traiterEnvoi, panierDejaCommande, type CreateurCommande, type LigneBrute } from '../lib/commandeActions';
+import { messageLigne, messageAjustement, signaturePanier, type EvaluationLigne } from '../lib/panier';
 
 const user = Astro.locals.user;
 if (!user) return Astro.redirect('/connexion');
@@ -38,92 +40,98 @@ const CAT_LABEL: Record<string, string> = {
   divers:      'Divers',
 };
 
-// ── Produits masqués du catalogue depuis leur ajout au panier ──────────
-// Retirés réellement du panier (pas seulement cachés) : ils ne doivent ni
-// s'afficher ni se commander. Le rempart définitif reste order_create_checked.
-// Un produit masqué reste commandable pour les clients explicitement autorisés
-// (voir lib/catalogue.ts) : seules les lignes masquées ET non autorisées partent.
-const { data: maskedInCart } = await supabaseAdmin
-  .from('cart_items')
-  .select('product_id, products!inner(visible_catalogue)')
-  .eq('user_id', user.id)
-  .eq('products.visible_catalogue', false);
-const grantedForCart = maskedInCart && maskedInCart.length > 0 ? await fetchGrantedForUser(user) : new Set<string>();
-const hiddenInCart = (maskedInCart ?? []).filter(r => !grantedForCart.has(r.product_id));
-if (hiddenInCart.length > 0) {
-  await supabaseAdmin
-    .from('cart_items')
-    .delete()
-    .eq('user_id', user.id)
-    .in('product_id', hiddenInCart.map(r => r.product_id));
-}
-const removedHiddenFromCart = (hiddenInCart?.length ?? 0) > 0 || Astro.url.searchParams.get('retire') === '1';
+const depot = depotCommande(user as any);
+const estUuid = (s: unknown): s is string => typeof s === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
 
-// ── POST: confirm order ────────────────────────────────────────
+// Message transmis d'une action à la page suivante (cookie court, lisible une seule fois) : jamais un changement du panier sans que le client le voie.
+const FLASH = 'commande_flash';
+const poserFlash = (lignes: string[], type: 'ok' | 'info' = 'ok') => {
+  const gardees = lignes.slice(0, 12); if (lignes.length > 12) gardees.push(`… et ${lignes.length - 12} autre${lignes.length - 12 > 1 ? 's' : ''}`);
+  Astro.cookies.set(FLASH, JSON.stringify({ type, lignes: gardees }), { path: '/commande', maxAge: 120, httpOnly: true, sameSite: 'lax' });
+};
+
+// ── POST ───────────────────────────────────────────────────────
 if (Astro.request.method === 'POST') {
   if (!accountActive) return Astro.redirect('/commande?error=compte_non_actif');
-  // Le panier vient de changer sous les yeux du client : on le lui remontre
-  // avant de commander plutôt que de valider un panier qu'il n'a pas relu.
-  if ((hiddenInCart?.length ?? 0) > 0) return Astro.redirect('/commande?retire=1');
-
   const form  = await Astro.request.formData();
+  const action = String(form.get('action') ?? 'envoyer');
+
+  // — Ajustements EXPLICITES du panier (chacun demandé par le client ; les quantités sont recalculées ici, jamais lues du formulaire) —
+  if (action === 'retirer' || action === 'reduire') {
+    const pid = form.get('product_id');
+    if (!estUuid(pid)) return Astro.redirect('/commande');
+    const r = action === 'retirer' ? await retirerLigne(depot, user.id, pid) : await reduireLigne(depot, user.id, pid);
+    poserFlash([r.message], r.ok ? 'ok' : 'info');
+    return Astro.redirect('/commande');
+  }
+  if (action === 'ajuster_apercu') return Astro.redirect('/commande?apercu=1');             // 1. aperçu : rien n'est écrit
+  if (action === 'ajuster_confirmer') {                                                      // 2. confirmation du plan affiché
+    const r = await confirmerAjustement(depot, user.id, String(form.get('signature') ?? ''));
+    if (r.type === 'a_revoir') return Astro.redirect('/commande?apercu=1&revu=1');          // la disponibilité a encore changé : on remontre l'aperçu, rien n'est appliqué
+    if (r.type === 'applique') poserFlash([`Panier ajusté : ${r.resume}.`, ...r.changements.map(messageAjustement)]);
+    return Astro.redirect('/commande');
+  }
+  if (action === 'vider_commande_enregistree') {                                             // le vidage automatique a échoué alors que la commande existe
+    const [{ lignes }, derniere] = await Promise.all([etatPanier(depot, user.id), depot.derniereCommande(user.id)]);
+    if (panierDejaCommande(lignes, derniere)) await depot.viderPanier(user.id);
+    return Astro.redirect(derniere ? `/commande?success=1&order=${derniere.id}` : '/catalogue');
+  }
+
+  // — Envoi de la commande —
   const notes = sanitizeText(form.get('notes') as string, 1000);
+  const cleForm = form.get('cle');
+  const cle = estUuid(cleForm) ? cleForm : crypto.randomUUID();
 
-  const { data: items } = await supabaseAdmin
-    .from('cart_items')
-    .select('quantity, products(id, name, category, unit, units_per_carton, price_ht, tva_rate, prix_achat_moyen_ht, stock_quantity)')
-    .eq('user_id', user.id);
-
-  if (!items?.length) return Astro.redirect('/catalogue');
-
-  // Création contrôlée : le disponible (physique − réservé) est revérifié
-  // dans la même transaction que l'insertion, verrous posés sur les produits.
-  // Contrôler ici en JS ne protégerait de rien — deux clients simultanés
-  // franchiraient le test tous les deux avant que l'un ait inséré.
-  const result = await createOrderChecked(
-    {
-      user_id:   user.id,
-      nom:       user.user_metadata?.nom ?? '',
-      societe:   user.user_metadata?.societe ?? '',
-      telephone: user.user_metadata?.telephone ?? '',
-      email:     normalizeEmail(user.email),
-      notes:     notes || null,
+  // Détail complet du panier (prix, TVA, PUMP) pour la commande, l'e-mail et le PDF : lu au moment de la création, et comparé au panier évalué (jamais deux versions).
+  let items: any[] = [];
+  const createur: CreateurCommande = {
+    async creer(cleEnvoi, lignes: LigneBrute[]) {
+      // La création passe TOUJOURS par la fonction sécurisée (idempotente). Absente ou injoignable : on refuse proprement, le panier reste intact — jamais de repli.
+      if (!(await idempotenceDisponible())) return { ok: false as const, error: 'ENVOI_INDISPONIBLE' };
+      const { data } = await supabaseAdmin
+        .from('cart_items')
+        .select('product_id, quantity, products(id, name, category, unit, units_per_carton, price_ht, tva_rate, prix_achat_moyen_ht, stock_quantity)')
+        .eq('user_id', user.id);
+      items = data ?? [];
+      if (signaturePanier(items.map((i: any) => ({ product_id: i.product_id, quantity: i.quantity }))) !== signaturePanier(lignes)) return { ok: false as const, error: 'PANIER_MODIFIE' };
+      const lignesCmd = items.map(item => {
+        const p = item.products as any;
+        return {
+          product_id:        p?.id,
+          product_name:      p?.name ?? 'Produit inconnu',
+          quantity:          item.quantity,
+          unit:              p?.unit ?? null,
+          // le prix intègre la remise négociée du client ; le PUMP reste le
+          // coût réel, pour que la marge de la commande ne s'en trouve pas faussée
+          price_ht_snapshot: resolvedPrice(p?.price_ht ?? null, p?.id),
+          tva_rate_snapshot: p?.tva_rate ?? null,
+          pump_snapshot:     p?.prix_achat_moyen_ht ?? null,
+        };
+      });
+      const entete = { user_id: user.id, nom: user.user_metadata?.nom ?? '', societe: user.user_metadata?.societe ?? '', telephone: user.user_metadata?.telephone ?? '', email: normalizeEmail(user.email), notes: notes || null };
+      // Création contrôlée : le disponible (physique − réservé) est revérifié dans la même transaction que l'insertion, verrous posés sur les produits.
+      // Contrôler ici en JS ne protégerait de rien. La même clé ne crée jamais deux commandes ; réutilisée avec un autre contenu ou par un autre client, elle est refusée.
+      return createOrderIdempotent(cleEnvoi, entete, lignesCmd);
     },
-    items.map(item => {
-      const p = item.products as any;
-      return {
-        product_id:        p?.id,
-        product_name:      p?.name ?? 'Produit inconnu',
-        quantity:          item.quantity,
-        unit:              p?.unit ?? null,
-        // le prix intègre la remise négociée du client ; le PUMP reste le
-        // coût réel, pour que la marge de la commande ne s'en trouve pas faussée
-        price_ht_snapshot: resolvedPrice(p?.price_ht ?? null, p?.id),
-        tva_rate_snapshot: p?.tva_rate ?? null,
-        pump_snapshot:     p?.prix_achat_moyen_ht ?? null,
-      };
-    }),
-  );
+  };
 
-  if (!result.ok) {
-    // Le panier est conservé : le client doit pouvoir ajuster les quantités
-    // refusées plutôt que de tout ressaisir.
-    if ('conflicts' in result) {
-      return Astro.redirect(`/commande?error=stock&detail=${encodeURIComponent(describeConflicts(result.conflicts).slice(0, 300))}`);
-    }
-    // Filet de secours si le statut a changé entre le chargement de la page
-    // et la soumission (ex. suspension pendant que le formulaire était ouvert)
-    // — order_create_checked applique la même règle dans sa transaction.
-    if ('error' in result && result.error === 'COMPTE_NON_ACTIF') {
-      return Astro.redirect('/commande?error=compte_non_actif');
-    }
+  const res = await traiterEnvoi({ depot, userId: user.id, cle, createur });
+
+  if (res.type === 'panier_vide') return Astro.redirect('/catalogue');
+  if (res.type === 'deja_enregistree') return Astro.redirect(`/commande?success=1&order=${res.orderId}`);       // double clic / nouvel essai : la commande existe déjà, rien n'est recréé
+  // Le panier est CONSERVÉ dans tous les cas de refus : la page recalcule la disponibilité réelle et propose les ajustements ligne par ligne.
+  if (res.type === 'conflits') return Astro.redirect('/commande?error=stock');
+  if (res.type === 'erreur') {
+    if (res.code === 'COMPTE_NON_ACTIF') return Astro.redirect('/commande?error=compte_non_actif');
+    if (res.code === 'PANIER_MODIFIE' || res.code === 'CLE_REUTILISEE_AUTRES_DONNEES') return Astro.redirect('/commande?error=panier_modifie');
+    if (res.code === 'ENVOI_INDISPONIBLE') return Astro.redirect('/commande?error=indisponible');
     return Astro.redirect('/commande?error=1');
   }
 
-  const order = { id: result.orderId };
-
-  // Clear cart
-  await supabaseAdmin.from('cart_items').delete().eq('user_id', user.id);
+  const order = { id: res.orderId };
+  // Commande déjà créée par un envoi précédent (même clé) : pas de nouvel e-mail, pas de nouveau PDF.
+  if (res.deja) return Astro.redirect(`/commande?success=1&order=${order.id}`);
+  // Le panier est vidé par traiterEnvoi, APRÈS la création confirmée ; s'il n'a pas pu l'être, la page le dit au client (voir plus bas).
 
   // Build email/PDF data (use items captured before cart was cleared)
   const nom            = user.user_metadata?.nom ?? user.email ?? '';
@@ -203,18 +211,31 @@ if (Astro.request.method === 'POST') {
 // ── GET: show cart ─────────────────────────────────────────────
 const success    = !!Astro.url.searchParams.get('success');
 const errorParam = Astro.url.searchParams.get('error');
-const hasError   = !!errorParam && errorParam !== 'stock' && errorParam !== 'compte_non_actif';
+const hasError   = !!errorParam && !['stock', 'compte_non_actif', 'panier_modifie', 'indisponible'].includes(errorParam);
+const envoiIndisponible = errorParam === 'indisponible';
 const stockError = errorParam === 'stock';
-// Détail renvoyé par la vérification atomique : quel produit, combien demandé,
-// combien réellement disponible. Sans lui, le client ne sait pas quoi ajuster.
-const stockDetail = Astro.url.searchParams.get('detail');
-const orderId    = Astro.url.searchParams.get('order');
+const panierModifie = errorParam === 'panier_modifie';
+const orderIdRaw = Astro.url.searchParams.get('order');
+const orderId    = estUuid(orderIdRaw) ? orderIdRaw : null;
+if (Astro.url.searchParams.get('success') && !orderId) return Astro.redirect('/commande');       // pas de « commande bien reçue » sans une commande identifiée
+const apercuDemande = Astro.url.searchParams.get('apercu') === '1';
+const apercuRevu    = Astro.url.searchParams.get('revu') === '1';
+const maintenantISO = new Date().toISOString();
+const cleEnvoi      = crypto.randomUUID();                          // une clé par affichage : le même formulaire renvoyé ne crée jamais deux commandes
+
+// Message laissé par l'action précédente (lu une seule fois).
+let flash: { type: 'ok' | 'info'; lignes: string[] } | null = null;
+try { const c = Astro.cookies.get(FLASH)?.value; if (c) { const j = JSON.parse(c); if (Array.isArray(j?.lignes)) flash = { type: j.type === 'info' ? 'info' : 'ok', lignes: j.lignes.map(String).slice(0, 14) }; } } catch { /* ignoré */ }
+if (flash) Astro.cookies.delete(FLASH, { path: '/commande' });
 
 type SuccessItem = { product_name: string; quantity: number; unit: string | null };
 let successItems: SuccessItem[] = [];
 let successTotalHT = 0;
 
 if (success && orderId) {
+  // Seulement MES commandes : un identifiant deviné ne montre rien.
+  const { data: mienne } = await supabaseAdmin.from('orders').select('id').eq('id', orderId).eq('user_id', user.id).maybeSingle();
+  if (!mienne) return Astro.redirect('/mes-commandes');                                    // une commande qui n'est pas la sienne n'est ni affichée ni confirmée
   const { data: orderItems } = await supabaseAdmin
     .from('order_items')
     .select('product_name, quantity, unit, price_ht_snapshot')
@@ -232,10 +253,13 @@ if (success && orderId) {
 
 type CartItem = {
   quantity: number;
-  products: { id: string; name: string; category: string; unit: string | null; units_per_carton: number | null; price_ht: number | null; tva_rate: number | null; stock_quantity: number | null } | null;
+  products: { id: string; name: string; category: string; unit: string | null; units_per_carton: number | null; price_ht: number | null; tva_rate: number | null; stock_quantity: number | null } | null
 };
 
 let cartItems: CartItem[] = [];
+let etat: Awaited<ReturnType<typeof etatPanier>> | null = null;
+let evalParId = new Map<string, EvaluationLigne>();
+let commandeDejaPassee: { id: string; secondes: number } | null = null;
 if (!success) {
   const { data } = await supabaseAdmin
     .from('cart_items')
@@ -244,8 +268,21 @@ if (!success) {
     .order('updated_at', { ascending: true });
 
   cartItems = (data ?? []) as CartItem[];
-  if (cartItems.length === 0) return Astro.redirect('/catalogue');
+  if (cartItems.length === 0) {
+    // Panier vide : AVANT de renvoyer au catalogue, on vérifie qu'une commande ne vient pas d'être enregistrée (double clic, réponse perdue) pour ne pas laisser recommander.
+    const derniere = await depot.derniereCommande(user.id);
+    if (derniere && derniere.secondes <= 600) return Astro.redirect(`/commande?success=1&order=${derniere.id}`);
+    return Astro.redirect('/catalogue');
+  }
+  // Disponibilité RÉELLE (physique − réservé) à chaque affichage : c'est ce que vérifie la base à la création, pas le stock physique.
+  etat = await etatPanier(depot, user.id);
+  evalParId = new Map(etat.evaluations.map(e => [e.product_id, e]));
+  const derniere = await depot.derniereCommande(user.id);
+  if (derniere && panierDejaCommande(etat.lignes, derniere)) commandeDejaPassee = { id: derniere.id, secondes: derniere.secondes };
 }
+const nbProblemes = etat ? etat.evaluations.filter(e => e.statut !== 'ok').length : 0;
+const apercu = apercuDemande && etat && etat.plan.length > 0 ? await apercuAjustement(depot, user.id) : null;
+const envoiBloque = nbProblemes > 0 || !!commandeDejaPassee;
 
 const nom     = user.user_metadata?.nom ?? user.email ?? '';
 const societe = user.user_metadata?.societe ?? '';
@@ -320,7 +357,12 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
         </div>
       )}
 
-      {/* ── Error banner ──────────────────────────── */}
+      {/* ── Messages ──────────────────────────── */}
+      {flash && !success && (
+        <div class={`order-flash order-flash--${flash.type}`} role="status" data-testid="flash">
+          <ul>{flash.lignes.map(l => <li>{l}</li>)}</ul>
+        </div>
+      )}
       {!accountActive && !success && (
         <p class="order-error" role="alert">
           Votre compte est en attente de validation par notre équipe — vous ne pouvez pas encore passer commande.
@@ -328,22 +370,71 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
         </p>
       )}
       {hasError && !success && (
-        <p class="order-error" role="alert">
-          Une erreur est survenue lors de la validation. Veuillez réessayer.
+        <p class="order-error" role="alert" data-testid="erreur-generique">
+          Votre commande n'a pas pu être envoyée. <strong>Votre panier est conservé</strong> : vérifiez-le ci-dessous puis réessayez.
+          Si le problème persiste, consultez <a href="/mes-commandes">vos commandes</a> avant de renvoyer, pour ne pas la passer deux fois.
         </p>
       )}
-      {removedHiddenFromCart && !success && (
-        <p class="order-error" role="status">
-          Un ou plusieurs produits de votre panier ne sont plus disponibles au catalogue et ont été retirés.
-          Vérifiez votre panier avant de confirmer.
+      {envoiIndisponible && !success && (
+        <p class="order-error" role="alert" data-testid="envoi-indisponible">
+          L'envoi des commandes est momentanément indisponible. <strong>Votre panier est conservé</strong> : rien n'a été envoyé. Réessayez dans quelques minutes.
         </p>
       )}
-      {stockError && !success && (
-        <p class="order-error" role="alert">
-          Certains articles dépassent le stock disponible — une autre commande a pu être passée entre-temps.
-          Ajustez les quantités ci-dessous avant de confirmer.
-          {stockDetail && <span class="order-error-detail">{stockDetail}</span>}
+      {panierModifie && !success && (
+        <p class="order-error" role="alert" data-testid="panier-modifie">
+          Votre panier a changé pendant l'envoi (par exemple depuis un autre onglet). Rien n'a été envoyé : vérifiez-le ci-dessous puis confirmez.
         </p>
+      )}
+      {commandeDejaPassee && !success && (
+        <div class="order-flash order-flash--info" role="status" data-testid="deja-commandee">
+          <p>Votre commande n° <strong>{commandeDejaPassee.id.slice(0, 8).toUpperCase()}</strong> a bien été enregistrée il y a {Math.max(1, Math.round(commandeDejaPassee.secondes / 60))} min.
+            Votre panier affiche encore les mêmes produits : <strong>ne la renvoyez pas</strong>.</p>
+          <form method="POST" class="stock-actions">
+            <input type="hidden" name="action" value="vider_commande_enregistree" />
+            <button type="submit" class="btn btn-primary btn-sm">Voir ma commande et vider le panier</button>
+            <a href="/mes-commandes" class="btn btn-secondary btn-sm">Mes commandes</a>
+          </form>
+        </div>
+      )}
+
+      {/* ── Produits à ajuster : le panier est conservé, rien n'est modifié sans accord ── */}
+      {!success && etat && !apercu && nbProblemes > 0 && (
+        <section class="stock-panel" role="alert" data-testid="panneau-ruptures">
+          <h2 class="stock-panel-titre">{nbProblemes} produit{nbProblemes > 1 ? 's' : ''} à ajuster avant d'envoyer</h2>
+          <p class="stock-panel-texte">
+            {stockError ? 'Le stock a changé pendant la validation. ' : ''}
+            <strong>Votre panier est conservé</strong> : les {etat.evaluations.length - nbProblemes} autres produit{etat.evaluations.length - nbProblemes > 1 ? 's' : ''} et leurs quantités ne bougent pas.
+            Rien n'est modifié sans votre accord.
+          </p>
+          <ul class="stock-panel-liste">
+            {etat.evaluations.filter(e => e.statut !== 'ok').map(e => (
+              <li data-statut={e.statut}><strong>{e.nom}</strong><span>{messageLigne(e)}</span></li>
+            ))}
+          </ul>
+          <form method="POST" class="stock-actions">
+            <input type="hidden" name="action" value="ajuster_apercu" />
+            <button type="submit" class="btn btn-primary" data-testid="continuer-disponibles">Continuer avec les produits disponibles</button>
+          </form>
+          <p class="stock-panel-aide">Vous verrez le détail des changements <strong>avant</strong> de confirmer. Vous pouvez aussi ajuster ligne par ligne dans le tableau.</p>
+        </section>
+      )}
+
+      {/* ── Aperçu des ajustements, à confirmer ── */}
+      {!success && apercu && (
+        <section class="stock-panel stock-panel--apercu" role="alert" data-testid="apercu-ajustement">
+          <h2 class="stock-panel-titre">Confirmez ces ajustements</h2>
+          {apercuRevu && <p class="stock-panel-texte">La disponibilité a encore changé depuis l'affichage précédent : voici la liste à jour. <strong>Rien n'a été modifié.</strong></p>}
+          <ul class="stock-panel-liste stock-panel-liste--apercu">
+            {apercu.lignes.map(l => <li>{l}</li>)}
+          </ul>
+          <p class="stock-panel-texte"><strong>{apercu.resume}.</strong> Les {etat!.evaluations.length - apercu.etat.plan.length} autre{etat!.evaluations.length - apercu.etat.plan.length > 1 ? 's' : ''} produit{etat!.evaluations.length - apercu.etat.plan.length > 1 ? 's' : ''} restent inchangés.</p>
+          <form method="POST" class="stock-actions">
+            <input type="hidden" name="action" value="ajuster_confirmer" />
+            <input type="hidden" name="signature" value={apercu.etat.signature} />
+            <button type="submit" class="btn btn-primary" data-testid="confirmer-ajustements">Confirmer les ajustements</button>
+            <a href="/commande" class="btn btn-secondary" data-testid="annuler-ajustements">Annuler, ne rien changer</a>
+          </form>
+        </section>
       )}
 
       {/* ── Cart recap + confirm ──────────────────── */}
@@ -369,52 +460,60 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
                       const unit       = p?.unit ?? 'carton';
                       const upc        = p?.units_per_carton;
                       const totalUnits = upc ? item.quantity * upc : null;
-                      const stockQty   = p?.stock_quantity;
                       const pid        = p?.id ?? '';
+                      const ev         = evalParId.get(pid);
+                      const probleme   = !!ev && ev.statut !== 'ok';
                       return (
                         <>
                           <tr
-                            class="order-row"
+                            class={`order-row${probleme ? ' row--stock-error' : ''}`}
                             data-product-id={pid}
-                            data-qty={String(item.quantity)}
-                            data-unit={unit}
-                            data-stock={stockQty !== null && stockQty !== undefined ? String(stockQty) : ''}
+                            data-statut={ev?.statut ?? 'ok'}
                           >
-                            <td class="col-product product-name-cell">{p?.name ?? '—'}</td>
-                            <td class="col-cat">
+                            <td class="col-product product-name-cell" data-label="Produit">{p?.name ?? '—'}</td>
+                            <td class="col-cat" data-label="Catégorie">
                               {p?.category && (
                                 <span class={`cat-badge cat-badge--${p.category}`}>
                                   {CAT_LABEL[p.category] ?? p.category}
                                 </span>
                               )}
                             </td>
-                            <td class="col-qty qty-cell">
+                            <td class="col-qty qty-cell" data-label="Quantité">
                               <span class="qty-primary">{item.quantity} {item.quantity === 1 ? unit : `${unit}s`}</span>
                               {totalUnits && (
                                 <span class="qty-units">= {totalUnits} unités</span>
                               )}
                             </td>
-                            <td class="col-price price-cell">{fmtHT(lineHT)}</td>
+                            <td class="col-price price-cell" data-label="Prix HT">{fmtHT(lineHT)}</td>
                           </tr>
-                          <tr class="stock-alert-row" id={`stock-row-${pid}`} hidden>
-                            <td colspan="4" class="stock-alert-cell">
-                              <span class="stock-icon" aria-hidden="true">
-                                <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
-                                  <path d="M7 1.5L12.5 12H1.5L7 1.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-                                  <line x1="7" y1="6" x2="7" y2="8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                                  <circle cx="7" cy="10.25" r="0.6" fill="currentColor"/>
-                                </svg>
-                              </span>
-                              <span class="stock-alert-text" id={`stock-text-${pid}`}></span>
-                              <button
-                                type="button"
-                                class="btn-adjust"
-                                data-product-id={pid}
-                                data-adjust-to="0"
-                                data-action="adjust"
-                              >Ajuster</button>
-                            </td>
-                          </tr>
+                          {probleme && ev && (
+                            <tr class="stock-alert-row" id={`stock-row-${pid}`} data-testid={`ligne-probleme-${pid}`}>
+                              <td colspan="4" class="stock-alert-cell">
+                                <span class="stock-icon" aria-hidden="true">
+                                  <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                                    <path d="M7 1.5L12.5 12H1.5L7 1.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                                    <line x1="7" y1="6" x2="7" y2="8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                    <circle cx="7" cy="10.25" r="0.6" fill="currentColor"/>
+                                  </svg>
+                                </span>
+                                <span class="stock-alert-text">{messageLigne(ev)}</span>
+                                <span class="stock-alert-actions">
+                                  {ev.statut === 'reduire' && (
+                                    <form method="POST" class="stock-inline">
+                                      <input type="hidden" name="action" value="reduire" />
+                                      <input type="hidden" name="product_id" value={pid} />
+                                      <button type="submit" class="btn-adjust" data-testid={`reduire-${pid}`}>Réduire à <strong>{ev.cible}</strong></button>
+                                    </form>
+                                  )}
+                                  <form method="POST" class="stock-inline">
+                                    <input type="hidden" name="action" value="retirer" />
+                                    <input type="hidden" name="product_id" value={pid} />
+                                    <button type="submit" class="btn-adjust btn-adjust--retirer" data-testid={`retirer-${pid}`}>Retirer ce produit</button>
+                                  </form>
+                                </span>
+                              </td>
+                            </tr>
+                          )}
                         </>
                       );
                     })}
@@ -484,12 +583,16 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
                 Aucun paiement en ligne — un devis vous sera transmis.
               </p>
 
-              <p id="stock-block-msg" class="stock-block-msg" role="alert" hidden>
-                Ajustez les quantités ci-dessus avant de confirmer.
-              </p>
+              {envoiBloque && !commandeDejaPassee && (
+                <p id="stock-block-msg" class="stock-block-msg" role="status" data-testid="envoi-bloque">
+                  {nbProblemes} produit{nbProblemes > 1 ? 's' : ''} à ajuster avant d'envoyer — voir « Continuer avec les produits disponibles » en haut de page.
+                </p>
+              )}
 
               {accountActive ? (
-                <form method="POST">
+                <form method="POST" id="form-envoi" data-cle={cleEnvoi} data-depuis={maintenantISO}>
+                  <input type="hidden" name="action" value="envoyer" />
+                  <input type="hidden" name="cle" value={cleEnvoi} />
                   <div class="field">
                     <label for="notes">Notes ou précisions</label>
                     <textarea
@@ -499,9 +602,10 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
                       placeholder="Contraintes de livraison, quantités à ajuster…"
                     ></textarea>
                   </div>
-                  <button type="submit" class="btn btn-primary confirm-btn">
+                  <button type="submit" class="btn btn-primary confirm-btn" id="btn-envoi" disabled={envoiBloque} data-bloque={envoiBloque ? '1' : '0'} data-testid="envoyer">
                     Envoyer ma commande →
                   </button>
+                  <p class="envoi-etat" id="envoi-etat" role="status" aria-live="polite" hidden></p>
                 </form>
               ) : (
                 <p class="stock-block-msg" role="alert">
@@ -1014,110 +1118,114 @@ textarea:focus {
   .order-card,
   .confirm-card { padding: var(--space-5); }
 }
+
+/* ── Ajustement du panier (ruptures, quantités insuffisantes) ─────────────── */
+.order-flash {
+  font-size: var(--text-sm);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-6);
+  border: 1px solid oklch(0.85 0.06 145);
+  background: oklch(0.97 0.03 145);
+  color: oklch(0.38 0.1 145);
+}
+.order-flash--info { border-color: oklch(0.85 0.05 250); background: oklch(0.97 0.02 250); color: oklch(0.38 0.08 250); }
+.order-flash ul { margin: 0; padding-left: var(--space-4); display: grid; gap: 2px; }
+.order-flash p { margin: 0 0 var(--space-2); }
+
+.stock-panel {
+  border: 1px solid oklch(0.88 0.07 25);
+  background: oklch(0.985 0.015 25);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+  margin-bottom: var(--space-6);
+}
+.stock-panel--apercu { border-color: var(--color-border); background: var(--color-surface); }
+.stock-panel-titre { font-family: var(--font-display); font-size: var(--text-lg); font-weight: 700; margin: 0 0 var(--space-2); color: var(--color-ink); }
+.stock-panel-texte { font-size: var(--text-sm); color: var(--color-ink); margin: 0 0 var(--space-3); line-height: 1.5; }
+.stock-panel-aide { font-size: var(--text-xs); color: var(--color-muted); margin: var(--space-3) 0 0; }
+.stock-panel-liste { list-style: none; margin: var(--space-3) 0; padding: 0; }
+.stock-panel-liste li { display: flex; flex-direction: column; gap: 2px; padding: var(--space-2) 0; border-top: 1px solid var(--color-border); font-size: var(--text-sm); }
+.stock-panel-liste li span { color: var(--color-danger); }
+.stock-panel-liste--apercu li { color: var(--color-ink); }
+.stock-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; margin-top: var(--space-4); }
+.stock-actions .btn { min-height: 44px; }
+.stock-actions .btn-secondary { display: inline-flex; align-items: center; justify-content: center; padding: 0 var(--space-4); background: var(--color-bg, #fff); border: 1px solid var(--color-border); border-radius: var(--radius-sm); color: var(--color-ink); text-decoration: none; font-weight: 600; }
+.stock-alert-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-left: auto; }
+.stock-inline { display: inline; margin: 0; }
+.btn-adjust { min-height: 36px; padding: 6px 12px; }
+.btn-adjust--retirer { background: transparent; }
+.confirm-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.envoi-etat { margin: var(--space-3) 0 0; font-size: var(--text-sm); color: var(--color-muted); }
+.envoi-etat--erreur { color: var(--color-danger); font-weight: 600; }
+
+/* Téléphone : chaque ligne devient une fiche lisible, boutons faciles à toucher */
+@media (max-width: 640px) {
+  .order-table thead { display: none; }
+  .order-table, .order-table tbody, .order-table tfoot { display: block; }
+  .order-table .order-row { display: grid; grid-template-columns: 1fr auto; gap: 2px var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--color-border); }
+  .order-table .order-row td { display: block; padding: 0; border: 0; width: auto; background: transparent; }
+  .order-table .order-row .col-cat { display: none; }
+  .order-table .order-row .col-product { grid-column: 1; font-weight: 600; }
+  .order-table .order-row .col-price { grid-column: 2; grid-row: 1; text-align: right; white-space: nowrap; }
+  .order-table .order-row .col-qty { grid-column: 1 / -1; }
+  .order-table .order-row.row--stock-error { border-bottom: none; padding-bottom: var(--space-2); }
+  .order-table .stock-alert-row, .order-table .stock-alert-row td { display: block; }
+  .order-table .stock-alert-row td { padding: 0 0 var(--space-3); }
+  .stock-alert-cell { align-items: flex-start; }
+  .stock-alert-actions { width: 100%; margin-left: 0; }
+  .stock-inline { flex: 1 1 100%; }
+  .stock-inline .btn-adjust { width: 100%; min-height: 44px; }
+  .order-table tfoot tr { display: flex; justify-content: space-between; padding: var(--space-2) 0; }
+  .order-table tfoot td { display: block; padding: 0; border: 0; }
+  .stock-actions .btn { flex: 1 1 100%; justify-content: center; text-align: center; }
+}
 </style>
 
 <script>
-  const rows       = document.querySelectorAll<HTMLTableRowElement>('.order-row[data-product-id]');
-  const confirmBtn = document.querySelector<HTMLButtonElement>('.confirm-btn');
-  const blockMsg   = document.getElementById('stock-block-msg');
+  // Envoi protégé : un seul envoi à la fois (double clic ignoré), la même clé est renvoyée en cas de nouvel essai, et après une coupure réseau on VÉRIFIE
+  // si la commande a été enregistrée avant de laisser recommencer. Sans JavaScript, le formulaire s'envoie normalement et le serveur applique les mêmes protections.
+  const form = document.getElementById('form-envoi') as HTMLFormElement | null;
+  const btn  = document.getElementById('btn-envoi') as HTMLButtonElement | null;
+  const etat = document.getElementById('envoi-etat');
+  const libelle = btn?.textContent ?? '';
+  let enCours = false;
 
-  function checkStock(): boolean {
-    let blocked = false;
+  const message = (texte: string, erreur = false) => {
+    if (!etat) return;
+    etat.textContent = texte; etat.hidden = !texte; etat.classList.toggle('envoi-etat--erreur', erreur);
+  };
+  const deverrouiller = () => { enCours = false; if (btn) { btn.disabled = btn.dataset.bloque === '1'; btn.textContent = libelle; } };
+  window.addEventListener('pageshow', e => { if ((e as PageTransitionEvent).persisted) deverrouiller(); });      // retour arrière du navigateur : le formulaire se rouvre
 
-    rows.forEach(row => {
-      const pid       = row.dataset.productId ?? '';
-      const qty       = Number(row.dataset.qty);
-      const stockAttr = row.dataset.stock;
-      const unit      = row.dataset.unit ?? 'carton';
-      const alertRow  = document.getElementById(`stock-row-${pid}`);
-      const alertText = document.getElementById(`stock-text-${pid}`);
-      const adjustBtn = alertRow?.querySelector<HTMLButtonElement>('.btn-adjust');
-
-      // Empty string = no stock data = no limit
-      if (!pid || stockAttr === '' || stockAttr === undefined) {
-        alertRow?.setAttribute('hidden', '');
-        row.classList.remove('row--stock-error');
-        return;
-      }
-
-      const stock = Number(stockAttr);
-
-      if (stock < qty) {
-        blocked = true;
-        row.classList.add('row--stock-error');
-        alertRow?.removeAttribute('hidden');
-
-        if (stock === 0) {
-          if (alertText) alertText.textContent = 'Disponible prochainement — article non disponible';
-          if (adjustBtn) {
-            adjustBtn.textContent      = 'Retirer du panier';
-            adjustBtn.dataset.action   = 'remove';
-            adjustBtn.dataset.adjustTo = '0';
-          }
-        } else {
-          const plural = stock > 1 ? 's' : '';
-          if (alertText)
-            alertText.textContent = `Stock insuffisant — ${stock} ${unit}${plural} disponible${plural}`;
-          if (adjustBtn) {
-            adjustBtn.innerHTML        = `Ajuster à <strong>${stock}</strong> ${unit}${plural}`;
-            adjustBtn.dataset.action   = 'adjust';
-            adjustBtn.dataset.adjustTo = String(stock);
-          }
-        }
-      } else {
-        row.classList.remove('row--stock-error');
-        alertRow?.setAttribute('hidden', '');
-      }
-    });
-
-    if (confirmBtn) confirmBtn.disabled = blocked;
-    if (blocked) blockMsg?.removeAttribute('hidden');
-    else blockMsg?.setAttribute('hidden', '');
-
-    return blocked;
+  async function verifier(cle: string, depuis: string): Promise<{ enregistree: boolean; orderId?: string } | null> {
+    for (let i = 0; i < 4; i++) {
+      try {
+        const r = await fetch(`/api/commande/statut?cle=${encodeURIComponent(cle)}&depuis=${encodeURIComponent(depuis)}`, { credentials: 'same-origin', cache: 'no-store' });
+        if (r.ok) return await r.json();
+      } catch { /* réseau toujours coupé : on réessaie */ }
+      await new Promise(res => setTimeout(res, 1500));
+    }
+    return null;
   }
 
-  // Run immediately on page load
-  checkStock();
-
-  // Re-check on submit — extra safety if JS state drifted
-  document.querySelector<HTMLFormElement>('.confirm-card form')
-    ?.addEventListener('submit', e => {
-      if (checkStock()) e.preventDefault();
-    });
-
-  // Adjust / remove button handler
-  document.addEventListener('click', async e => {
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.btn-adjust');
-    if (!btn || btn.disabled) return;
-
-    const pid      = btn.dataset.productId ?? '';
-    const action   = btn.dataset.action ?? 'adjust';
-    const adjustTo = Number(btn.dataset.adjustTo ?? 0);
-    if (!pid) return;
-
-    const original    = btn.innerHTML;
-    btn.disabled      = true;
-    btn.textContent   = '…';
-
+  form?.addEventListener('submit', async e => {
+    if (!btn) return;
+    e.preventDefault();
+    if (enCours || btn.disabled) return;                                                                      // double clic : ignoré
+    enCours = true; btn.disabled = true; btn.textContent = 'Envoi en cours…';
+    message('Envoi de votre commande… ne fermez pas cette page.');
     try {
-      if (action === 'remove') {
-        await fetch('/api/cart/remove', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ productId: pid }),
-        });
-      } else {
-        await fetch('/api/cart/add', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ productId: pid, qty: adjustTo }),
-        });
-      }
-      window.location.reload();
+      const r = await fetch(form.action || location.href, { method: 'POST', body: new FormData(form), credentials: 'same-origin' });
+      if (!r.ok) throw new Error('réponse ' + r.status);
+      location.href = r.redirected ? r.url : location.href;                                                   // le serveur a répondu : on affiche sa réponse (succès, ajustements…)
     } catch {
-      btn.disabled  = false;
-      btn.innerHTML = original;
+      message('Connexion interrompue — vérification de votre commande…');
+      const v = await verifier(form.dataset.cle ?? '', form.dataset.depuis ?? '');
+      if (v?.enregistree && v.orderId) { location.href = `/commande?success=1&order=${encodeURIComponent(v.orderId)}`; return; }
+      if (v && !v.enregistree) { message("Votre commande n'a pas été enregistrée. Votre panier est conservé : vous pouvez réessayer.", true); deverrouiller(); return; }
+      message("Impossible de vérifier pour l'instant. Ne renvoyez pas tout de suite : consultez « Mes commandes ». Votre panier est conservé.", true);
+      setTimeout(deverrouiller, 10_000);
     }
   });
 </script>

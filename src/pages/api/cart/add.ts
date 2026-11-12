@@ -52,7 +52,11 @@ export const POST: APIRoute = async ({ request, cookies }) => {
   const granted = product?.visible_catalogue === false ? await fetchGrantedForUser(user) : new Set<string>();
   if (!product || !isProductVisibleTo(product, granted)) return json(404, { error: 'Produit introuvable' });
 
-  const stock = product.stock_quantity ?? 0;
+  // Disponible RÉEL (physique − réservé par les commandes en cours), comme la vérification finale de la commande : plafonner au stock physique laissait
+  // entrer dans le panier des quantités que la base refusait ensuite à la validation.
+  const { data: dispo, error: dispoErr } = await supabaseAdmin.from('product_availability').select('available').eq('product_id', productId).maybeSingle();
+  if (dispoErr) return json(500, { error: 'Erreur serveur' });
+  const stock = Math.max(0, Number(dispo?.available ?? product.stock_quantity ?? 0));
   if (stock < 1) return json(409, { error: 'Rupture de stock', available: 0 });
   const finalQty = Math.min(qty, stock);
 
@@ -66,5 +70,5 @@ export const POST: APIRoute = async ({ request, cookies }) => {
     return json(500, { error: 'Erreur serveur' });
   }
 
-  return json(200, { ok: true, qty: finalQty });
+  return json(200, { ok: true, qty: finalQty, clamped: finalQty < qty, available: stock });
 };

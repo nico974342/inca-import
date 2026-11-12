@@ -8,6 +8,7 @@
     "preview": "astro preview",
     "test": "playwright test",
     "test:headed": "playwright test --headed",
+    "test:local": "playwright test -c playwright.local.config.ts",
     "test:ecriture": "playwright test -c playwright.ecriture.config.ts",
     "test:report": "playwright show-report"
   },

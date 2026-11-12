@@ -178,3 +178,43 @@ export function describeConflicts(conflicts: OrderConflict[]): string {
     .map(c => `${c.product_name} : ${c.requested} demandé${c.requested > 1 ? 's' : ''}, ${c.available} disponible${c.available > 1 ? 's' : ''}`)
     .join(' · ');
 }
+
+// ── Création idempotente (doubles clics, réponse perdue) ─────────────────────────────────────────────────────────────────────────────────────
+export type OrderCreateIdemResult =
+  | { ok: true; orderId: string; deja: boolean }
+  | { ok: false; conflicts: OrderConflict[] }
+  | { ok: false; error: string };
+
+let idemMemoire: { v: boolean; a: number } | null = null;
+/**
+ * La fonction order_create_idempotent existe-t-elle ? (migration orders_idempotence_cle.sql appliquée). Sonde SANS EFFET : sans clé, la fonction s'arrête
+ * (CLE_REQUISE) avant toute lecture ou écriture. Résultat positif gardé 60 s, négatif 5 s. Absente, fermée ou injoignable → le site REFUSE l'envoi (panier conservé) : jamais de repli sur une création moins sûre.
+ */
+export async function idempotenceDisponible(maintenant = Date.now()): Promise<boolean> {
+  if (idemMemoire && maintenant - idemMemoire.a < (idemMemoire.v ? 60_000 : 5_000)) return idemMemoire.v;
+  let v = false;
+  try {
+    const { error } = await supabaseAdmin.rpc('order_create_idempotent', { p_cle: null, p_order: {}, p_items: [] });
+    v = !!error && /CLE_REQUISE/.test(String(error.message ?? ''));                  // la fonction a répondu comme prévu ; absente, fermée ou injoignable = indisponible
+  } catch { v = false; }
+  idemMemoire = { v, a: maintenant };
+  return v;
+}
+
+/** Même contrôle de stock que createOrderChecked, dans la même transaction ; en plus, la MÊME clé ne crée jamais deux commandes (renvoie la première). */
+export async function createOrderIdempotent(
+  cle: string,
+  order: Parameters<typeof createOrderChecked>[0],
+  items: OrderLineInput[],
+): Promise<OrderCreateIdemResult> {
+  const { data, error } = await supabaseAdmin.rpc('order_create_idempotent', { p_cle: cle, p_order: order, p_items: items });
+  if (error) {
+    console.error('[stock] order_create_idempotent:', error.message);
+    return { ok: false, error: error.message };
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  const conflicts = (row?.r_conflicts ?? []) as OrderConflict[];
+  if (conflicts.length > 0) return { ok: false, conflicts };
+  if (!row?.r_order_id) return { ok: false, error: 'aucun identifiant de commande renvoyé' };
+  return { ok: true, orderId: row.r_order_id, deja: !!row.r_deja };
+}
