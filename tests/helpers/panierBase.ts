@@ -10,10 +10,14 @@ import type { Disponibilite } from '../../src/lib/panier';
 
 export const MIGRATION_IDEMPOTENCE = readFileSync('supabase/migrations/orders_idempotence_cle.sql', 'utf8');
 
-export async function basePanier(avecIdempotence = true): Promise<PGlite> {
+export const M1_ATTRIBUTION = readFileSync('supabase/migrations/crm_attribution.sql', 'utf8').split(String.fromCharCode(13, 10)).join('\n');   // fins de ligne LF, comme à l'application en production
+
+/** avecM1 : charge aussi la migration CRM M1, qui redéfinit order_create_checked — c'est la version EN PRODUCTION de cette fonction. */
+export async function basePanier(avecIdempotence = true, avecM1 = false): Promise<PGlite> {
   const db = await baseCommune();
   await db.exec(`CREATE TABLE cart_items (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL, product_id uuid NOT NULL REFERENCES products(id), quantity integer NOT NULL CHECK (quantity > 0),
     updated_at timestamptz NOT NULL DEFAULT now(), UNIQUE (user_id, product_id)); GRANT ALL ON cart_items TO service_role`);
+  if (avecM1) await db.exec(M1_ATTRIBUTION);
   if (avecIdempotence) await db.exec(MIGRATION_IDEMPOTENCE);
   return db;
 }
@@ -67,10 +71,9 @@ export function depotPglite(db: PGlite, c: Client, options: { viderEchoue?: bool
   };
 }
 
-/** Créateur local : appelle la VRAIE fonction SQL (idempotente si la migration est chargée, sinon la création contrôlée habituelle). */
-export function createurPglite(db: PGlite, c: Client, idempotent: boolean, hooks: { apresCreation?: () => void } = {}): CreateurCommande {
+/** Créateur local : appelle la VRAIE fonction SQL idempotente. */
+export function createurPglite(db: PGlite, c: Client, hooks: { apresCreation?: () => void } = {}): CreateurCommande {
   return {
-    idempotent,
     async creer(cle, lignes): Promise<ResultatCreation> {
       return srv(db, async () => {
         const items = [];
@@ -78,9 +81,7 @@ export function createurPglite(db: PGlite, c: Client, idempotent: boolean, hooks
         const entete = { user_id: c.id, nom: 'Client', societe: '', telephone: '', email: c.email, notes: null };
         let ligne: any;
         try {
-          ligne = idempotent
-            ? await un(db, `SELECT * FROM order_create_idempotent($1::uuid, $2::jsonb, $3::jsonb)`, [cle, JSON.stringify(entete), JSON.stringify(items)])
-            : await un(db, `SELECT * FROM order_create_checked($1::jsonb, $2::jsonb)`, [JSON.stringify(entete), JSON.stringify(items)]);
+          ligne = await un(db, `SELECT * FROM order_create_idempotent($1::uuid, $2::jsonb, $3::jsonb)`, [cle, JSON.stringify(entete), JSON.stringify(items)]);
         } catch (e: any) { return { ok: false, error: String(e.message ?? e).split(':')[0] }; }
         const conflits = (ligne?.r_conflicts ?? []) as any[];
         if (conflits.length > 0) return { ok: false, conflicts: conflits };
@@ -90,3 +91,6 @@ export function createurPglite(db: PGlite, c: Client, idempotent: boolean, hooks
     },
   };
 }
+
+/** Ce que fait le site quand la fonction sécurisée est absente ou injoignable : il REFUSE (jamais de repli sur une création moins sûre). */
+export const createurIndisponible = (): CreateurCommande => ({ async creer() { return { ok: false, error: 'ENVOI_INDISPONIBLE' }; } });

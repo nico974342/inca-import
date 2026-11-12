@@ -48,7 +48,15 @@ test.describe('Page /commande', () => {
   });
 
   test('contrôle final côté serveur : la création passe par la base (création contrôlée), la disponibilité de la page est le réel (physique − réservé), recalculée à chaque affichage', () => {
-    expect(page).toContain('createOrderIdempotent(cleEnvoi, entete, lignesCmd) : createOrderChecked(entete, lignesCmd)');
+    // la création passe TOUJOURS par la fonction sécurisée ; absente ou injoignable, l'envoi est refusé (jamais de repli sur une création moins sûre)
+    expect(page).toContain('return createOrderIdempotent(cleEnvoi, entete, lignesCmd);'); expect(page).not.toContain('createOrderChecked');
+    const creer = page.slice(page.indexOf('async creer(cleEnvoi'), page.indexOf('return createOrderIdempotent('));
+    expect(creer.indexOf('idempotenceDisponible()')).toBeGreaterThan(-1); expect(creer.indexOf("error: 'ENVOI_INDISPONIBLE'")).toBeGreaterThan(-1);
+    expect(creer.indexOf('idempotenceDisponible()')).toBeLessThan(creer.indexOf(".from('cart_items')"));          // refus AVANT toute lecture ou création
+    expect(page).toContain("Astro.redirect('/commande?error=indisponible')"); expect(page).toContain('data-testid="envoi-indisponible"');
+    expect(page).toContain("res.code === 'CLE_REUTILISEE_AUTRES_DONNEES'");                                       // clé réutilisée avec un autre contenu : message clair
+    const stock = lire('src/lib/stock.ts'); expect(stock).toContain("/CLE_REQUISE/.test(String(error.message ?? ''))");   // la sonde exige la réponse EXACTE de la fonction
+    expect(stock.slice(stock.indexOf('export async function createOrderIdempotent'))).not.toContain('createOrderChecked(');   // aucun repli dans la bibliothèque
     expect(page).toContain('etat = await etatPanier(depot, user.id)');
     const supa = lire('src/lib/commandeSupabase.ts'); expect(supa).toContain(".from('product_availability')"); expect(supa).toMatch(/if \(e1 \|\| e2\) throw/);   // lecture impossible ≠ « disponible »
     expect(page).not.toContain('data-stock=');                                                                // plus de stock physique côté navigateur
@@ -60,6 +68,9 @@ test.describe('Page /commande', () => {
     expect(bloc).not.toMatch(/form\.get\('(quantite|qty|quantity)'\)/); expect(bloc).toContain('poserFlash(');
     expect(page.indexOf('if (!accountActive) return Astro.redirect')).toBeLessThan(page.indexOf("const action = String(form.get('action')"));
     expect(page).toMatch(/\.from\('orders'\)\.select\('id'\)\.eq\('id', orderId\)\.eq\('user_id', user\.id\)/);
+    expect(page).toContain("if (!mienne) return Astro.redirect('/mes-commandes');");                              // la commande d'un autre n'est ni affichée ni confirmée
+    expect(page).toContain("if (Astro.url.searchParams.get('success') && !orderId) return Astro.redirect('/commande');");   // pas de « commande reçue » sans commande identifiée
+    expect(page.indexOf('if (!mienne)')).toBeLessThan(page.indexOf(".from('order_items')"));                      // les lignes ne sont lues qu'une fois la propriété vérifiée
     expect(page).toContain('{flash && !success && ('); expect(page).toContain('data-testid="apercu-ajustement"'); expect(page).toContain('data-testid="continuer-disponibles"');
   });
 

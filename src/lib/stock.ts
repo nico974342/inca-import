@@ -188,14 +188,14 @@ export type OrderCreateIdemResult =
 let idemMemoire: { v: boolean; a: number } | null = null;
 /**
  * La fonction order_create_idempotent existe-t-elle ? (migration orders_idempotence_cle.sql appliquée). Sonde SANS EFFET : sans clé, la fonction s'arrête
- * (CLE_REQUISE) avant toute lecture ou écriture. Résultat positif gardé 60 s, négatif 10 s. Absente → on retombe sur la création contrôlée habituelle.
+ * (CLE_REQUISE) avant toute lecture ou écriture. Résultat positif gardé 60 s, négatif 5 s. Absente, fermée ou injoignable → le site REFUSE l'envoi (panier conservé) : jamais de repli sur une création moins sûre.
  */
 export async function idempotenceDisponible(maintenant = Date.now()): Promise<boolean> {
-  if (idemMemoire && maintenant - idemMemoire.a < (idemMemoire.v ? 60_000 : 10_000)) return idemMemoire.v;
+  if (idemMemoire && maintenant - idemMemoire.a < (idemMemoire.v ? 60_000 : 5_000)) return idemMemoire.v;
   let v = false;
   try {
     const { error } = await supabaseAdmin.rpc('order_create_idempotent', { p_cle: null, p_order: {}, p_items: [] });
-    v = !!error && !(error.code === '42883' || error.code === 'PGRST202' || /could not find the function|does not exist/i.test(String(error.message ?? '')));
+    v = !!error && /CLE_REQUISE/.test(String(error.message ?? ''));                  // la fonction a répondu comme prévu ; absente, fermée ou injoignable = indisponible
   } catch { v = false; }
   idemMemoire = { v, a: maintenant };
   return v;

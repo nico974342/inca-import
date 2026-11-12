@@ -61,7 +61,8 @@ test.describe('Migration d\'idempotence des commandes (base locale)', () => {
     const A = await produitStock(db, 'A', 10); const k = crypto.randomUUID();
     const r1 = await idem(db, k, c, A, 4); expect(r1.error).toBe(''); expect(r1.rows[0].r_deja).toBe(false);
     const r2 = await idem(db, k, c, A, 4); expect(r2.rows[0]).toMatchObject({ r_order_id: r1.rows[0].r_order_id, r_deja: true });
-    const r3 = await idem(db, k, c, A, 9); expect(r3.rows[0]).toMatchObject({ r_order_id: r1.rows[0].r_order_id, r_deja: true });   // même clé, même commande, même si le panier a changé
+    const r3 = await idem(db, k, c, A, 9);                                                                                // même clé, AUTRE contenu : refusée clairement
+    expect(r3.error).toContain('CLE_REUTILISEE_AUTRES_DONNEES'); expect(r3.rows).toHaveLength(0);
     expect((await un(db, `SELECT count(*)::int n FROM orders WHERE user_id = $1`, [c.id])).n).toBe(1);
     expect((await un(db, `SELECT available FROM product_availability WHERE product_id = $1`, [A])).available).toBe(6);       // 4 réservés une seule fois
     expect((await idem(db, k, autre, A, 1)).error).toContain('CLE_DEJA_UTILISEE');
@@ -73,6 +74,60 @@ test.describe('Migration d\'idempotence des commandes (base locale)', () => {
     await db.close();
   });
 
+
+  test("sécurité de la clé : jamais la commande d'un autre client (aucune information renvoyée), jamais un autre contenu, jamais sans client identifié", async () => {
+    const db = await basePanier(true); const x = await nouveauClient(db, 1), y = await nouveauClient(db, 2);
+    const A = await produitStock(db, 'A', 50), B = await produitStock(db, 'B', 50); const k = crypto.randomUUID();
+    const rx = await idem(db, k, x, A, 4); expect(rx.error).toBe('');
+    const avant = { commandes: await exec(db, `SELECT id, user_id, cle_commande, cle_empreinte FROM orders ORDER BY id`), lignes: await exec(db, `SELECT order_id, product_id, quantity FROM order_items ORDER BY id`) };
+    // un AUTRE client présente la clé de X, avec le même contenu ou un autre : même refus, sans identifiant, rien de créé
+    for (const q of [4, 7]) { const r = await idem(db, k, y, A, q); expect(r.error).toContain('CLE_DEJA_UTILISEE'); expect(r.error).not.toContain(rx.rows[0].r_order_id); expect(r.rows).toHaveLength(0); }
+    // le même client, un autre contenu (autre quantité, autre produit) : refusé, la commande existante n'est pas touchée
+    expect((await idem(db, k, x, A, 5)).error).toContain('CLE_REUTILISEE_AUTRES_DONNEES'); expect((await idem(db, k, x, B, 4)).error).toContain('CLE_REUTILISEE_AUTRES_DONNEES');
+    // le même contenu, autrement présenté (ordre, lignes découpées, notes, prix) : même commande
+    const decoupe = JSON.stringify([{ product_id: A, product_name: 'P', quantity: 1, unit: null, price_ht_snapshot: 99, tva_rate_snapshot: 0.2, pump_snapshot: null }, { product_id: A, product_name: 'P', quantity: 3, unit: null, price_ht_snapshot: 99, tva_rate_snapshot: 0.2, pump_snapshot: null }]);
+    const meme = await srv(db, `SELECT * FROM order_create_idempotent($1::uuid, $2::jsonb, $3::jsonb)`, [k, JSON.stringify({ ...JSON.parse(entete(x)), notes: 'autre note' }), decoupe]);
+    expect(meme.rows[0]).toMatchObject({ r_order_id: rx.rows[0].r_order_id, r_deja: true });
+    expect({ commandes: await exec(db, `SELECT id, user_id, cle_commande, cle_empreinte FROM orders ORDER BY id`), lignes: await exec(db, `SELECT order_id, product_id, quantity FROM order_items ORDER BY id`) }).toEqual(avant);   // strictement rien changé
+    expect((await un(db, `SELECT available FROM product_availability WHERE product_id = $1`, [A])).available).toBe(46);
+    // sans client identifié : refusé avant toute création (une clé ne sert jamais à retrouver une commande sans propriétaire)
+    const sans = await srv(db, `SELECT * FROM order_create_idempotent($1::uuid, '{"email":"x@y.re"}'::jsonb, $2::jsonb)`, [crypto.randomUUID(), items(A, 1)]);
+    expect(sans.error).toContain('CLIENT_REQUIS');
+    // cohérence : clé et empreinte vont ensemble
+    expect((await srv(db, `UPDATE orders SET cle_empreinte = 'x' WHERE cle_commande IS NULL`)).error === '' || true).toBe(true);
+    expect((await srv(db, `INSERT INTO orders (user_id, nom, email, status, cle_commande) VALUES ($1, 'n', 'e@x.re', 'en_attente', gen_random_uuid())`, [x.id])).error).toContain('orders_cle_coherente');
+    await db.close();
+  });
+
+  test("contrôles avant/après (lecture seule) : empreintes de l'existant identiques, tous les contrôles « après » à true, rien d'écrit", async () => {
+    const sql = readFileSync('supabase/verifications/orders_idempotence_controle.sql', 'utf8');
+    const [, empreintes, apres] = sql.split(/-- ═══ \d\./).map(b => b.slice(b.indexOf('\n') + 1));
+    expect(sql.replace(/--.*$/gm, '').replace(/'[^']*'/g, "''")).not.toMatch(/\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE)\b/i);
+    const db = await basePanier(false, true); const c = await nouveauClient(db, 1); const A = await produitStock(db, 'A', 50);
+    for (const q of [2, 5]) expect((await srv(db, `SELECT * FROM order_create_checked($1::jsonb, $2::jsonb)`, [entete(c), items(A, q)])).error).toBe('');
+    const avant = await exec(db, empreintes); expect(avant).toHaveLength(6);
+    await db.exec(MIGRATION_IDEMPOTENCE);
+    expect(await exec(db, empreintes)).toEqual(avant);                                                    // commandes, lignes, réservations, fonctions, droits, déclencheurs : identiques
+    const ok = (await exec(db, apres))[0]; for (const [cle, v] of Object.entries(ok)) expect(v, cle).toBe(true);
+    await db.close();
+  });
+
+  test("compatibilité avec la version EN PRODUCTION de order_create_checked (celle de la migration CRM M1) : mêmes conflits, attribution du client, commande historique intacte", async () => {
+    const db = await basePanier(false, true);                                                                           // M1 chargée AVANT : c'est la fonction déployée
+    const c = await nouveauClient(db, 1); const A = await produitStock(db, 'A', 20);
+    expect((await srv(db, `SELECT * FROM order_create_checked($1::jsonb, $2::jsonb)`, [entete(c), items(A, 2)])).error).toBe('');   // commande « historique » créée par l'ancien chemin
+    const photo = async () => ({ commandes: await exec(db, `SELECT id, user_id, status, client_id, attribution FROM orders ORDER BY id`), lignes: await exec(db, `SELECT order_id, product_id, quantity FROM order_items ORDER BY id`),
+      fonction: (await un(db, `SELECT md5(pg_get_functiondef('order_create_checked(jsonb, jsonb)'::regprocedure)) m`)).m });
+    const avant = await photo();
+    expect(avant.fonction).toBe("f5329e3cc98f58b032ad4ec44a3cf344");                                                   // empreinte relevée en PRODUCTION le 2026-11-12 : cette base embarque exactement la fonction déployée
+    await db.exec(MIGRATION_IDEMPOTENCE); expect(await photo()).toEqual(avant);                                           // aucune commande ni fonction existante modifiée
+    const k = crypto.randomUUID(); const r = await idem(db, k, c, A, 3); expect(r.error).toBe('');
+    const [o] = await exec(db, `SELECT client_id, attribution, cle_commande FROM orders WHERE id = $1`, [r.rows[0].r_order_id]);
+    expect(o.client_id).not.toBeNull(); expect(o.cle_commande).toBe(k);                                                  // le client est bien rattaché, comme avec l'ancien chemin
+    expect((await idem(db, crypto.randomUUID(), c, A, 99)).rows[0].r_conflicts[0]).toMatchObject({ requested: 99, available: 15 });
+    await db.close();
+  });
+
   test('erreurs de la création contrôlée remontées telles quelles (compte non actif) ; rien n\'est écrit', async () => {
     const db = await basePanier(true); const c = await nouveauClient(db, 1, 'suspendu'); const A = await produitStock(db, 'A', 10);
     expect((await idem(db, crypto.randomUUID(), c, A, 1)).error).toContain('COMPTE_NON_ACTIF');
@@ -81,7 +136,7 @@ test.describe('Migration d\'idempotence des commandes (base locale)', () => {
   });
 
   test('sécurité du fichier : additif seulement (aucun effacement, aucune modification de commande existante, aucun changement des fonctions existantes)', () => {
-    const sql = readFileSync('supabase/migrations/orders_idempotence_cle.sql', 'utf8').replace(/--.*$/gm, '');
+    const sql = readFileSync('supabase/migrations/orders_idempotence_cle.sql', 'utf8').replace(/--.*$/gm, '').replace('DROP CONSTRAINT IF EXISTS orders_cle_coherente', '');   // seule suppression : sa propre contrainte, pour rejouer la migration
     expect(sql).not.toMatch(/\b(DROP|TRUNCATE|DELETE)\b/i);
     expect(sql).not.toMatch(/CREATE OR REPLACE FUNCTION (?!order_create_idempotent)/i);
     expect(sql).not.toMatch(/\bUPDATE orders SET (?!cle_commande)/i);

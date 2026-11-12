@@ -87,8 +87,7 @@ export type ResultatCreation =
   | { ok: false; error: string };
 
 export type CreateurCommande = {
-  /** Vrai si la création est idempotente côté base (la même clé ne crée jamais deux commandes). */
-  idempotent: boolean;
+  /** Crée la commande par la fonction SÉCURISÉE de la base (idempotente : la même clé ne crée jamais deux commandes). S'il n'y en a pas, elle REFUSE (jamais de repli). */
   creer(cle: string, lignes: LigneBrute[]): Promise<ResultatCreation>;
 };
 
@@ -112,8 +111,8 @@ export async function traiterEnvoi(o: { depot: DepotCommande; userId: string; cl
     if (derniere && derniere.secondes <= FENETRE_COMMANDE_RECENTE_S) return { type: 'deja_enregistree', orderId: derniere.id };
     return { type: 'panier_vide' };
   }
-  // Sans idempotence côté base, un panier identique à une commande qui vient d'être créée = doublon (double clic, nouvel essai après une coupure) : on ne recrée pas.
-  if (!createur.idempotent && derniere && derniere.secondes <= FENETRE_DOUBLON_S && signaturePanier(derniere.lignes) === signaturePanier(lignes)) {
+  // Second filet, en plus de la clé : un panier identique à une commande créée il y a moins de 2 minutes = doublon (vidage du panier échoué, ancienne page) : on ne recrée pas.
+  if (derniere && derniere.secondes <= FENETRE_DOUBLON_S && signaturePanier(derniere.lignes) === signaturePanier(lignes)) {
     return { type: 'deja_enregistree', orderId: derniere.id };
   }
 

@@ -7,7 +7,7 @@ import { Resend } from 'resend';
 import { generateOrderPDF } from '../lib/pdf';
 import { sanitizeText } from '../lib/sanitize';
 import { normalizeEmail, findClientByEmail, fetchClientPriceOverrides, resolveClientPrice } from '../lib/clients';
-import { createOrderChecked, createOrderIdempotent, idempotenceDisponible } from '../lib/stock';
+import { createOrderIdempotent, idempotenceDisponible } from '../lib/stock';
 import { COMPANY, RESEND_DEFAULT_FROM } from '../lib/constants';
 import { todayReunion } from '../lib/datetime';
 import { depotCommande } from '../lib/commandeSupabase';
@@ -81,13 +81,13 @@ if (Astro.request.method === 'POST') {
   const notes = sanitizeText(form.get('notes') as string, 1000);
   const cleForm = form.get('cle');
   const cle = estUuid(cleForm) ? cleForm : crypto.randomUUID();
-  const idem = await idempotenceDisponible();
 
   // Détail complet du panier (prix, TVA, PUMP) pour la commande, l'e-mail et le PDF : lu au moment de la création, et comparé au panier évalué (jamais deux versions).
   let items: any[] = [];
   const createur: CreateurCommande = {
-    idempotent: idem,
     async creer(cleEnvoi, lignes: LigneBrute[]) {
+      // La création passe TOUJOURS par la fonction sécurisée (idempotente). Absente ou injoignable : on refuse proprement, le panier reste intact — jamais de repli.
+      if (!(await idempotenceDisponible())) return { ok: false as const, error: 'ENVOI_INDISPONIBLE' };
       const { data } = await supabaseAdmin
         .from('cart_items')
         .select('product_id, quantity, products(id, name, category, unit, units_per_carton, price_ht, tva_rate, prix_achat_moyen_ht, stock_quantity)')
@@ -110,8 +110,8 @@ if (Astro.request.method === 'POST') {
       });
       const entete = { user_id: user.id, nom: user.user_metadata?.nom ?? '', societe: user.user_metadata?.societe ?? '', telephone: user.user_metadata?.telephone ?? '', email: normalizeEmail(user.email), notes: notes || null };
       // Création contrôlée : le disponible (physique − réservé) est revérifié dans la même transaction que l'insertion, verrous posés sur les produits.
-      // Contrôler ici en JS ne protégerait de rien. Avec l'idempotence, la même clé ne crée jamais deux commandes.
-      return idem ? createOrderIdempotent(cleEnvoi, entete, lignesCmd) : createOrderChecked(entete, lignesCmd);
+      // Contrôler ici en JS ne protégerait de rien. La même clé ne crée jamais deux commandes ; réutilisée avec un autre contenu ou par un autre client, elle est refusée.
+      return createOrderIdempotent(cleEnvoi, entete, lignesCmd);
     },
   };
 
@@ -123,7 +123,8 @@ if (Astro.request.method === 'POST') {
   if (res.type === 'conflits') return Astro.redirect('/commande?error=stock');
   if (res.type === 'erreur') {
     if (res.code === 'COMPTE_NON_ACTIF') return Astro.redirect('/commande?error=compte_non_actif');
-    if (res.code === 'PANIER_MODIFIE') return Astro.redirect('/commande?error=panier_modifie');
+    if (res.code === 'PANIER_MODIFIE' || res.code === 'CLE_REUTILISEE_AUTRES_DONNEES') return Astro.redirect('/commande?error=panier_modifie');
+    if (res.code === 'ENVOI_INDISPONIBLE') return Astro.redirect('/commande?error=indisponible');
     return Astro.redirect('/commande?error=1');
   }
 
@@ -210,11 +211,13 @@ if (Astro.request.method === 'POST') {
 // ── GET: show cart ─────────────────────────────────────────────
 const success    = !!Astro.url.searchParams.get('success');
 const errorParam = Astro.url.searchParams.get('error');
-const hasError   = !!errorParam && !['stock', 'compte_non_actif', 'panier_modifie'].includes(errorParam);
+const hasError   = !!errorParam && !['stock', 'compte_non_actif', 'panier_modifie', 'indisponible'].includes(errorParam);
+const envoiIndisponible = errorParam === 'indisponible';
 const stockError = errorParam === 'stock';
 const panierModifie = errorParam === 'panier_modifie';
 const orderIdRaw = Astro.url.searchParams.get('order');
 const orderId    = estUuid(orderIdRaw) ? orderIdRaw : null;
+if (Astro.url.searchParams.get('success') && !orderId) return Astro.redirect('/commande');       // pas de « commande bien reçue » sans une commande identifiée
 const apercuDemande = Astro.url.searchParams.get('apercu') === '1';
 const apercuRevu    = Astro.url.searchParams.get('revu') === '1';
 const maintenantISO = new Date().toISOString();
@@ -232,10 +235,11 @@ let successTotalHT = 0;
 if (success && orderId) {
   // Seulement MES commandes : un identifiant deviné ne montre rien.
   const { data: mienne } = await supabaseAdmin.from('orders').select('id').eq('id', orderId).eq('user_id', user.id).maybeSingle();
-  const { data: orderItems } = mienne ? await supabaseAdmin
+  if (!mienne) return Astro.redirect('/mes-commandes');                                    // une commande qui n'est pas la sienne n'est ni affichée ni confirmée
+  const { data: orderItems } = await supabaseAdmin
     .from('order_items')
     .select('product_name, quantity, unit, price_ht_snapshot')
-    .eq('order_id', orderId) : { data: [] as any[] };
+    .eq('order_id', orderId);
 
   successItems = (orderItems ?? []).map(it => ({
     product_name: it.product_name,
@@ -369,6 +373,11 @@ const fmtHT    = (n: number) => n.toFixed(2).replace('.', ',') + ' €';
         <p class="order-error" role="alert" data-testid="erreur-generique">
           Votre commande n'a pas pu être envoyée. <strong>Votre panier est conservé</strong> : vérifiez-le ci-dessous puis réessayez.
           Si le problème persiste, consultez <a href="/mes-commandes">vos commandes</a> avant de renvoyer, pour ne pas la passer deux fois.
+        </p>
+      )}
+      {envoiIndisponible && !success && (
+        <p class="order-error" role="alert" data-testid="envoi-indisponible">
+          L'envoi des commandes est momentanément indisponible. <strong>Votre panier est conservé</strong> : rien n'a été envoyé. Réessayez dans quelques minutes.
         </p>
       )}
       {panierModifie && !success && (
