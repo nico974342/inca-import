@@ -37,11 +37,17 @@ Le panier est enregistré côté serveur (table `cart_items`) : il survit à un 
 
 **Catalogue** : réponse du serveur prise en compte (quantité réduite au disponible, produit indisponible), trois essais en cas de coupure, message visible ; plus d'échec silencieux. Ajout au panier plafonné au disponible réel.
 
-## 3. Migration d'idempotence (à autoriser séparément)
+## 3. Migration d'idempotence — OBLIGATOIRE
 
-`supabase/migrations/orders_idempotence_cle.sql` (**non appliquée**) : une colonne facultative `orders.cle_commande`, un index unique partiel et une fonction `order_create_idempotent` qui **délègue à `order_create_checked` sans la modifier**. Aucune donnée existante n'est touchée. Retour arrière : trois instructions (en commentaire du fichier).
+ (**non appliquée**) : deux colonnes facultatives sur  (, ), un index unique partiel, une contrainte de cohérence et une fonction  qui **délègue à  sans la modifier** (même contrôle de compte actif, mêmes verrous, mêmes conflits). Aucune donnée existante n'est touchée.
 
-**Le site fonctionne sans cette migration** : il détecte l'absence de la fonction et retombe sur la création contrôlée habituelle, avec une détection des doublons évidents (même panier, moins de 2 minutes, même client). La protection **complète** contre le double clic simultané exige la migration.
+Règles garanties par la base :
+- **Un client ne retrouve ni ne réutilise la commande d'un autre** : une clé déjà utilisée par un autre client donne , sans aucun identifiant de commande dans la réponse.
+- **Même clé, autre contenu = refus clair** () : aucune nouvelle commande, la précédente n'est pas modifiée. Le contenu est comparé par une empreinte des lignes « produit : quantité » (ordre, découpage des lignes, notes et prix n'y changent rien).
+- **Même clé, même contenu = la même commande** (jamais de doublon), même pour des envois simultanés (verrou de transaction propre à la clé). Un refus pour stock ne consomme pas la clé.
+- Un client identifié est exigé (). Fonction réservée au serveur du site.
+
+**Sans la fonction, le site REFUSE l'envoi** (message « momentanément indisponible », panier conservé) : il ne retombe jamais sur une création moins sûre. D'où l'ordre de mise en ligne : **migration d'abord, code ensuite**. La migration seule est sans effet sur le code actuellement en production (colonnes et fonction inutilisées).
 
 ## 4. Tests
 
@@ -57,6 +63,16 @@ Le panier est enregistré côté serveur (table `cart_items`) : il survit à un 
 
 ## 6. Risques résiduels
 
-- Sans la migration, deux envois **exactement simultanés** de la même page peuvent encore, dans un cas extrêmement rare, créer deux commandes (le verrou du navigateur les évite dans la pratique).
-- La vérification après coupure réseau, sans migration, repose sur la date (commande la plus récente créée depuis l'affichage de la page).
+- Si la fonction sécurisée devient indisponible (incident de base, retrait de la migration), les clients ne peuvent plus envoyer de commande jusqu'à son retour : choix assumé (refus propre, panier conservé) plutôt qu'une création sans protection. Le retour arrière de la migration ne doit être utilisé qu'avec l'ancien code.
+- Le second filet « panier identique à une commande créée il y a moins de 2 minutes » peut, dans un cas très rare, bloquer une recommande volontairement identique dans ce délai (message explicite, commande déjà enregistrée affichée).
 - Le message d'ajustement transite par un cookie court (120 s) limité à 12 lignes ; au-delà, « … et N autres ».
+
+## 7. Mise en ligne (chaque étape qui écrit en production attend un accord explicite)
+
+1. **Sauvegarde** : confirmer la date et l'heure de la dernière sauvegarde Supabase Pro.
+2. **Avant** : relever en lecture seule  (section 1 : empreintes de , , réservations, fonctions de commande, droits, déclencheurs) ; vérifier qu'aucune commande n'est en cours de création.
+3. **Migration** : appliquer **uniquement**  après contrôle de son SHA-256.
+4. **Après** : section 1 identique à l'avant ; section 2 entièrement à . Arrêt si la moindre différence.
+5. **Déploiement du code** (fusion, push, déploiement : accords séparés). Contrôle : une commande réelle par un compte de test fourni par l'administrateur (pas de donnée fictive en production sans accord).
+6. **Retour arrière** : le code ne nécessite pas de retrait de la migration ; en cas de problème applicatif, redéployer la version précédente (la migration reste inoffensive).
+
