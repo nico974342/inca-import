@@ -99,14 +99,45 @@ test.describe('Migration d\'idempotence des commandes (base locale)', () => {
     await db.close();
   });
 
+  test("la migration SEULE n'interrompt ni ne change le parcours actuel : création, refus de stock, modification administrateur, statuts, livraison, annulation, suppression — résultats identiques avec et sans la migration", async () => {
+    const jouer = async (db: PGlite) => {
+      const c = await nouveauClient(db, 1); const A = await produitStock(db, 'A', 40), B = await produitStock(db, 'B', 40); const trace: unknown[] = [];
+      const lignes = (l: [string, number][]) => JSON.stringify(l.map(([p, q]) => ({ product_id: p, product_name: 'P', quantity: q, unit: null, price_ht_snapshot: 5, tva_rate_snapshot: 0.085, pump_snapshot: null })));
+      const etat = async (nom: string) => {
+        const v = await exec(db, `SELECT physical, reserved, available FROM product_availability WHERE product_id = ANY($1::uuid[]) ORDER BY product_name`, [[A, B]]);
+        const recalcule = await exec(db, `SELECT coalesce(sum(oi.quantity), 0)::int AS r FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE o.status = ANY (stock_reserving_statuses()) AND oi.product_id = ANY($1::uuid[])`, [[A, B]]);
+        expect(v.reduce((s, x) => s + Number(x.reserved), 0), nom).toBe(Number(recalcule[0].r));                         // les réservations de la vue = le recalcul à chaque étape
+        trace.push([nom, v.map(x => [Number(x.physical), Number(x.reserved), Number(x.available)])]);
+      };
+      const creer = async (l: [string, number][]) => { const r = await srv(db, `SELECT * FROM order_create_checked($1::jsonb, $2::jsonb)`, [entete(c), lignes(l)]); expect(r.error).toBe(''); return r.rows[0]; };
+      const o1 = (await creer([[A, 10], [B, 5]])).r_order_id as string; await etat('création 1');
+      const o2 = (await creer([[A, 20]])).r_order_id as string; await etat('création 2');
+      const refus = await creer([[A, 15]]); expect(refus.r_order_id).toBeNull(); expect(refus.r_conflicts[0]).toMatchObject({ requested: 15, available: 10 }); await etat('refus de stock');
+      expect((await srv(db, `SELECT * FROM order_update_checked($1::uuid, $2::jsonb)`, [o1, lignes([[A, 4], [B, 8]])])).error).toBe(''); await etat('modification administrateur');
+      for (const st of ['confirmee', 'en_preparation', 'expediee']) { expect((await srv(db, `UPDATE orders SET status = $2 WHERE id = $1`, [o1, st])).error).toBe(''); await etat('statut ' + st); }
+      expect((await srv(db, `SELECT order_mark_livree($1::uuid)`, [o1])).error).toBe(''); await etat('livraison');
+      expect((await srv(db, `SELECT order_cancel_livree($1::uuid)`, [o1])).error).toBe(''); await etat('retour de livraison');
+      expect((await srv(db, `UPDATE orders SET status = 'annulee' WHERE id = $1`, [o2])).error).toBe(''); await etat('annulation');
+      expect((await srv(db, `UPDATE orders SET invoice_path = 'f.pdf', notes = 'note' WHERE id = $1`, [o1])).error).toBe('');
+      expect((await srv(db, `DELETE FROM orders WHERE id = $1`, [o2])).error).toBe(''); await etat('suppression');
+      return trace;
+    };
+    const sans = await basePanier(false, true), avec = await basePanier(true, true);                                        // les deux avec la version de production de order_create_checked
+    const t1 = await jouer(sans), t2 = await jouer(avec);
+    expect(t2).toEqual(t1); expect(t1).toHaveLength(11);
+    await sans.close(); await avec.close();
+  });
+
   test("contrôles avant/après (lecture seule) : empreintes de l'existant identiques, tous les contrôles « après » à true, rien d'écrit", async () => {
     const sql = readFileSync('supabase/verifications/orders_idempotence_controle.sql', 'utf8');
-    const [, empreintes, apres] = sql.split(/-- ═══ \d\./).map(b => b.slice(b.indexOf('\n') + 1));
+    const [, empreintes, coherence, apres] = sql.split(/-- ═══ \d\./).map(b => b.slice(b.indexOf('\n') + 1));
     expect(sql.replace(/--.*$/gm, '').replace(/'[^']*'/g, "''")).not.toMatch(/\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE)\b/i);
     const db = await basePanier(false, true); const c = await nouveauClient(db, 1); const A = await produitStock(db, 'A', 50);
     for (const q of [2, 5]) expect((await srv(db, `SELECT * FROM order_create_checked($1::jsonb, $2::jsonb)`, [entete(c), items(A, q)])).error).toBe('');
-    const avant = await exec(db, empreintes); expect(avant).toHaveLength(6);
+    const avant = await exec(db, empreintes); expect(avant).toHaveLength(6); const coherenceAvant = await exec(db, coherence);
+    expect(coherenceAvant[0]).toMatchObject({ commandes_sans_ligne: 0, lignes_sans_commande: 0, produits_en_ecart: 0, disponibles_negatifs: 0, commandes: 2, reserve_selon_la_vue: 7, reserve_recalcule: 7 });
     await db.exec(MIGRATION_IDEMPOTENCE);
+    expect(await exec(db, coherence)).toEqual(coherenceAvant);                                          // cohérence commandes / réservations : identique
     expect(await exec(db, empreintes)).toEqual(avant);                                                    // commandes, lignes, réservations, fonctions, droits, déclencheurs : identiques
     const ok = (await exec(db, apres))[0]; for (const [cle, v] of Object.entries(ok)) expect(v, cle).toBe(true);
     await db.close();

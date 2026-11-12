@@ -20,7 +20,16 @@ UNION ALL
 SELECT 'déclencheurs de orders', count(*), 0, md5(coalesce(string_agg(tgname, ',' ORDER BY tgname), '')) FROM pg_trigger WHERE tgrelid = 'public.orders'::regclass AND NOT tgisinternal
 ORDER BY 1;
 
--- ═══ 2. APRÈS SEULEMENT : tout doit valoir true ═══
+-- ═══ 2. COHÉRENCE DES COMMANDES ET DES RÉSERVATIONS (AVANT puis APRÈS : IDENTIQUE ; anomalies = 0 ; réservé selon la vue = réservé recalculé) ═══
+SELECT (SELECT count(*) FROM orders o WHERE NOT EXISTS (SELECT 1 FROM order_items i WHERE i.order_id = o.id)) AS commandes_sans_ligne,
+       (SELECT count(*) FROM order_items i WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.id = i.order_id)) AS lignes_sans_commande,
+       (SELECT coalesce(sum(reserved), 0) FROM product_availability) AS reserve_selon_la_vue,
+       (SELECT coalesce(sum(oi.quantity), 0) FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE o.status = ANY (stock_reserving_statuses())) AS reserve_recalcule,
+       (SELECT count(*) FROM product_availability a LEFT JOIN (SELECT oi.product_id, sum(oi.quantity)::int AS r FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE o.status = ANY (stock_reserving_statuses()) GROUP BY 1) x ON x.product_id = a.product_id WHERE a.reserved <> coalesce(x.r, 0)) AS produits_en_ecart,
+       (SELECT count(*) FROM product_availability WHERE available < 0) AS disponibles_negatifs,
+       (SELECT count(*) FROM orders) AS commandes, (SELECT count(*) FROM cart_items) AS lignes_de_panier;
+
+-- ═══ 3. APRÈS SEULEMENT : tout doit valoir true ═══
 SELECT
   (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'orders' AND column_name IN ('cle_commande', 'cle_empreinte')) = 2 AS deux_colonnes,
   EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'orders_cle_commande_idx') AS index_unique,
