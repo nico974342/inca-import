@@ -24,7 +24,10 @@ test.describe('Produit(s) indisponible(s) : le panier est conservé et ajustable
     const avant = await panierDe(db, c);
 
     const etat = await etatPanier(depot, c.id);
-    expect(etat.evaluations.map(e => e.statut)).toEqual(['ok', 'epuise', 'ok']);
+    const ev = (id: string) => etat.evaluations.find(e => e.product_id === id);                           // chaque ligne est identifiée par son PRODUIT, jamais par sa position
+    expect(etat.evaluations).toHaveLength(3);
+    expect(ev(A)).toMatchObject({ statut: 'ok', demande: 2, disponible: 10 }); expect(ev(C)).toMatchObject({ statut: 'ok', demande: 1, disponible: 5 });
+    expect(ev(B)).toMatchObject({ statut: 'epuise', demande: 3, disponible: 0, cible: 0 });
     expect(etat.plan.map(p => `${p.action}:${p.nom}`)).toEqual(['retirer:Chips épuisées']);
 
     const r = await traiterEnvoi({ depot, userId: c.id, cle: cle(), createur: createurPglite(db, c) });
@@ -63,8 +66,9 @@ test.describe('Produit(s) indisponible(s) : le panier est conservé et ajustable
     const { c, depot } = await neuf();
     const A = await produitStock(db, 'Coca 33cl', 4), B = await produitStock(db, 'Eau 1L', 50);
     await remplirPanier(db, c, [[A, 10], [B, 6]]);
-    const e = (await etatPanier(depot, c.id)).evaluations[0];
-    expect(e).toMatchObject({ statut: 'reduire', demande: 10, disponible: 4, cible: 4 });
+    const e = (await etatPanier(depot, c.id)).evaluations.find(x => x.product_id === A);                  // la ligne du produit A (Coca), identifiée par son produit
+    expect(e).toMatchObject({ product_id: A, statut: 'reduire', demande: 10, disponible: 4, cible: 4 });
+    expect((await etatPanier(depot, c.id)).evaluations.find(x => x.product_id === B)).toMatchObject({ statut: 'ok', demande: 6, disponible: 50 });
     const r = await traiterEnvoi({ depot, userId: c.id, cle: cle(), createur: createurPglite(db, c) });
     expect(r.type === 'conflits' && r.conflits[0]).toMatchObject({ requested: 10, available: 4 });
     expect((await reduireLigne(depot, c.id, A)).message).toContain('de 10 à 4');
@@ -102,7 +106,9 @@ test.describe('Produit(s) indisponible(s) : le panier est conservé et ajustable
     const r = await traiterEnvoi({ depot, userId: c.id, cle: cle(), createur: createurPglite(db, c) });
     expect(r.type === 'conflits' && r.conflits).toEqual([{ product_id: A, product_name: 'Fanta', requested: 6, available: 2 }]);
     expect(await panierDe(db, c)).toEqual({ [A]: 6, [B]: 3 });
-    const e = (await etatPanier(depot, c.id)).evaluations; expect(e[0]).toMatchObject({ statut: 'reduire', disponible: 2 }); expect(e[1].statut).toBe('ok');
+    const e = (await etatPanier(depot, c.id)).evaluations; const ev = (id: string) => e.find(x => x.product_id === id);   // par produit, jamais par position
+    expect(ev(A)).toMatchObject({ product_id: A, statut: 'reduire', demande: 6, disponible: 2, cible: 2 });   // Fanta : 8 réservés par l'autre client, il en reste 2
+    expect(ev(B)).toMatchObject({ product_id: B, statut: 'ok', demande: 3, disponible: 10 });                // Sprite : intact
   });
 
   test("la disponibilité change ENCORE entre l\'aperçu et la confirmation : rien n\'est appliqué, l\'aperçu est remontré (jamais d\'ajustement silencieux)", async () => {
@@ -183,7 +189,7 @@ test.describe('Doubles clics, erreurs réseau, panier conservé', () => {
     for (let i = 0; i < 3; i++) {
       expect((await traiterEnvoi({ depot, userId: c.id, cle: cle(), createur: createurPglite(db, c) })).type).toBe('conflits');
       expect(await panierDe(db, c)).toEqual(avant);                                                       // chaque affichage relit le panier enregistré : identique
-      expect((await etatPanier(depot, c.id)).lignes.map(l => l.quantity)).toEqual([9, 12]);
+      expect(Object.fromEntries((await etatPanier(depot, c.id)).lignes.map(l => [l.product_id, l.quantity]))).toEqual({ [A]: 9, [B]: 12 });   // par produit, jamais par position
     }
     expect(await commandesDe(db, c)).toHaveLength(0);
   });
@@ -274,7 +280,8 @@ test.describe('Sécurité des stocks, prix et permissions', () => {
     await db.query(`UPDATE products SET visible_catalogue = false WHERE id = $1`, [M]);
     await db.query(`INSERT INTO client_product_access (client_id, product_id) SELECT id, $2 FROM client_accounts WHERE email = $1`, [autorise.c.email, M]);
     await remplirPanier(db, c, [[V, 1], [M, 2]]); await remplirPanier(db, autorise.c, [[V, 1], [M, 2]]);
-    const e = (await etatPanier(depot, c.id)).evaluations; expect(e.map(x => x.statut)).toEqual(['ok', 'retire_catalogue']);
+    const e = (await etatPanier(depot, c.id)).evaluations; expect(e).toHaveLength(2);
+    expect(e.find(x => x.product_id === V)).toMatchObject({ statut: 'ok', demande: 1, disponible: 10 }); expect(e.find(x => x.product_id === M)).toMatchObject({ statut: 'retire_catalogue', demande: 2, disponible: 0, cible: 0 });
     expect(await panierDe(db, c)).toEqual({ [V]: 1, [M]: 2 });                                            // l'état du panier n'a pas été modifié par le simple affichage
     expect((await traiterEnvoi({ depot, userId: c.id, cle: cle(), createur: createurPglite(db, c) })).type).toBe('conflits');
     expect((await etatPanier(autorise.depot, autorise.c.id)).plan).toHaveLength(0);                       // le client autorisé : rien à ajuster
