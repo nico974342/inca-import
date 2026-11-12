@@ -8,6 +8,7 @@ import { logAdminAction } from '../../lib/audit';
 import { CLIENT_STATUSES, CLIENT_STATUS_LABEL, CLIENT_STATUS_COLOR, CLIENT_TYPES, CLIENT_TYPE_LABEL } from '../../lib/constants';
 import { formatDateReunion } from '../../lib/datetime';
 import { isAdmin, getRole, ROLE_LABEL } from '../../lib/roles';
+import { indexClient } from '../../lib/rechercheClients';
 
 const viewerIsAdmin = isAdmin((Astro.locals as any).user);
 
@@ -318,6 +319,7 @@ const PAGE_SIZE = 30;
 const page = Math.max(1, parseInt(Astro.url.searchParams.get('page') ?? '1', 10));
 const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
 const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+const surLaPage = new Set(pageRows.map(r => `${r.kind}:${r.id}`));          // lignes affichées quand aucune recherche n'est en cours
 
 function formatDate(iso: string) {
   return formatDateReunion(iso, { year: '2-digit' });
@@ -460,8 +462,27 @@ function formatDate(iso: string) {
     </a>
   </div>
 
+  {rows.length > 0 && (
+    <div class="clients-recherche" role="search">
+      <label for="clients-recherche" class="sr-only">Rechercher un client</label>
+      <div class="clients-recherche-champ">
+        <svg class="clients-recherche-icone" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="7" cy="7" r="4.75" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <input type="search" id="clients-recherche" class="search-input clients-recherche-input" placeholder="Nom, société, téléphone ou e-mail…" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" data-testid="clients-recherche" />
+        <button type="button" id="clients-recherche-effacer" class="clients-recherche-effacer" aria-label="Effacer la recherche" hidden>✕</button>
+      </div>
+      <p id="clients-recherche-compteur" class="clients-recherche-compteur" role="status" aria-live="polite" data-testid="clients-compteur"></p>
+    </div>
+  )}
+
+  <div id="clients-aucun" class="empty-state" role="status" data-testid="clients-aucun" hidden>
+    <p class="empty-title">Aucun client trouvé.</p>
+    <p class="empty-body">Essayez avec une autre orthographe, un autre mot ou un numéro de téléphone.</p>
+  </div>
+
   {rows.length > 0 ? (
-    <div class="table-wrap">
+    <div class="table-wrap" id="clients-tableau">
       <table class="data-table">
         <thead>
           <tr>
@@ -480,9 +501,13 @@ function formatDate(iso: string) {
           </tr>
         </thead>
         <tbody>
-          {pageRows.map(r => (
+          {rows.map(r => (
             <tr
               class={r.kind === 'client' ? 'client-row' : ''}
+              data-recherche={indexClient(r).texte}
+              data-tel={indexClient(r).tel}
+              data-page-courante={surLaPage.has(`${r.kind}:${r.id}`) ? '1' : '0'}
+              hidden={!surLaPage.has(`${r.kind}:${r.id}`)}
               data-href={r.kind === 'client' ? `/admin/clients/${r.id}` : undefined}
               data-pending={r.kind === 'client' && r.status === 'en_attente' ? 'true' : undefined}
             >
@@ -627,6 +652,49 @@ function formatDate(iso: string) {
 </AdminLayout>
 
 <script>
+  import { correspond, libelleResultats } from '../../lib/rechercheClients';
+
+  // ── Recherche instantanée (sans rechargement, avec les filtres existants : elle porte sur les lignes de la vue affichée) ──
+  const champ     = document.getElementById('clients-recherche') as HTMLInputElement | null;
+  const effacer   = document.getElementById('clients-recherche-effacer') as HTMLButtonElement | null;
+  const compteur  = document.getElementById('clients-recherche-compteur');
+  const aucun     = document.getElementById('clients-aucun');
+  const tableau   = document.getElementById('clients-tableau');
+  const pagination = document.querySelector<HTMLElement>('nav.pagination');
+  const lignes    = Array.from(document.querySelectorAll<HTMLTableRowElement>('tbody tr[data-recherche]'));
+
+  function appliquerRecherche(valeur: string) {
+    const actif = valeur.trim() !== '';
+    let n = 0;
+    for (const tr of lignes) {
+      const visible = actif ? correspond({ texte: tr.dataset.recherche ?? '', tel: tr.dataset.tel ?? '' }, valeur) : tr.dataset.pageCourante === '1';
+      tr.hidden = !visible;
+      if (visible) n++;
+    }
+    if (tableau) tableau.hidden = actif && n === 0;
+    if (aucun) aucun.hidden = !(actif && n === 0);
+    if (pagination) pagination.hidden = actif;                                   // en recherche, les résultats de toutes les pages sont affichés ensemble
+    if (compteur) compteur.textContent = actif ? libelleResultats(n, lignes.length) : '';
+    if (effacer) effacer.hidden = !actif;
+    // la recherche suit les changements d'onglet et de page (même adresse, paramètre q)
+    const url = new URL(window.location.href);
+    if (actif) url.searchParams.set('q', valeur.trim()); else url.searchParams.delete('q');
+    window.history.replaceState(null, '', url.pathname + url.search);
+    document.querySelectorAll<HTMLAnchorElement>('a.filter-tab, a.page-btn').forEach(a => {
+      const u = new URL(a.href, window.location.origin);
+      if (actif) u.searchParams.set('q', valeur.trim()); else u.searchParams.delete('q');
+      a.href = u.pathname + u.search;
+    });
+  }
+
+  if (champ) {
+    champ.addEventListener('input', () => appliquerRecherche(champ.value));
+    champ.addEventListener('keydown', e => { if (e.key === 'Escape') { champ.value = ''; appliquerRecherche(''); } });
+    effacer?.addEventListener('click', () => { champ.value = ''; appliquerRecherche(''); champ.focus(); });
+    const initiale = new URL(window.location.href).searchParams.get('q');
+    if (initiale) { champ.value = initiale; appliquerRecherche(initiale); }
+  }
+
   document.querySelectorAll<HTMLTableRowElement>('tr.client-row').forEach(row => {
     row.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
@@ -651,6 +719,19 @@ function formatDate(iso: string) {
 </script>
 
 <style>
+.clients-recherche { margin: 0 0 var(--space-4); }
+/* l'attribut hidden doit toujours l'emporter, y compris sur les styles d'affichage de ces blocs */
+.pagination[hidden], .empty-state[hidden], .table-wrap[hidden] { display: none !important; }
+.clients-recherche-champ { position: relative; display: flex; align-items: center; max-width: 520px; }
+.clients-recherche-icone { position: absolute; left: 0.875rem; color: var(--color-muted); pointer-events: none; }
+.clients-recherche-champ .clients-recherche-input { width: 100%; max-width: none; flex: 1; padding-left: 2.5rem; padding-right: 2.5rem; min-height: 44px; font-size: 1rem; }
+.clients-recherche-input::-webkit-search-cancel-button, .clients-recherche-input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }   /* une seule croix : la nôtre */
+.clients-recherche-input::-ms-clear { display: none; }
+.clients-recherche-effacer { position: absolute; right: 0.375rem; min-width: 36px; min-height: 36px; border: 0; background: transparent; color: var(--color-muted); font-size: 1rem; cursor: pointer; border-radius: var(--radius-sm); }
+.clients-recherche-effacer:hover { color: var(--color-ink); background: var(--color-surface); }
+.clients-recherche-compteur { margin: var(--space-2) 0 0; min-height: 1.25rem; font-size: var(--text-xs); color: var(--color-muted); }
+.search-input { padding: 0.625rem 0.875rem; font-family: var(--font-body); font-size: var(--text-sm); color: var(--color-ink); background: var(--color-bg); border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-sm); outline: none; transition: border-color var(--dur-fast); }
+.search-input:focus { border-color: var(--color-primary); }
 .clients-toolbar {
   display: flex;
   justify-content: flex-end;
