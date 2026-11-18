@@ -1216,7 +1216,8 @@ textarea:focus {
     enCours = true; btn.disabled = true; btn.textContent = 'Envoi en cours…';
     message('Envoi de votre commande… ne fermez pas cette page.');
     try {
-      const r = await fetch(form.action || location.href, { method: 'POST', body: new FormData(form), credentials: 'same-origin' });
+      // Pas form.action : le champ caché name="action" du formulaire le masque (form.action vaudrait « [object HTMLInputElement] » et l'envoi partirait vers une adresse inexistante).
+      const r = await fetch(location.href, { method: 'POST', body: new FormData(form), credentials: 'same-origin' });
       if (!r.ok) throw new Error('réponse ' + r.status);
       location.href = r.redirected ? r.url : location.href;                                                   // le serveur a répondu : on affiche sa réponse (succès, ajustements…)
     } catch {
