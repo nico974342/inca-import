@@ -1,0 +1,20 @@
+-- RETOUR ARRIÈRE de cump_recalcul_automatique.sql. Aucune donnée existante n'est modifiée par la migration ni par ce retour.
+--
+-- 1) DÉSACTIVER (immédiat, réversible, un seul ordre) : plus aucune demande n'est déposée ; les demandes déjà déposées restent consultables et peuvent encore être traitées ou ignorées.
+UPDATE public.cump_config SET valeur = 'off', modifie_le = now() WHERE cle = 'recalcul_automatique';
+--    Vérifier : SELECT public.cump_auto_actif();  → false.   Réactiver : SELECT public.cump_activer_recalcul_automatique(true);
+--
+-- 2) SUPPRIMER LES DÉCLENCHEURS (définitif ; à faire seulement si on abandonne le branchement — l'interrupteur suffit pour s'en protéger) :
+-- DROP TRIGGER IF EXISTS trg_cump_lignes_reception ON public.stock_reception_items;
+-- DROP TRIGGER IF EXISTS trg_cump_receptions ON public.stock_receptions;
+-- DROP TRIGGER IF EXISTS trg_cump_lignes_commande_ins ON public.order_items;
+-- DROP TRIGGER IF EXISTS trg_cump_lignes_commande_maj ON public.order_items;
+-- DROP TRIGGER IF EXISTS trg_cump_lignes_commande_sup ON public.order_items;
+-- DROP TRIGGER IF EXISTS trg_cump_journal_livraison ON public.admin_audit_logs;
+--
+-- 3) SUPPRIMER LE RESTE (après export de cump_file si on veut garder le suivi) :
+-- DROP VIEW IF EXISTS public.cump_marges_lignes_suivi;
+-- DROP FUNCTION IF EXISTS public.cump_purger_file(integer), public.cump_etat_file(), public.cump_detecter_obsoletes(), public.cump_reprendre_echecs(), public.cump_traiter_file(integer),
+--   public.cump_trg_journal_livraison(), public.cump_trg_lignes_commande(), public.cump_trg_receptions(), public.cump_trg_lignes_reception(), public.cump_enfiler(uuid[], text, uuid),
+--   public.cump_activer_recalcul_automatique(boolean), public.cump_auto_actif();
+-- DROP TABLE IF EXISTS public.cump_file, public.cump_config;

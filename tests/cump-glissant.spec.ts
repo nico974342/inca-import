@@ -215,7 +215,7 @@ test.describe('Étanchéité, historique et droits', () => {
       }
       await db.exec('SET ROLE service_role'); await recalc(db, [p]); expect((await exec(db, `SELECT * FROM cump_marges_lignes`)).length).toBeGreaterThan(0); await db.exec('RESET ROLE');
       const f = await exec(db, `SELECT proname, prosecdef, proconfig::text c, proacl::text a FROM pg_proc WHERE proname LIKE 'cump\\_%' AND proname NOT LIKE '%proteger' ORDER BY 1`);
-      expect(f.map((x: any) => x.proname)).toEqual(['cump_ledger', 'cump_recalculer_produits', 'cump_recalculer_tout']);
+      expect(f.map((x: any) => x.proname)).toEqual(['cump_empreintes', 'cump_ledger', 'cump_recalculer_produits', 'cump_recalculer_tout']);
       for (const x of f) { expect(x.prosecdef).toBe(false); expect(x.c).toContain('search_path'); expect(x.a).not.toMatch(/anon|authenticated|(^\{|,)=X/); }
       expect((await un(db, `SELECT reloptions::text o FROM pg_class WHERE relname='cump_marges_lignes'`)).o).toContain('security_invoker=true');
       const avant = await recalc(db, [p]); await db.exec(CUMP); await db.exec(CUMP);                                  // rejouer la migration : aucune erreur, aucune perte

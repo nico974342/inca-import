@@ -1,6 +1,6 @@
 -- CUMP glissant : coût de revient RÉALISÉ des ventes, recalculable après correction d'un coût d'achat ancien.
 --
--- ADDITIF ET ISOLÉ. Cette migration crée de NOUVEAUX objets (3 tables, 4 fonctions, 1 vue). Elle ne modifie, ne remplace et ne supprime AUCUN objet existant, et n'écrit dans AUCUNE
+-- ADDITIF ET ISOLÉ. Cette migration crée de NOUVEAUX objets (3 tables, 5 fonctions, 1 vue). Elle ne modifie, ne remplace et ne supprime AUCUN objet existant, et n'écrit dans AUCUNE
 -- table existante : ni order_items.pump_snapshot (conservé à l'identique, c'est le coût « prévisionnel » de la commande), ni prix de vente, factures, stocks physiques, réservations,
 -- réceptions. Les écrans de marges et products.prix_achat_moyen_ht NE SONT PAS basculés : rien ne lit ces objets tant qu'on ne l'a pas décidé.
 -- Aucun déclencheur n'est posé sur les réceptions : le recalcul est appelé explicitement (cump_recalculer_produits), jamais en cascade dans reception_create/update/delete.
@@ -27,7 +27,7 @@
 -- lignes modifiées, marge avant/après, détail ligne à ligne (plafonné).
 --
 -- RETOUR ARRIÈRE (sans toucher aux données existantes) :
---   DROP VIEW cump_marges_lignes; DROP FUNCTION cump_recalculer_tout(text), cump_recalculer_produits(uuid[], text, uuid), cump_ledger(uuid);
+--   DROP VIEW cump_marges_lignes; DROP FUNCTION cump_recalculer_tout(text), cump_recalculer_produits(uuid[], text, uuid), cump_ledger(uuid), cump_empreintes(uuid[]);
 --   DROP TABLE cump_sorties, cump_etat_produit, cump_recalculs;  (puis fonctions de protection cump_*_proteger)
 --   Aucune autre fonction ni table n'en dépend.
 
@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS public.cump_etat_produit (
   ecart_stock        numeric,                                  -- stock affiché − quantité calculée (information, n'est jamais corrigé ici)
   coherent           boolean NOT NULL,
   lignes_livrees     integer NOT NULL,
+  empreinte_entrees  text,                                     -- empreinte des données utilisées au dernier calcul : sert à détecter un produit dont les données ont changé depuis
   calcule_le         timestamptz NOT NULL DEFAULT now()
 );
 
@@ -111,6 +112,23 @@ REVOKE ALL ON public.cump_sorties, public.cump_etat_produit, public.cump_recalcu
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.cump_sorties, public.cump_etat_produit TO service_role;
 GRANT SELECT, INSERT ON public.cump_recalculs TO service_role;
 REVOKE EXECUTE ON FUNCTION public.cump_sorties_proteger(), public.cump_recalculs_proteger() FROM PUBLIC, anon, authenticated;
+
+-- ── Empreinte des données utilisées par le calcul (lecture seule) ─────────────────────────────────────────
+-- Réceptions (quantité, coût, statut, date, annulation), lignes livrées avec leur date de livraison tracée, stock affiché. Deux empreintes différentes = le calcul d'un produit est périmé.
+CREATE OR REPLACE FUNCTION public.cump_empreintes(p_ids uuid[] DEFAULT NULL)
+RETURNS TABLE (product_id uuid, empreinte text)
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $$
+  WITH rec AS (
+    SELECT i.product_id AS pid, string_agg(i.id::text || ':' || i.quantity || ':' || i.unit_cost_ht || ':' || r.stock_applied || ':' || r.received_at || ':' || coalesce(to_jsonb(r) ->> 'annulee_le', '-'), ',' ORDER BY i.id) AS s
+    FROM stock_reception_items i JOIN stock_receptions r ON r.id = i.reception_id WHERE (p_ids IS NULL OR i.product_id = ANY (p_ids)) GROUP BY 1
+  ), liv AS (
+    SELECT oi.product_id AS pid, string_agg(oi.id::text || ':' || oi.stock_decremented || ':' ||
+             coalesce((SELECT max(a.created_at)::text FROM admin_audit_logs a WHERE a.action = 'commande.statut' AND a.target_id = oi.order_id::text AND a.details ->> 'nouveau' = 'livree'), '-'), ',' ORDER BY oi.id) AS s
+    FROM order_items oi WHERE oi.stock_decremented > 0 AND oi.product_id IS NOT NULL AND (p_ids IS NULL OR oi.product_id = ANY (p_ids)) GROUP BY 1
+  )
+  SELECT coalesce(rec.pid, liv.pid), md5(coalesce(rec.s, '') || '|' || coalesce(liv.s, '') || '|' || coalesce((SELECT p.stock_quantity::text FROM products p WHERE p.id = coalesce(rec.pid, liv.pid)), '-'))
+  FROM rec FULL JOIN liv ON liv.pid = rec.pid;
+$$;
 
 -- ── Moteur : registre chronologique d'un produit (lecture seule) ────────────────────────────────────────
 CREATE OR REPLACE FUNCTION public.cump_ledger(p_product_id uuid)
@@ -167,9 +185,9 @@ DECLARE
   v_stock integer; v_qfin numeric; v_avgfin numeric; v_ffin numeric; v_coherent boolean; v_nlig integer;
   v_fiab text; v_motif text; v_cout numeric; v_recon boolean;
   v_lignes integer := 0; v_modif integer := 0; v_avant numeric := 0; v_apres numeric := 0; v_detail jsonb := '[]'::jsonb; v_detail_n integer := 0; v_tronque boolean := false;
-  v_avant_l numeric; v_apres_l numeric; v_change boolean; v_supprimees integer := 0; v_ids uuid[];
+  v_avant_l numeric; v_apres_l numeric; v_change boolean; v_supprimees integer := 0; v_ids uuid[]; v_emp text;
 BEGIN
-  IF p_declencheur NOT IN ('manuel', 'initial', 'reception_creation', 'reception_modification', 'reception_suppression', 'controle') THEN
+  IF p_declencheur NOT IN ('manuel', 'initial', 'reception_creation', 'reception_modification', 'reception_suppression', 'controle', 'auto_reception', 'auto_livraison', 'auto_balayage', 'auto_reprise') THEN
     RAISE EXCEPTION 'CUMP_DECLENCHEUR_INVALIDE : %', p_declencheur;
   END IF;
   SELECT array_agg(DISTINCT x ORDER BY x) INTO v_pids FROM unnest(p_product_ids) x WHERE x IS NOT NULL;
@@ -177,6 +195,9 @@ BEGIN
 
   FOREACH v_pid IN ARRAY v_pids LOOP
     PERFORM pg_advisory_xact_lock(hashtextextended('cump:' || v_pid::text, 0));       -- un seul recalcul à la fois par produit
+
+    -- empreinte AVANT le calcul : si une donnée change pendant le calcul, l'empreinte enregistrée sera plus ancienne que les données et le produit sera recalculé au balayage
+    SELECT e.empreinte INTO v_emp FROM cump_empreintes(ARRAY[v_pid]) e;
 
     -- 1) état final et cohérence avec le stock affiché (lecture seule du stock)
     SELECT l.q_apres, l.cump_apres, l.part_hist_apres INTO v_qfin, v_avgfin, v_ffin FROM cump_ledger(v_pid) l ORDER BY l.ordre DESC LIMIT 1;
@@ -231,14 +252,17 @@ BEGIN
     DELETE FROM cump_sorties WHERE product_id = v_pid AND NOT (order_item_id = ANY (v_ids));
     GET DIAGNOSTICS v_nlig = ROW_COUNT; v_supprimees := v_supprimees + v_nlig;
 
-    INSERT INTO cump_etat_produit (product_id, quantite_calculee, cump_courant, part_historique, stock_affiche, ecart_stock, coherent, lignes_livrees, calcule_le)
-    VALUES (v_pid, v_qfin, v_avgfin, v_ffin, v_stock, CASE WHEN v_stock IS NULL THEN NULL ELSE v_stock - v_qfin END, v_coherent, coalesce(array_length(v_ids, 1), 0), now())
+    INSERT INTO cump_etat_produit (product_id, quantite_calculee, cump_courant, part_historique, stock_affiche, ecart_stock, coherent, lignes_livrees, empreinte_entrees, calcule_le)
+    VALUES (v_pid, v_qfin, v_avgfin, v_ffin, v_stock, CASE WHEN v_stock IS NULL THEN NULL ELSE v_stock - v_qfin END, v_coherent, coalesce(array_length(v_ids, 1), 0), v_emp, now())
     ON CONFLICT (product_id) DO UPDATE SET quantite_calculee = EXCLUDED.quantite_calculee, cump_courant = EXCLUDED.cump_courant, part_historique = EXCLUDED.part_historique,
-      stock_affiche = EXCLUDED.stock_affiche, ecart_stock = EXCLUDED.ecart_stock, coherent = EXCLUDED.coherent, lignes_livrees = EXCLUDED.lignes_livrees, calcule_le = now();
+      stock_affiche = EXCLUDED.stock_affiche, ecart_stock = EXCLUDED.ecart_stock, coherent = EXCLUDED.coherent, lignes_livrees = EXCLUDED.lignes_livrees, empreinte_entrees = EXCLUDED.empreinte_entrees, calcule_le = now();
   END LOOP;
 
-  INSERT INTO cump_recalculs (declencheur, reception_id, produits, lignes, lignes_modifiees, marge_avant, marge_apres, detail, detail_tronque)
-  VALUES (p_declencheur, p_reception_id, v_pids, v_lignes, v_modif, round(v_avant, 2), round(v_apres, 2), v_detail, v_tronque);
+  -- Le journal garde les CORRECTIONS : un recalcul automatique qui ne modifie aucune ligne n'y ajoute rien (le suivi des recalculs est dans cump_file).
+  IF v_modif > 0 OR p_declencheur NOT LIKE 'auto\_%' THEN
+    INSERT INTO cump_recalculs (declencheur, reception_id, produits, lignes, lignes_modifiees, marge_avant, marge_apres, detail, detail_tronque)
+    VALUES (p_declencheur, p_reception_id, v_pids, v_lignes, v_modif, round(v_avant, 2), round(v_apres, 2), v_detail, v_tronque);
+  END IF;
   RETURN jsonb_build_object('produits', array_length(v_pids, 1), 'lignes', v_lignes, 'modifiees', v_modif, 'supprimees', v_supprimees, 'marge_avant', round(v_avant, 2), 'marge_apres', round(v_apres, 2));
 END $$;
 
@@ -252,8 +276,8 @@ LANGUAGE sql SET search_path = public, pg_temp AS $$
     p_declencheur, NULL);
 $$;
 
-REVOKE ALL ON FUNCTION public.cump_ledger(uuid), public.cump_recalculer_produits(uuid[], text, uuid), public.cump_recalculer_tout(text) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.cump_ledger(uuid), public.cump_recalculer_produits(uuid[], text, uuid), public.cump_recalculer_tout(text) TO service_role;
+REVOKE ALL ON FUNCTION public.cump_empreintes(uuid[]), public.cump_ledger(uuid), public.cump_recalculer_produits(uuid[], text, uuid), public.cump_recalculer_tout(text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.cump_empreintes(uuid[]), public.cump_ledger(uuid), public.cump_recalculer_produits(uuid[], text, uuid), public.cump_recalculer_tout(text) TO service_role;
 
 -- ── Vue de lecture : marge PRÉVISIONNELLE (coût à la commande) et marge RÉALISÉE (coût à la livraison) ─────
 -- Lecture seule, réservée au serveur. Aucun écran n'y est branché pour l'instant.

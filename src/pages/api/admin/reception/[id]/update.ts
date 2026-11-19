@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
 import { logAdminAction } from '../../../../../lib/audit';
+import { traiterFileCump } from '../../../../../lib/cump';
 import { isAdmin } from '../../../../../lib/roles';
 import { matchSupplierName } from '../../../../../lib/constants';
 import { parseDlc } from '../../../../../lib/dlc';
@@ -122,6 +123,9 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
       total_cost_ht:  newRows.reduce((s, r) => s + r.quantity * r.unitCost, 0),
     },
   });
+
+  // Recalcul des marges (CUMP glissant) : demandes déposées par la base, traitées ici APRÈS l'opération. Ne lève jamais et ne change rien au résultat de l'opération.
+  await traiterFileCump(supabaseAdmin);
 
   return Response.redirect(
     new URL(`/admin/reception?success=updated`, request.url),

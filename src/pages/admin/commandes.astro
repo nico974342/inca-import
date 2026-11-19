@@ -7,6 +7,7 @@ import { supabaseAdmin } from '../../lib/supabase';
 import { sendLowStockAlert, sendOrderStatusEmail } from '../../lib/email';
 import { sendOrderConfirmedWebhook } from '../../lib/webhooks';
 import { logAdminAction } from '../../lib/audit';
+import { traiterFileCump } from '../../lib/cump';
 import { ORDER_STATUSES, ORDER_STATUS_LABEL, ORDER_STATUS_COLOR, marginColorClass, margeCouverte, isOrderEditable } from '../../lib/constants';
 import { formatDateReunion } from '../../lib/datetime';
 import { isAdmin } from '../../lib/roles';
@@ -160,6 +161,8 @@ if (Astro.request.method === 'POST') {
           ...(isBackwardFromLivree ? { stock_restaure: restock === 'oui' } : {}),
         },
       });
+      // Livraison effective, retour arrière ou annulation : le coût réalisé des ventes se recalcule APRÈS l'écriture de la trace de livraison (la date de sortie en dépend). Ne lève jamais.
+      if (current.status === 'livree' || new_status === 'livree') await traiterFileCump(supabaseAdmin);
     }
   }
   return Astro.redirect('/admin/commandes');
