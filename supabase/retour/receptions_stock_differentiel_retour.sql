@@ -1,0 +1,21 @@
+-- RETOUR ARRIÈRE SÛR de receptions_stock_differentiel.sql.
+--
+-- On NE réinstalle JAMAIS les anciennes fonctions : elles recréent du stock déjà vendu (GREATEST(0, …) puis ré-ajout complet).
+-- Le retour arrière consiste à SUSPENDRE la modification et la suppression de réceptions (la création de réception, qui ne fait qu'ajouter du stock, reste
+-- disponible) : l'interface affiche alors son message d'erreur habituel et rien n'est écrit. Les deux fonctions restent la version corrigée, simplement
+-- non exécutables.
+--
+-- 1) SUSPENDRE (immédiat, réversible, aucune donnée touchée) :
+REVOKE EXECUTE ON FUNCTION public.reception_update(uuid, text, date, text, boolean, jsonb, uuid) FROM service_role;
+REVOKE EXECUTE ON FUNCTION public.reception_delete(uuid)                                          FROM service_role;
+--    Vérifier : has_function_privilege('service_role', 'public.reception_update(uuid,text,date,text,boolean,jsonb,uuid)', 'EXECUTE') = false.
+--    Le site répond alors « permission denied » (42501) : la page des réceptions revient sans modification. Les corrections de réception attendent.
+--
+-- 2) RÉACTIVER (quand une version corrigée est de nouveau en place) :
+-- GRANT EXECUTE ON FUNCTION public.reception_update(uuid, text, date, text, boolean, jsonb, uuid) TO service_role;
+-- GRANT EXECUTE ON FUNCTION public.reception_delete(uuid)                                          TO service_role;
+--
+-- 3) Aucune restauration de données n'est nécessaire : la migration ne modifie aucune donnée. Si un stock a été modifié PAR une réception pendant que la version
+--    corrigée était active, cette modification était une différence légitime et reste valable.
+--
+-- 4) Les anciennes définitions (dlc_lots.sql, stock_rpc_functions.sql) ne doivent être réappliquées qu'avec un accord explicite et en connaissance du défaut.

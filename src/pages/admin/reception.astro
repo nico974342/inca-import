@@ -11,6 +11,7 @@ const success         = successParam === '1';
 const successHisto    = successParam === 'historical';
 const successUpdate   = successParam === 'updated';
 const successDeleted  = successParam === 'deleted';
+const refusStock      = Astro.url.searchParams.get('err') === 'stock' ? (Astro.url.searchParams.get('msg') ?? '').slice(0, 400) : '';
 const shipmentWarning = !!Astro.url.searchParams.get('shipment_warning');
 
 const { data: receptions } = await supabaseAdmin
@@ -48,6 +49,11 @@ function formatPrice(p: number) {
   {successUpdate && (
     <div class="alert alert--success" role="alert">
       Réception mise à jour — PUMP recalculé, stock ajusté si nécessaire.
+    </div>
+  )}
+  {refusStock && (
+    <div class="alert alert--danger" role="alert" data-testid="reception-refus-stock">
+      <strong>Modification refusée, rien n'a été enregistré.</strong> {refusStock}
     </div>
   )}
   {successDeleted && (
