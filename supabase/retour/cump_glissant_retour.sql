@@ -1,0 +1,14 @@
+-- RETOUR ARRIÈRE de cump_glissant.sql. La migration étant purement additive, aucun objet existant n'est à restaurer : seuls les objets cump_* sont concernés.
+-- Rien n'ayant été branché sur ces objets (écrans de marges, coût moyen des produits, routes), les retirer ou les suspendre est sans effet sur le site.
+--
+-- 1) SUSPENDRE (immédiat, réversible, conserve l'historique) : plus personne ne peut lancer de recalcul.
+REVOKE EXECUTE ON FUNCTION public.cump_recalculer_produits(uuid[], text, uuid), public.cump_recalculer_tout(text), public.cump_ledger(uuid) FROM service_role;
+--    Réactiver : GRANT EXECUTE ON FUNCTION … TO service_role;  (mêmes trois fonctions)
+--
+-- 2) SUPPRIMER (définitif — exporter d'abord cump_recalculs et cump_sorties si l'historique des corrections doit être gardé) :
+-- DROP VIEW IF EXISTS public.cump_marges_lignes;
+-- DROP FUNCTION IF EXISTS public.cump_recalculer_tout(text), public.cump_recalculer_produits(uuid[], text, uuid), public.cump_ledger(uuid);
+-- DROP TABLE IF EXISTS public.cump_sorties, public.cump_etat_produit, public.cump_recalculs;
+-- DROP FUNCTION IF EXISTS public.cump_sorties_proteger(), public.cump_recalculs_proteger();
+--
+-- Aucune donnée existante (order_items.pump_snapshot, prix, stocks, réservations, réceptions, journal d'audit) n'est modifiée par la migration ni par ce retour.
