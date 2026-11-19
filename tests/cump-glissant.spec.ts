@@ -6,12 +6,13 @@ import { test, expect } from '@playwright/test';
 import { execSync } from 'node:child_process';
 import type { PGlite } from '@electric-sql/pglite';
 import { baseAchats, lire, un, exec, produit } from './helpers/receptionsBase';
+import { SIMULATION_V2 } from './helpers/cumpOracle';
 
-const CUMP = lire('cump_glissant.sql');
+const CUMP = lire('cump_glissant.sql'); const V2 = lire('cump_methode_v2.sql');
 let n = 0;
 const nom = () => `Produit ${++n}`;
 
-async function base(): Promise<PGlite> { const db = await baseAchats(false); await db.exec(lire('receptions_stock_differentiel.sql')); await db.exec(CUMP); return db; }
+async function base(): Promise<PGlite> { const db = await baseAchats(false); await db.exec(lire('receptions_stock_differentiel.sql')); await db.exec(CUMP); await db.exec(V2); return db; }
 const rec = async (db: PGlite, p: string, q: number, c: number, date: string, appliquee = true) =>
   (await un(db, `SELECT reception_create('F', $1::date, NULL, $2, $3::jsonb) id`, [date, appliquee, JSON.stringify([{ product_id: p, quantity: q, unit_cost_ht: c }])])).id as string;
 /** Ligne livrée : commande créée à `cree`, livraison tracée au journal à `livre` (null = aucune trace). */
@@ -218,7 +219,7 @@ test.describe('Étanchéité, historique et droits', () => {
       expect(f.map((x: any) => x.proname)).toEqual(['cump_empreintes', 'cump_ledger', 'cump_recalculer_produits', 'cump_recalculer_tout']);
       for (const x of f) { expect(x.prosecdef).toBe(false); expect(x.c).toContain('search_path'); expect(x.a).not.toMatch(/anon|authenticated|(^\{|,)=X/); }
       expect((await un(db, `SELECT reloptions::text o FROM pg_class WHERE relname='cump_marges_lignes'`)).o).toContain('security_invoker=true');
-      const avant = await recalc(db, [p]); await db.exec(CUMP); await db.exec(CUMP);                                  // rejouer la migration : aucune erreur, aucune perte
+      const avant = await recalc(db, [p]); await db.exec(V2); await db.exec(V2);                                      // rejouer la mise à niveau v2 : aucune erreur, aucune perte (la migration 1 ne se rejoue pas après elle)
       expect((await un(db, `SELECT count(*)::int n FROM cump_sorties`)).n).toBe(1); expect(avant.lignes).toBe(1);
     } finally { await db.close(); }
   });
@@ -242,18 +243,7 @@ test.describe('Étanchéité, historique et droits', () => {
 });
 
 test.describe('Comparaison avec la simulation : mêmes résultats que l\'implémentation récursive indépendante', () => {
-  /** La simulation présentée à l'utilisateur (requête récursive en lecture seule), reprise telle quelle pour un produit. */
-  const SIMULATION = `WITH RECURSIVE
-    tr AS (SELECT a.target_id, max(a.created_at) t FROM admin_audit_logs a WHERE a.action='commande.statut' AND a.details->>'nouveau'='livree' GROUP BY 1),
-    ev AS (SELECT *, row_number() OVER (ORDER BY t, k, tie) n FROM (
-      SELECT 0 k, (r.received_at::timestamp AT TIME ZONE 'Indian/Reunion') t, i.quantity qty, i.unit_cost_ht cost, NULL::uuid item_id, i.id tie FROM stock_reception_items i JOIN stock_receptions r ON r.id=i.reception_id WHERE i.product_id=$1
-      UNION ALL SELECT 1, coalesce(tr.t, o.created_at), oi.stock_decremented, NULL::numeric, oi.id, oi.id FROM order_items oi JOIN orders o ON o.id=oi.order_id LEFT JOIN tr ON tr.target_id=o.id::text WHERE oi.product_id=$1 AND oi.stock_decremented>0) x),
-    st(n, q, avg, k, item_id, cout, couvert) AS (
-      SELECT 0::bigint, 0::numeric, NULL::numeric, NULL::int, NULL::uuid, NULL::numeric, NULL::boolean
-      UNION ALL SELECT e.n, CASE WHEN e.k=0 THEN s.q+e.qty ELSE greatest(0, s.q-e.qty) END,
-        CASE WHEN e.k=0 THEN CASE WHEN s.q<=0 OR s.avg IS NULL THEN e.cost ELSE (s.q*s.avg+e.qty*e.cost)/(s.q+e.qty) END ELSE s.avg END,
-        e.k, e.item_id, CASE WHEN e.k=1 AND s.q>=e.qty THEN s.avg END, CASE WHEN e.k=1 THEN s.q>=e.qty END FROM st s JOIN ev e ON e.n=s.n+1)
-    SELECT item_id, cout, couvert FROM st WHERE k=1`;
+  const SIMULATION = SIMULATION_V2;                                                       // implémentation récursive indépendante (tests/helpers/cumpOracle.ts)
 
   function alea(graine: number) { let a = graine; return () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 

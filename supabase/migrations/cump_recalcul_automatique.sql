@@ -1,4 +1,4 @@
--- CUMP glissant — RECALCUL AUTOMATIQUE (étape 4 du déploiement : à n'appliquer qu'APRÈS cump_glissant.sql, son remplissage initial et la validation de la comparaison).
+-- CUMP glissant — RECALCUL AUTOMATIQUE (étape 4 du déploiement : à n'appliquer qu'APRÈS cump_glissant.sql, cump_methode_v2.sql, le remplissage et la comparaison validés).
 --
 -- PRINCIPE (« boîte d'envoi » transactionnelle) : un événement (réception créée / modifiée / supprimée / annulée, livraison effective, retour ou correction de livraison) DÉPOSE une demande
 -- dans cump_file, dans la MÊME transaction que l'événement ; le calcul lui-même est fait ENSUITE, dans une transaction séparée, par cump_traiter_file. Conséquences :
@@ -125,12 +125,15 @@ BEGIN
 END $$;
 
 -- La date de livraison vient du journal d'audit, écrit juste APRÈS la déduction du stock : ce déclencheur redépose la demande une fois la trace écrite.
+-- Il couvre aussi les ajustements manuels de stock (« produit.stock_ajustement »), qui entrent dans le calcul (méthode v2).
 CREATE OR REPLACE FUNCTION public.cump_trg_journal_livraison() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
   BEGIN
     IF NEW.action = 'commande.statut' AND (NEW.details ->> 'nouveau' = 'livree' OR NEW.details ->> 'ancien' = 'livree') AND NEW.target_id ~ '^[0-9a-f-]{36}$' THEN
       PERFORM cump_enfiler(ARRAY(SELECT DISTINCT oi.product_id FROM order_items oi WHERE oi.order_id = NEW.target_id::uuid AND oi.product_id IS NOT NULL), 'livraison');
+    ELSIF NEW.action = 'produit.stock_ajustement' AND NEW.target_id ~ '^[0-9a-f-]{36}$' THEN
+      PERFORM cump_enfiler(ARRAY[NEW.target_id::uuid], 'livraison');                              -- ajustement manuel du stock d'un produit
     END IF;
   EXCEPTION WHEN OTHERS THEN RAISE WARNING 'cump : dépôt de demande impossible (journal de livraison) : %', SQLERRM;
   END;
@@ -151,7 +154,7 @@ CREATE TRIGGER trg_cump_lignes_commande_maj AFTER UPDATE OF stock_decremented, q
 DROP TRIGGER IF EXISTS trg_cump_lignes_commande_sup ON public.order_items;
 CREATE TRIGGER trg_cump_lignes_commande_sup AFTER DELETE ON public.order_items FOR EACH ROW WHEN (OLD.stock_decremented > 0) EXECUTE FUNCTION public.cump_trg_lignes_commande();
 DROP TRIGGER IF EXISTS trg_cump_journal_livraison ON public.admin_audit_logs;
-CREATE TRIGGER trg_cump_journal_livraison AFTER INSERT ON public.admin_audit_logs FOR EACH ROW WHEN (NEW.action = 'commande.statut') EXECUTE FUNCTION public.cump_trg_journal_livraison();
+CREATE TRIGGER trg_cump_journal_livraison AFTER INSERT ON public.admin_audit_logs FOR EACH ROW WHEN (NEW.action IN ('commande.statut', 'produit.stock_ajustement')) EXECUTE FUNCTION public.cump_trg_journal_livraison();
 
 -- ── Traitement des demandes (appelé par le serveur ; sans effet sur l'événement d'origine) ──────────────
 -- Prend les demandes disponibles une à une (SKIP LOCKED : deux traitements simultanés ne prennent jamais la même). Le calcul et la prise en charge sont dans la même transaction : en cas de

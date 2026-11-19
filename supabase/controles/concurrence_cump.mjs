@@ -12,12 +12,12 @@ const ENV = helper.split('export const ENV = `')[1].split('`;')[0];
 const LISTE = [...helper.split('export const MIGRATIONS_AVANT = [')[1].split('];')[0].matchAll(/'([a-z_0-9]+\.sql)'/g)].map(m => m[1]);
 const migr = f => readFileSync(`${REPO}/supabase/migrations/${f}`, 'utf8');
 
-const pg = new EmbeddedPostgres({ databaseDir: process.env.PGDIR, user: 'postgres', password: 'pw', port: 54337, persistent: false, initdbFlags: ['--locale=C', '--encoding=UTF8'] });
+const pg = new EmbeddedPostgres({ databaseDir: process.env.PGDIR, user: 'postgres', password: 'pw', port: 54341, persistent: false, initdbFlags: ['--locale=C', '--encoding=UTF8'] });
 await pg.initialise(); await pg.start(); await pg.createDatabase('t');
-const nouveau = async () => { const c = new Client({ host: '127.0.0.1', port: 54337, user: 'postgres', password: 'pw', database: 't' }); await c.connect(); await c.query(`SET statement_timeout = '40s'; SET lock_timeout = '30s'`); return c; };
+const nouveau = async () => { const c = new Client({ host: '127.0.0.1', port: 54341, user: 'postgres', password: 'pw', database: 't' }); await c.connect(); await c.query(`SET statement_timeout = '40s'; SET lock_timeout = '30s'`); return c; };
 const adm = await nouveau();
 await adm.query(ENV);
-for (const f of [...LISTE, 'receptions_stock_differentiel.sql', 'cump_glissant.sql', 'cump_recalcul_automatique.sql']) { try { await adm.query(migr(f)); } catch (e) { throw new Error(`${f}: ${e.message}`); } }
+for (const f of [...LISTE, 'receptions_stock_differentiel.sql', 'cump_glissant.sql', 'cump_methode_v2.sql', 'cump_recalcul_automatique.sql']) { try { await adm.query(migr(f)); } catch (e) { throw new Error(`${f}: ${e.message}`); } }
 await adm.query(`SELECT cump_activer_recalcul_automatique(true)`);
 
 let n = 0; const sleep = ms => new Promise(r => setTimeout(r, ms));

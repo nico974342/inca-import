@@ -5,14 +5,15 @@
  */
 import { test, expect } from '@playwright/test';
 import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import type { PGlite } from '@electric-sql/pglite';
 import { baseAchats, lire, un, exec, produit } from './helpers/receptionsBase';
 
-const M1 = lire('cump_glissant.sql'); const M2 = lire('cump_recalcul_automatique.sql');
+const M1 = lire('cump_glissant.sql'); const V2 = lire('cump_methode_v2.sql'); const M2 = lire('cump_recalcul_automatique.sql');
 let n = 0; const nom = () => `Produit ${++n}`;
 
 async function base(actif = true): Promise<PGlite> {
-  const db = await baseAchats(false); await db.exec(lire('receptions_stock_differentiel.sql')); await db.exec(M1); await db.exec(M2);
+  const db = await baseAchats(false); await db.exec(lire('receptions_stock_differentiel.sql')); await db.exec(M1); await db.exec(V2); await db.exec(M2);
   if (actif) await db.query(`SELECT cump_activer_recalcul_automatique(true)`);
   return db;
 }
@@ -280,7 +281,7 @@ test.describe('Droits, étanchéité et compatibilité', () => {
     for (const ordre of ['cump_puis_partielles', 'partielles_puis_cump']) {
       const db = await baseAchats(false); await db.exec(lire('receptions_stock_differentiel.sql'));
       try {
-        if (ordre === 'cump_puis_partielles') { await db.exec(M1); await db.exec(M2); await db.exec(partielles); } else { await db.exec(partielles); await db.exec(M1); await db.exec(M2); }
+        if (ordre === 'cump_puis_partielles') { await db.exec(M1); await db.exec(V2); await db.exec(M2); await db.exec(partielles); } else { await db.exec(partielles); await db.exec(M1); await db.exec(V2); await db.exec(M2); }
         await db.query(`SELECT cump_activer_recalcul_automatique(true)`);
         const p = await produit(db, nom(), 0); const r = await rec(db, p, 100, 10, '2026-06-15'); await traiter(db);
         await majCout(db, r, p, 100, 11, '2026-06-15'); expect(await nbFile(db, 'en_attente'), ordre).toBe(1); await traiter(db);
@@ -307,6 +308,58 @@ test.describe('Droits, étanchéité et compatibilité', () => {
       expect((await un(db, `SELECT cump_purger_file(90) n`)).n).toBe(1); expect(await file(db)).toHaveLength(0);
       expect((await un(db, `SELECT count(*)::int n FROM cump_recalculs`)).n).toBe(1);
       expect((await un(db, `SELECT cump_etat_file() e`)).e).toMatchObject({ automatique: true, en_attente: 0, echoue: 0 });
+    } finally { await db.close(); }
+  });
+});
+
+test.describe('Ajustements manuels de stock (méthode v2) : demande déposée, filet de sécurité', () => {
+  const ajuster = (db: PGlite, p: string, avant: number, apres: number, quand = '2026-07-05T08:00:00Z') =>
+    db.query(`INSERT INTO admin_audit_logs (admin_email, action, target_type, target_id, target_label, details, created_at) SELECT 'a@x.local','produit.stock_ajustement','produit',id::text,name,$2::jsonb,$3::timestamptz FROM products WHERE id=$1`,
+      [p, JSON.stringify({ avant, apres, method: 'saisie_directe' }), quand]);
+
+  test('un ajustement manuel du stock dépose une demande de recalcul du produit concerné (et d\'aucun autre) ; le calcul le prend en compte', async () => {
+    const db = await base();
+    try {
+      const p = await produit(db, nom(), 0); const autre = await produit(db, nom(), 0); await rec(db, p, 100, 10, '2026-06-15'); await traiter(db);
+      await ajuster(db, p, 100, 90);                                                                                             // perte de 10
+      expect(await file(db, `WHERE statut='en_attente'`)).toHaveLength(1); expect((await file(db, `WHERE statut='en_attente'`))[0].product_id).toBe(p);
+      await db.query(`UPDATE products SET stock_quantity = 90 WHERE id=$1`, [p]); await traiter(db);
+      const e = await un(db, `SELECT * FROM cump_etat_produit WHERE product_id=$1`, [p]); expect(e.quantite_calculee).toBe('90'); expect(e.coherent).toBe(true);
+      expect(autre).toBeTruthy(); expect(await nbFile(db, 'en_attente')).toBe(0);
+    } finally { await db.close(); }
+  });
+
+  test('filet de sécurité : un ajustement journalisé sans déclencheur est détecté par l\'empreinte (qui inclut désormais les ajustements)', async () => {
+    const db = await base();
+    try {
+      const p = await produit(db, nom(), 100); await rec(db, p, 100, 10, '2026-06-15'); await traiter(db);
+      expect((await un(db, `SELECT cump_detecter_obsoletes() n`)).n).toBe(0);
+      await db.exec(`ALTER TABLE admin_audit_logs DISABLE TRIGGER trg_cump_journal_livraison`);
+      await ajuster(db, p, 100, 80);                                                                                              // sans déclencheur : aucune demande
+      expect(await file(db, `WHERE statut='en_attente'`)).toHaveLength(0);
+      expect((await un(db, `SELECT cump_detecter_obsoletes() n`)).n).toBe(1);
+      await traiter(db); expect((await un(db, `SELECT cump_detecter_obsoletes() n`)).n).toBe(0);
+    } finally { await db.close(); }
+  });
+});
+
+test.describe('Suivi de l\'activation (script de contrôle en lecture seule)', () => {
+  test('le script de suivi renvoie l\'interrupteur, les 6 déclencheurs actifs, les demandes en attente / en échec / périmées, la répartition de fiabilité ; il n\'écrit rien', async () => {
+    const controle = readFileSync('supabase/controles/cump_suivi_activation.sql', 'utf8');
+    const db = await base(false);
+    try {
+      const p = await produit(db, nom(), 0); await rec(db, p, 50, 8, '2026-06-15'); await livrer(db, p, 10, { cree: '2026-07-01T05:00:00Z', livre: '2026-07-02T08:00:00Z' });
+      const lire = async () => Object.fromEntries((await exec(db, controle)).map((r: any) => [r.k, r.v as string]));
+      const avant = await empreinte(db);
+      let s = await lire();
+      expect(s['interrupteur_recalcul_automatique']).toBe('off'); expect(s['declencheurs_cump (attendu : 6, tous actifs)']).toMatch(/^6 : /); expect(s['declencheurs_cump (attendu : 6, tous actifs)']).not.toMatch(/=D/);
+      expect(s['file.en_attente']).toBe('0'); expect(s['lignes_livrees_sans_calcul']).toBe('1'); expect(s['produits_perimes (données modifiées depuis le dernier calcul)']).toBe('1');   // rien n'a été calculé : le produit est « périmé »
+      await db.query(`SELECT cump_recalculer_tout('manuel')`);
+      s = await lire(); expect(s['produits_perimes (données modifiées depuis le dernier calcul)']).toBe('0'); expect(s['lignes_livrees_sans_calcul']).toBe('0'); expect(s['sorties.lignes (version 1 / version 2)']).toBe('0 / 1'); expect(s['fiabilite']).toBe('fiable=1');
+      await db.query(`SELECT cump_activer_recalcul_automatique(true)`); await rec(db, p, 5, 9, '2026-07-05');
+      s = await lire(); expect(s['interrupteur_recalcul_automatique']).toBe('on'); expect(s['file.en_attente']).toBe('1'); expect(s['produits_perimes (données modifiées depuis le dernier calcul)']).toBe('1');
+      await traiter(db); s = await lire(); expect(s['file.en_attente']).toBe('0'); expect(s['file.echoue']).toBe('0'); expect(s['produits_perimes (données modifiées depuis le dernier calcul)']).toBe('0');
+      void avant;
     } finally { await db.close(); }
   });
 });
