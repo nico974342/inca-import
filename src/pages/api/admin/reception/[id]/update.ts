@@ -4,6 +4,7 @@ import { logAdminAction } from '../../../../../lib/audit';
 import { isAdmin } from '../../../../../lib/roles';
 import { matchSupplierName } from '../../../../../lib/constants';
 import { parseDlc } from '../../../../../lib/dlc';
+import { messageRefusStock, urlRefusStock } from '../../../../../lib/receptionErreur';
 
 export const POST: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -98,6 +99,9 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
 
   if (rpcErr) {
     console.error('reception_update RPC error:', rpcErr);
+    // Stock déjà vendu ou réservé : la base refuse et rien n'est écrit ; on explique pourquoi au lieu de ramener silencieusement au formulaire.
+    const refus = messageRefusStock(rpcErr);
+    if (refus) return Response.redirect(new URL(urlRefusStock('/admin/reception', refus), request.url), 303);
     if (rpcErr.message?.includes('not found')) {
       return new Response('Non trouvé', { status: 404 });
     }

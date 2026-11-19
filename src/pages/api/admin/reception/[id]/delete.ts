@@ -2,6 +2,7 @@ import type { APIRoute } from 'astro';
 import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
 import { logAdminAction } from '../../../../../lib/audit';
 import { isAdmin } from '../../../../../lib/roles';
+import { messageRefusStock, urlRefusStock } from '../../../../../lib/receptionErreur';
 
 export const POST: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -34,6 +35,8 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
 
   if (rpcErr) {
     console.error('reception_delete RPC error:', rpcErr);
+    const refus = messageRefusStock(rpcErr);
+    if (refus) return Response.redirect(new URL(urlRefusStock('/admin/reception', refus), request.url), 303);
     if (rpcErr.message?.includes('not found')) {
       return new Response('Non trouvé', { status: 404 });
     }
