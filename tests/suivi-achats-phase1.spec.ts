@@ -52,7 +52,16 @@ test.describe('Phase 1 — Suivi des achats', () => {
 
   test('les autres fichiers ne changent que par leurs liens et textes (réception, commande fournisseur, route marquer-commande)', () => {
     const changements: [string, (s: string) => string][] = [
-      ['src/pages/admin/reception.astro', s => s.replaceAll('/admin/transit', '/admin/achats').replace('le suivi transit</a>', 'le Suivi des achats</a>')],
+      ['src/pages/admin/reception.astro', s => s.replaceAll('/admin/transit', '/admin/achats').replace('le suivi transit</a>', 'le Suivi des achats</a>')
+        // + affichage du refus « stock déjà vendu ou réservé » (correctif des réceptions : receptions-stock-differentiel.spec.ts)
+        .replace("const successDeleted  = successParam === 'deleted';", `const successDeleted  = successParam === 'deleted';
+const refusStock      = Astro.url.searchParams.get('err') === 'stock' ? (Astro.url.searchParams.get('msg') ?? '').slice(0, 400) : '';`)
+        .replace('  {successDeleted && (', `  {refusStock && (
+    <div class="alert alert--danger" role="alert" data-testid="reception-refus-stock">
+      <strong>Modification refusée, rien n'a été enregistré.</strong> {refusStock}
+    </div>
+  )}
+  {successDeleted && (`)],
       ['src/pages/admin/reception/new.astro', s => s.replaceAll('/admin/transit', '/admin/achats')],
       ['src/pages/admin/commande-fournisseur.astro', s => s.replaceAll('/admin/transit', '/admin/achats')],
       ['src/pages/api/admin/commande-fournisseur/marquer-commande.ts', s => s.replaceAll('/admin/transit', '/admin/achats')],
