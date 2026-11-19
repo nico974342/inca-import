@@ -7,3 +7,10 @@ export function messageRefusStock(err: { message?: string } | null | undefined):
 }
 
 export const urlRefusStock = (base: string, texte: string) => `${base}?err=stock&msg=${encodeURIComponent(texte)}`;
+
+/** Interblocage détecté par PostgreSQL (40P01) ou verrou indisponible (55P03) : l'opération a été annulée en entier, il suffit de recommencer. */
+export function messageConflitSimultane(err: { code?: string } | null | undefined): string | null {
+  return err?.code === '40P01' || err?.code === '55P03'
+    ? 'Une autre opération sur le même produit était en cours (livraison, commande ou autre réception). Rien n\'a été enregistré : réessayez dans un instant.'
+    : null;
+}

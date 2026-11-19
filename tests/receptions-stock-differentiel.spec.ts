@@ -4,6 +4,7 @@
  */
 import { test, expect } from '@playwright/test';
 import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import type { PGlite } from '@electric-sql/pglite';
 import { baseAchats, lire, un, exec, produit } from './helpers/receptionsBase';
 
@@ -223,5 +224,68 @@ test.describe('Affichage du refus', () => {
     const { readFileSync } = await import('node:fs'); const lire2 = (f: string) => readFileSync(f, 'utf8');
     for (const f of ['src/pages/api/admin/reception/[id]/update.ts', 'src/pages/api/admin/reception/[id]/delete.ts']) expect(lire2(f)).toContain('messageRefusStock(rpcErr)');
     expect(lire2('src/pages/admin/reception.astro')).toContain('data-testid="reception-refus-stock"');
+  });
+});
+
+test.describe('Opérations simultanées', () => {
+  test('un interblocage ou un verrou indisponible est expliqué (rien n\'a été enregistré, il suffit de réessayer) et les routes l\'utilisent', async () => {
+    const { messageConflitSimultane } = await import('../src/lib/receptionErreur');
+    expect(messageConflitSimultane({ code: '40P01' })).toContain('réessayez'); expect(messageConflitSimultane({ code: '55P03' })).toContain('Rien n');
+    expect(messageConflitSimultane({ code: '23505' })).toBeNull(); expect(messageConflitSimultane(null)).toBeNull();
+    const { readFileSync } = await import('node:fs');
+    for (const f of ['src/pages/api/admin/reception/[id]/update.ts', 'src/pages/api/admin/reception/[id]/delete.ts']) expect(readFileSync(f, 'utf8')).toContain('messageConflitSimultane(rpcErr)');
+  });
+});
+
+test.describe('Mise en production : contrôle avant/après et retour arrière', () => {
+  const CONTROLE = readFileSync('supabase/controles/receptions_stock_differentiel_avant_apres.sql', 'utf8');
+  const RETOUR = readFileSync('supabase/retour/receptions_stock_differentiel_retour.sql', 'utf8');
+  const releve = async (db: PGlite) => Object.fromEntries((await exec(db, CONTROLE)).map((r: any) => [r.k, r.v as string]));
+
+  test('la migration ne change AUCUNE donnée : tous les relevés « donnees.* » sont identiques avant et après ; seules les 2 fonctions changent, 2 fonctions internes apparaissent, mêmes droits', async () => {
+    const db = await baseAchats(false);
+    try {
+      const p = await produit(db, nom(), 0); const r = await creer(db, [{ p, q: 120 }]); await livrer(db, p, 90); await reserver(db, p, 10);
+      const avant = await releve(db); await db.exec(MIGRATION); const apres = await releve(db);
+      const cles = (o: Record<string, string>, pre: string) => Object.keys(o).filter(k => k.startsWith(pre));
+      for (const k of cles(avant, 'donnees.')) expect(apres[k], k).toBe(avant[k]);
+      const f = (o: Record<string, string>, n: string) => o[Object.keys(o).find(k => k.startsWith(`fonction.${n}(`))!];
+      for (const n of ['reception_create', 'recalc_pump', 'stock_reserving_statuses', 'order_create_checked', 'order_mark_livree']) expect(f(apres, n), n).toBe(f(avant, n));
+      for (const n of ['reception_update', 'reception_delete']) { expect(f(apres, n), n).not.toBe(f(avant, n)); expect(f(apres, n)).toContain('service_role'); expect(f(apres, n)).toContain('definer=false'); expect(f(apres, n)).toContain('search_path'); }
+      expect(f(avant, 'reception_ecarts_stock')).toBeUndefined(); expect(f(apres, 'reception_ecarts_stock')).toContain('service_role'); expect(f(apres, 'reception_verifier_ecarts')).toContain('definer=false');
+      expect(await exec(db, `SELECT 1 FROM stock_reception_items WHERE reception_id=$1`, [r])).toHaveLength(1);
+    } finally { await db.close(); }
+  });
+
+  test('migration seule avec le site ACTUEL : le code déployé appelle reception_update/delete avec les mêmes paramètres nommés, le résultat est le même sauf le défaut corrigé', async () => {
+    const db = await baseAchats(false);
+    try {
+      await db.exec(MIGRATION);
+      const p = await produit(db, nom(), 0); const r = await creer(db, [{ p, q: 20 }]);
+      await db.query(`SELECT reception_update(p_reception_id := $1, p_supplier_name := 'F', p_supplier_id := NULL, p_received_at := '2026-10-28', p_notes := NULL, p_stock_applied := true, p_items := $2::jsonb)`, [r, JSON.stringify([{ product_id: p, quantity: 25, unit_cost_ht: 3, dlc: '2027-01-31' }])]);
+      expect((await stock(db, p)).stock_quantity).toBe(25); expect((await un(db, `SELECT dlc::text d FROM stock_reception_items WHERE reception_id=$1`, [r])).d).toBe('2027-01-31');
+      await db.query(`SELECT reception_delete(p_reception_id := $1)`, [r]); expect((await stock(db, p)).stock_quantity).toBe(0);
+    } finally { await db.close(); }
+  });
+
+  test('retour arrière : la suspension bloque modification et suppression (42501) sans toucher aux données, la création reste possible, et aucune ancienne définition n\'est réinstallée', async () => {
+    const code = RETOUR.split('\n').filter(l => !l.startsWith('--')).join('\n');          // les commentaires expliquent ; seul le code compte
+    expect(code).not.toMatch(/GREATEST\(0/); expect(code).not.toMatch(/CREATE (OR REPLACE )?FUNCTION/i); expect(code).not.toContain('dlc_lots');
+    const db = await baseAchats(false);
+    try {
+      await db.exec(MIGRATION);
+      const p = await produit(db, nom(), 0); const r = await creer(db, [{ p, q: 50 }]); const avant = await releve(db);
+      await db.exec(RETOUR.split('\n').filter(l => !l.startsWith('--')).join('\n'));
+      await db.exec('SET ROLE service_role');
+      for (const q of [`SELECT reception_update('${r}','F','2026-10-28',NULL,true,'[{"product_id":"${p}","quantity":1,"unit_cost_ht":1}]'::jsonb)`, `SELECT reception_delete('${r}')`])
+        expect(await refuse(db.query(q))).toMatch(/permission denied/);
+      await db.query(`SELECT reception_create('F','2026-10-29',NULL,true,'[{"product_id":"${p}","quantity":5,"unit_cost_ht":2}]'::jsonb)`);   // créer = ajouter : reste permis
+      await db.exec('RESET ROLE');
+      expect((await stock(db, p)).stock_quantity).toBe(55);
+      const apres = await releve(db); expect(apres['donnees.reception_total'] ?? '').toBe(avant['donnees.reception_total'] ?? '');
+      await db.exec(`GRANT EXECUTE ON FUNCTION public.reception_update(uuid, text, date, text, boolean, jsonb, uuid) TO service_role; GRANT EXECUTE ON FUNCTION public.reception_delete(uuid) TO service_role`);
+      await db.exec('SET ROLE service_role'); await modifier(db, r, [{ p, q: 40 }]); await db.exec('RESET ROLE');          // réactivation
+      expect((await stock(db, p)).stock_quantity).toBe(45);
+    } finally { await db.close(); }
   });
 });
