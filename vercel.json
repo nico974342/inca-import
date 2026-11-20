@@ -13,5 +13,8 @@
         }
       ]
     }
+  ],
+  "crons": [
+    { "path": "/api/cron/cump", "schedule": "30 22 * * *" }
   ]
 }

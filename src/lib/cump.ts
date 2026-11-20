@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 /**
  * Recalcul automatique du CUMP glissant : déclenchement du traitement de la file (cump_file) APRÈS un événement (réception, livraison, annulation…).
  * Aucune de ces fonctions ne lève d'exception et aucune ne retarde l'événement d'origine au-delà d'un délai borné : un problème de calcul ne doit JAMAIS faire échouer une réception ou
@@ -47,3 +48,34 @@ export async function balayerCump(admin: ClientRpc): Promise<ResultatCump> {
   const t = await traiterFileCump(admin, 100); return { ok: t.ok, erreur: t.erreur, resultat: { redeposees: b.resultat, traitement: t.resultat } };
 }
 export const etatFileCump = (admin: ClientRpc) => appeler(admin, 'cump_etat_file');
+
+/** Jeton de la tâche planifiée : exige un secret configuré d'au moins 16 caractères et un en-tête « Bearer <secret> » identique (comparaison à temps constant). Absent, court ou différent : refus. */
+export function secretCronValide(secret: unknown, enTete: unknown): boolean {
+  if (typeof secret !== 'string' || secret.length < 16 || typeof enTete !== 'string') return false;
+  const h = (x: string) => createHash('sha256').update(x).digest();
+  return timingSafeEqual(h(enTete), h(`Bearer ${secret}`));
+}
+
+export interface RapportRattrapage { ok: boolean; absent?: boolean; erreursAvant: unknown[]; echouesAvant: number; reprise?: ResultatCump; balayage?: ResultatCump; ignore?: string; dureeMs: number }
+
+/**
+ * Rattrapage quotidien (tâche planifiée, sans utilisateur) : 1) relève les erreurs en cours AVANT de les reprendre (une reprise réussie efface le message d'erreur de la demande :
+ * l'historique est donc conservé au journal d'audit), 2) reprend les demandes « echoue » (sans doublon) et traite la file, 3) balaie les produits dont les données ont changé sans demande
+ * et les traite. Chaque étape est isolée (l'échec de l'une n'empêche pas l'autre), bornée dans le temps, et ne modifie jamais stock, commande, réception ni facture.
+ * Sûr en cas d'appels simultanés : la base prend les demandes en SKIP LOCKED et verrouille chaque produit pendant son calcul ; rejouer ne crée ni doublon ni écart.
+ */
+export async function rattrapageCump(admin: ClientRpc, journaliser?: (details: Record<string, unknown>) => Promise<void>, budgetMs = 40_000): Promise<RapportRattrapage> {
+  const debut = Date.now(); const duree = () => Date.now() - debut;
+  const etat = await etatFileCump(admin);
+  if (etat.absent) return { ok: true, absent: true, erreursAvant: [], echouesAvant: 0, dureeMs: duree() };
+  const e = (etat.ok ? etat.resultat : null) as { echoue?: number; dernieres_erreurs?: unknown[] } | null;
+  const erreursAvant = Array.isArray(e?.dernieres_erreurs) ? (e!.dernieres_erreurs as unknown[]) : []; const echouesAvant = Number(e?.echoue ?? 0);
+  const reprise = await reprendreEchecsCump(admin);
+  let balayage: ResultatCump | undefined; let ignore: string | undefined;
+  if (duree() < budgetMs) balayage = await balayerCump(admin); else ignore = 'balayage reporté : budget de temps dépassé (le prochain passage le reprendra)';
+  const ok = etat.ok && reprise.ok && !!balayage?.ok;
+  const aTracer = erreursAvant.length > 0 || echouesAvant > 0 || !ok;
+  if (journaliser && aTracer) { try { await journaliser({ erreurs_avant: erreursAvant, echoues_avant: echouesAvant, reprise: reprise.resultat ?? reprise.erreur ?? null, balayage: balayage?.resultat ?? balayage?.erreur ?? ignore ?? null, ok }); } catch (err: any) { console.error('[cump] journal du rattrapage :', err?.message ?? err); } }
+  if (!ok) console.error('[cump] rattrapage incomplet :', JSON.stringify({ etat: etat.erreur, reprise: reprise.erreur, balayage: balayage?.erreur, ignore }));
+  return { ok, erreursAvant, echouesAvant, reprise, balayage, ignore, dureeMs: duree() };
+}

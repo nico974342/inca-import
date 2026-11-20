@@ -80,9 +80,8 @@ test.describe('Routes : le traitement vient APRÈS l\'opération et ne la condit
     for (const f of ['src/pages/api/admin/cump/etat.ts', 'src/pages/api/admin/cump/reprendre.ts']) { const s = lire(f); expect(s).toContain('isAdmin(user)'); expect(s.indexOf('isAdmin(user)')).toBeLessThan(s.search(/await (etatFileCump|reprendreEchecsCump)\(/)); }
     expect(lire('src/pages/api/admin/cump/etat.ts')).toContain('export const GET'); expect(lire('src/pages/api/admin/cump/etat.ts')).not.toContain('export const POST');
     expect(lire('src/pages/api/admin/cump/reprendre.ts')).toContain('export const POST'); expect(lire('src/pages/api/admin/cump/reprendre.ts')).not.toContain('export const GET');
-    const c = lire('src/pages/api/cron/cump.ts'); expect(c).toContain('!secret ||'); expect(c).toContain('Bearer ${secret}'); expect(c).toContain('401');
-    expect(c.indexOf('401')).toBeLessThan(c.indexOf('balayerCump(')); expect(c).toContain('export const GET');
-    expect(JSON.parse(readFileSync('vercel.json', 'utf8')).crons).toBeUndefined();
+    const c = lire('src/pages/api/cron/cump.ts'); expect(c).toContain('secretCronValide(secret, fourni)'); expect(c).toContain('401');
+    expect(c.indexOf('401')).toBeLessThan(c.indexOf('rattrapageCump(')); expect(c).toContain('export const GET');                 // le détail de l'authentification et de la planification est dans cump-cron.spec.ts
   });
 
   test('aucune route de la page des marges, du tableau de bord ni des clients n\'est basculée : elles lisent toujours pump_snapshot', () => {
