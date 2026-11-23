@@ -6,10 +6,16 @@ import { logAdminAction } from '../../../../lib/audit';
 import { SHIPMENT_STATUSES, SHIPMENT_STATUS_LABEL, type ShipmentStatus } from '../../../../lib/constants';
 import { isAdmin } from '../../../../lib/roles';
 import { parseDlc } from '../../../../lib/dlc';
+import { etatTransition, ecritureAutorisee, MESSAGE_TRANSITION } from '../../../../lib/achatsTransition';
 
 if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 
 const { id } = Astro.params;
+// Garde SERVEUR : la modification d'une commande existante (en-tête, lignes) n'est possible que dans l'état « actif » (envoi du formulaire compris).
+{
+  const transition = await etatTransition();
+  if (!ecritureAutorisee(transition)) return Astro.redirect(`/admin/achats/${id}?err=${encodeURIComponent(MESSAGE_TRANSITION[transition])}`);
+}
 
 // ── Comme la liste : on n'écrit que sur shipments / shipment_items. Aucun
 //    mouvement de stock ni recalcul de PUMP ici. ──
@@ -29,14 +35,27 @@ if (Astro.request.method === 'POST' && id) {
   if (!supplierName) return Astro.redirect(`/admin/achats/${id}/edit?err=fournisseur_requis`);
   if (status === 'receptionne') return Astro.redirect(`/admin/achats/${id}/edit?err=receptionner`);
 
+  // Une commande qui a déjà reçu de la marchandise : ses lignes ne sont JAMAIS recréées (le cumul reçu et l'historique des réceptions y sont rattachés).
+  // Seuls l'en-tête (fournisseur, références, dates, notes, statut logistique) reste modifiable ; les quantités se changent par la modification justifiée.
+  const { data: dejaRecu } = await supabaseAdmin.from('shipment_items').select('id').eq('shipment_id', id).gt('received_quantity', 0).limit(1);
+  const { count: nbReceptions } = await supabaseAdmin.from('stock_receptions').select('id', { count: 'exact', head: true }).eq('shipment_id', id);
+  const verrouillee = (dejaRecu?.length ?? 0) > 0 || (nbReceptions ?? 0) > 0;
+  // Le statut « Réceptionné » découle des quantités reçues : un enregistrement de cette page ne le défait jamais.
+  const { data: courant } = await supabaseAdmin.from('shipments').select('status').eq('id', id).maybeSingle();
+  const statutFinal = courant?.status === 'receptionne' ? 'receptionne' : status;
+
   const { error: updErr } = await supabaseAdmin
     .from('shipments')
-    .update({ supplier_name: supplierName, reference, departure_date: departure, eta, status, notes })
+    .update({ supplier_name: supplierName, reference, departure_date: departure, eta, status: statutFinal, notes })
     .eq('id', id);
   if (updErr) return Astro.redirect(`/admin/achats/${id}/edit?err=enregistrement`);
 
-  // Les lignes sont remplacées en bloc : c'est le plus simple à raisonner et
-  // shipment_items ne porte aucune donnée dérivée qu'on risquerait de perdre.
+  if (verrouillee) {
+    await logAdminAction({ adminEmail, action: 'transit.modification', targetType: 'shipment', targetId: id, targetLabel: supplierName, details: { statut: statutFinal, eta, lignes: 'inchangées (commande déjà reçue)' } });
+    return Astro.redirect(`/admin/achats/${id}?ok=${encodeURIComponent('Commande modifiée (les lignes d\'une commande déjà reçue ne changent que par la modification justifiée des quantités).')}`);
+  }
+
+  // Les lignes d'une commande JAMAIS reçue sont remplacées en bloc (comportement d'origine) : aucun cumul, aucune réception n'y est encore rattaché.
   const productIds = data.getAll('product_id[]') as string[];
   const quantities = data.getAll('quantity[]') as string[];
   const costs      = data.getAll('unit_cost_ht[]') as string[];
@@ -70,7 +89,7 @@ if (Astro.request.method === 'POST' && id) {
 
 const { data: shipment, error: loadErr } = await supabaseAdmin
   .from('shipments')
-  .select('id, supplier_name, reference, departure_date, eta, status, notes, shipment_items(id, product_id, quantity, unit_cost_ht, dlc)')
+  .select('id, supplier_name, reference, departure_date, eta, status, notes, shipment_items(id, product_id, quantity, received_quantity, unit_cost_ht, dlc, products(name))')
   .eq('id', id)
   .single();
 
@@ -92,6 +111,8 @@ const existingItems = ((shipment as any)?.shipment_items ?? []).map((it: any) =>
   dlc: it.dlc ?? null,
 }));
 
+const lignesRecues = (((shipment as any)?.shipment_items ?? []) as any[]);
+const verrouillee = lignesRecues.some(it => (it.received_quantity ?? 0) > 0) || (shipment ? ((await supabaseAdmin.from('stock_receptions').select('id', { count: 'exact', head: true }).eq('shipment_id', id)).count ?? 0) > 0 : false);
 const err = Astro.url.searchParams.get('err');
 const ERR_MSG: Record<string, string> = {
   fournisseur_requis: 'Le nom du fournisseur est obligatoire.',
@@ -136,11 +157,15 @@ const ERR_MSG: Record<string, string> = {
           </div>
           <div class="field">
             <label class="label" for="status">Statut</label>
+            {shipment!.status === 'receptionne' ? (
+              <p class="items-hint" data-testid="statut-reception-fixe"><strong>Réceptionné</strong> — ce statut découle des quantités reçues ; il se rouvre si une réception est annulée ou une quantité modifiée.</p>
+            ) : (
             <select id="status" name="status">
               {SHIPMENT_STATUSES.filter(s => s !== 'receptionne').map(s => (
                 <option value={s} selected={s === shipment!.status}>{SHIPMENT_STATUS_LABEL[s]}</option>
               ))}
             </select>
+            )}
           </div>
           <div class="field field--full">
             <label class="label" for="notes">Notes</label>
@@ -148,6 +173,16 @@ const ERR_MSG: Record<string, string> = {
           </div>
         </div>
 
+        {verrouillee && (
+          <div class="items-verrou" data-testid="lignes-verrouillees">
+            <h2 class="items-title">Produits commandés</h2>
+            <p class="items-hint">Cette commande a déjà reçu de la marchandise : ses lignes ne se modifient plus ici (le cumul reçu et l'historique des réceptions y sont rattachés). Pour accepter un surplus ou solder la commande, utilisez « Modifier la quantité commandée » sur la <a href={`/admin/achats/${shipment!.id}`}>page de la commande</a> (justification et historique).</p>
+            <ul class="items-verrou-liste">
+              {lignesRecues.map(it => <li>{it.products?.name ?? 'Produit supprimé'} : {it.quantity} commandé(s), {it.received_quantity ?? 0} reçu(s)</li>)}
+            </ul>
+          </div>
+        )}
+        <div class="items-editeur" hidden={verrouillee}>
         <div class="items-head">
           <h2 class="items-title">Produits expédiés</h2>
           <button type="button" id="addRowBtn" class="btn btn-ghost">+ Ajouter un produit</button>
@@ -172,6 +207,7 @@ const ERR_MSG: Record<string, string> = {
           <strong>DLC</strong> : prévisionnelle, reprise à la réception (modifiable) ; aucune alerte avant l'arrivée.
           Les lignes déjà enregistrées gardent leur valeur, même vide ; seules les nouvelles lignes sont pré-remplies depuis l'ETA.
         </p>
+        </div>
 
         <div class="form-actions">
           <a href="/admin/achats" class="btn btn-ghost">Annuler</a>
@@ -179,12 +215,14 @@ const ERR_MSG: Record<string, string> = {
         </div>
       </form>
 
+      {!verrouillee && (
       <form method="post" action="/admin/achats" class="danger-form"
             onsubmit="return confirm('Supprimer définitivement cette expédition ?\nLe suivi sera perdu, mais aucun stock n\'est affecté.')">
         <input type="hidden" name="action" value="delete" />
         <input type="hidden" name="id" value={shipment!.id} />
         <button type="submit" class="delete-link">Supprimer cette expédition</button>
       </form>
+      )}
     </>
   )}
 </AdminLayout>
@@ -376,4 +414,6 @@ const ERR_MSG: Record<string, string> = {
   cursor: pointer;
   text-decoration: underline;
 }
+.items-verrou { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); margin-bottom: var(--space-4); }
+.items-verrou-liste { margin: var(--space-2) 0 0; padding-left: var(--space-4); font-size: var(--text-sm); }
 </style>

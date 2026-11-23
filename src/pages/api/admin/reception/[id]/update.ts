@@ -3,9 +3,10 @@ import { createAuthClient, supabaseAdmin } from '../../../../../lib/supabase';
 import { logAdminAction } from '../../../../../lib/audit';
 import { traiterFileCump } from '../../../../../lib/cump';
 import { isAdmin } from '../../../../../lib/roles';
+import { etatTransition, receptionLibreAutorisee } from '../../../../../lib/achatsTransition';
 import { matchSupplierName } from '../../../../../lib/constants';
 import { parseDlc } from '../../../../../lib/dlc';
-import { messageRefusStock, messageConflitSimultane, urlRefusStock } from '../../../../../lib/receptionErreur';
+import { messageRefusStock, messageConflitSimultane, messageReceptionLiee, urlRefusStock } from '../../../../../lib/receptionErreur';
 
 export const POST: APIRoute = async ({ params, request, cookies }) => {
   const supabase = createAuthClient(request, cookies);
@@ -16,8 +17,19 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
     return new Response('Non autorisé', { status: 401 });
   }
 
+  // Garde SERVEUR de la transition : suspendu tant que le service n'est pas rouvert (migration appliquée sans réouverture, ou état invérifiable).
+  if (!receptionLibreAutorisee(await etatTransition())) return Response.redirect(new URL('/admin/reception?err=suspendu', request.url), 303);
+
   const { id } = params;
   if (!id) return new Response('Non trouvé', { status: 404 });
+
+  // Une réception rattachée à une COMMANDE ne se modifie ni ne se supprime ici : seule l'annulation motivée (page de la commande) régularise le stock et les
+  // cumuls de façon cohérente et traçable. La base le refuse aussi ; ce renvoi explique pourquoi.
+  const { data: liee } = await supabaseAdmin.from('stock_receptions').select('shipment_id').eq('id', id).maybeSingle();
+  if (liee?.shipment_id) {
+    const message = encodeURIComponent('Cette réception est rattachée à une commande : utilisez « Annuler cette réception » (motif obligatoire) sur la page de la commande.');
+    return Response.redirect(new URL(`/admin/achats/${liee.shipment_id}?err=${message}`, request.url), 303);
+  }
 
   const form = await request.formData();
 
@@ -100,8 +112,10 @@ export const POST: APIRoute = async ({ params, request, cookies }) => {
 
   if (rpcErr) {
     console.error('reception_update RPC error:', rpcErr);
+    // Gel de la base (transition) : la base refuse l'exécution (permission denied, 42501) → message clair, rien n'a été enregistré.
+    if (rpcErr?.code === '42501') return Response.redirect(new URL('/admin/reception?err=suspendu', request.url), 303);
     // Stock déjà vendu ou réservé : la base refuse et rien n'est écrit ; on explique pourquoi au lieu de ramener silencieusement au formulaire.
-    const refus = messageRefusStock(rpcErr) ?? messageConflitSimultane(rpcErr);
+    const refus = messageRefusStock(rpcErr) ?? messageConflitSimultane(rpcErr) ?? messageReceptionLiee(rpcErr);
     if (refus) return Response.redirect(new URL(urlRefusStock('/admin/reception', refus), request.url), 303);
     if (rpcErr.message?.includes('not found')) {
       return new Response('Non trouvé', { status: 404 });

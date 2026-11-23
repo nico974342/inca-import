@@ -14,3 +14,10 @@ export function messageConflitSimultane(err: { code?: string } | null | undefine
     ? 'Une autre opération sur le même produit était en cours (livraison, commande ou autre réception). Rien n\'a été enregistré : réessayez dans un instant.'
     : null;
 }
+
+/** Réception rattachée à une commande fournisseur : elle ne se modifie ni ne se supprime ici (annulation motivée depuis la fiche de la commande, dans le Suivi des achats). */
+export function messageReceptionLiee(err: { message?: string } | null | undefined): string | null {
+  return String(err?.message ?? '').includes('RECEPTION_LIEE_COMMANDE')
+    ? 'Cette réception est rattachée à une commande fournisseur : elle ne se modifie pas et ne se supprime pas ici. Pour la corriger, annulez-la (avec un motif) depuis la fiche de la commande dans le Suivi des achats.'
+    : null;
+}

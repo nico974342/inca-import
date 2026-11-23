@@ -23,6 +23,8 @@ const preselectProductId = Astro.url.searchParams.get('product') ?? null;
 //    validation de ce formulaire appelle reception_create, qui applique le
 //    stock et recalcule le PUMP. Le transit lui-même n'a rien touché. ──
 const shipmentId = Astro.url.searchParams.get('shipment');
+// Réceptionner une COMMANDE se fait désormais sur la page de la commande (une livraison à la fois, quantités par ligne, opération atomique) ; cette page ne sert plus qu'aux réceptions hors commande.
+if (shipmentId) return Astro.redirect(`/admin/achats/${encodeURIComponent(shipmentId)}/reception`);
 let prefill: { supplierName: string; notes: string | null; items: { product_id: string; quantity: number; unit_cost_ht: number | null; dlc: string | null }[] } | null = null;
 let prefillEstimated = false;
 

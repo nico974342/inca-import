@@ -1,0 +1,218 @@
+---
+import AdminLayout from '../../../../components/admin/AdminLayout.astro';
+import { isAdmin } from '../../../../lib/roles';
+import { estUuid } from '../../../../lib/crm';
+import { achats, LIBELLE_RECEPTION } from '../../../../lib/achatsReception';
+import { traiterCorrection } from '../../../../lib/achatsActions';
+import { chargerCommande } from '../../../../lib/achatsCommande';
+import { etatTransition, ecritureAutorisee, MESSAGE_TRANSITION } from '../../../../lib/achatsTransition';
+import { SHIPMENT_STATUS_LABEL, type ShipmentStatus } from '../../../../lib/constants';
+import { formatDateReunion, formatDateTimeReunion } from '../../../../lib/datetime';
+
+/**
+ * Détail d'une commande fournisseur : ce qui est commandé, ce qui est réellement reçu, ce qu'il reste à recevoir, et l'historique complet des réceptions.
+ * Réservé à l'administrateur (comme tout le Suivi des achats). Les corrections (annulation d'une réception, modification justifiée d'une quantité commandée)
+ * passent par les fonctions sécurisées de la base : motif obligatoire, journal, archive ; le stock n'est régularisé que s'il est encore là.
+ */
+const utilisateur = (Astro.locals as any).user;
+if (!isAdmin(utilisateur)) return Astro.redirect('/admin');
+const { id } = Astro.params;
+if (!estUuid(id)) return Astro.redirect('/admin/achats?err=introuvable');
+
+const transition = await etatTransition();
+const ecritureOk = ecritureAutorisee(transition);
+if (Astro.request.method === 'POST') {
+  // Garde SERVEUR : aucune correction (annulation, quantité) hors de l'état « actif », quelle que soit la page d'où part la requête.
+  if (!ecritureOk) return Astro.redirect(`/admin/achats/${id}?err=${encodeURIComponent(MESSAGE_TRANSITION[transition])}`);
+  const r = await traiterCorrection(achats, utilisateur, await Astro.request.formData());
+  return Astro.redirect(`/admin/achats/${id}?${r.ok ? 'ok' : 'err'}=${encodeURIComponent(r.message)}`);
+}
+
+const c = await chargerCommande(id);
+if (!c) return Astro.redirect('/admin/achats?err=introuvable');
+const ok = Astro.url.searchParams.get('ok'); const err = Astro.url.searchParams.get('err');
+const e = c.etat;
+const nombre = (n: number) => n.toLocaleString('fr-FR');
+const peutRecevoir = ecritureOk && e.statut !== 'integrale' && c.status !== 'annule';
+const sansLigne = c.lignes.length === 0;
+const logistique = SHIPMENT_STATUS_LABEL[c.status as ShipmentStatus] ?? c.status;
+const mailCourt = (m: string | null) => (m ?? '—').split('@')[0];
+const actives = c.receptions.filter(r => !r.annulee_le);
+---
+<AdminLayout title={`Commande ${c.reference ?? c.supplier_name}`} activeNav="achats">
+  <div class="ach">
+    <a href="/admin/achats" class="ach-retour">← Suivi des achats</a>
+    <header class="ach-tete">
+      <div>
+        <h1 class="ach-h1">{c.supplier_name}{c.reference && <span class="ach-ref"> · {c.reference}</span>}</h1>
+        <p class="ach-sub">{c.eta ? `Arrivée estimée le ${formatDateReunion(c.eta)} · ` : ''}{c.notes ?? ''}</p>
+      </div>
+      <div class="ach-etats" aria-label="Statuts de la commande">
+        <div class="ach-etat-bloc"><span class="ach-etiq">Statut logistique</span><span class="ach-badge ach-badge--log" data-testid="statut-logistique">{logistique}</span></div>
+        <div class="ach-etat-bloc"><span class="ach-etiq">Réception</span><span class={`ach-badge ach-badge--${e.statut}`} data-testid="statut-reception">{LIBELLE_RECEPTION[e.statut]}</span></div>
+      </div>
+    </header>
+
+    {ok && <p class="ach-flash ach-flash--ok" role="status">{ok}</p>}
+    {err && <p class="ach-flash ach-flash--err" role="alert">{err}</p>}
+    {!ecritureOk && <p class="ach-flash ach-flash--err" role="status" data-testid="transition" data-etat={transition}>{MESSAGE_TRANSITION[transition]}</p>}
+
+    <section class="ach-bloc" aria-label="Progression de la réception">
+      <div class="ach-prog-t"><strong data-testid="progression">{nombre(e.recu)} / {nombre(e.commande)} cartons reçus</strong><span class="ach-prog-p">{e.pourcentage} %</span></div>
+      <div class="ach-barre" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={e.pourcentage} aria-label="Progression de la réception"><span style={`width:${e.pourcentage}%`}></span></div>
+      <p class="ach-reste" data-testid="reste">{e.historique ? 'Commande clôturée avant le suivi par quantités : son stock a déjà été compté.' : e.reste > 0 ? `Reste à recevoir : ${nombre(e.reste)} carton${e.reste > 1 ? 's' : ''}` : 'Plus rien à recevoir.'}</p>
+      <div class="ach-actions">
+        {peutRecevoir && !sansLigne && <a class="ach-btn ach-btn--p" href={`/admin/achats/${c.id}/reception`}>Enregistrer une réception</a>}
+        <a class="ach-btn" href={`/admin/achats/${c.id}/edit`}>Modifier la commande</a>
+        <a class="ach-btn" href={`/admin/achats/${c.id}/couts`}>Frais et coût rendu</a>
+      </div>
+      {c.status === 'annule' && <p class="ach-note">Cette commande est annulée : aucune réception possible.</p>}
+    </section>
+
+    <section class="ach-bloc" data-testid="lignes">
+      <h2 class="ach-titre">Lignes de la commande</h2>
+      {sansLigne ? <p class="ach-vide">Aucune ligne produit.</p> : (
+        <div class="ach-table-wrap">
+          <table class="ach-table">
+            <thead><tr><th>Produit</th><th class="n">Commandé</th><th class="n">Déjà reçu</th><th class="n">Reste à recevoir</th><th></th></tr></thead>
+            <tbody>
+              {c.lignes.map(l => (
+                <tr data-ligne={l.id}>
+                  <td>{l.nom}{l.sku && <span class="ach-sku"> {l.sku}</span>}</td>
+                  <td class="n" data-col="commande" data-label="Commandé">{nombre(l.quantity)}</td>
+                  <td class="n" data-col="recu" data-label="Déjà reçu">{nombre(l.recu)}</td>
+                  <td class={`n ${l.reste === 0 ? 'ach-ok' : ''}`} data-col="reste" data-label="Reste à recevoir">{nombre(l.reste)}</td>
+                  <td class="ach-cell-act">
+                    {ecritureOk && c.status !== 'annule' && !e.historique && (
+                      <details class="ach-det"><summary class="ach-mini">Modifier la quantité commandée</summary>
+                        <form method="post" class="ach-form">
+                          <input type="hidden" name="operation" value="quantite" /><input type="hidden" name="ligne_id" value={l.id} />
+                          <p class="ach-aide">Jamais automatique : réservé à l'administrateur, avec justification et historique. Impossible en dessous du déjà reçu ({nombre(l.recu)}).</p>
+                          <label for={`q-${l.id}`}>Nouvelle quantité (cartons)</label>
+                          <input id={`q-${l.id}`} type="text" inputmode="numeric" pattern="[0-9]*" name="quantite" value={String(l.quantity)} required />
+                          <label for={`m-${l.id}`}>Justification (obligatoire)</label>
+                          <input id={`m-${l.id}`} type="text" name="motif" maxlength="300" placeholder="Ex. surplus accepté par le fournisseur" required />
+                          <button type="submit" class="ach-btn ach-btn--p">Enregistrer le changement</button>
+                        </form>
+                      </details>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {c.avantSuivi > 0 && <p class="ach-note" data-testid="avant-suivi">Dont {nombre(c.avantSuivi)} carton{c.avantSuivi > 1 ? 's' : ''} reçu{c.avantSuivi > 1 ? 's' : ''} avant le suivi réception par réception (ancien cumul conservé).</p>}
+    </section>
+
+    <section class="ach-bloc" data-testid="historique-receptions">
+      <h2 class="ach-titre">Réceptions successives <span class="ach-n">{actives.length}</span></h2>
+      {c.receptions.length === 0 ? <p class="ach-vide">Aucune réception enregistrée pour cette commande.</p> : (
+        <ol class="ach-liste">
+          {c.receptions.map(r => (
+            <li class={`ach-rec${r.annulee_le ? ' ach-rec--annulee' : ''}`} data-reception={r.id}>
+              <div class="ach-rec-t">
+                <strong>{formatDateReunion(r.received_at, { year: 'numeric' })}</strong>
+                <span class="ach-meta">{nombre(r.total)} carton{r.total > 1 ? 's' : ''}{r.bl_fournisseur ? ` · BL ${r.bl_fournisseur}` : ''} · saisie par {mailCourt(r.created_by_email)} le {formatDateTimeReunion(r.created_at)}</span>
+                {r.annulee_le && <span class="ach-badge ach-badge--annulee">Annulée</span>}
+              </div>
+              <ul class="ach-rec-lignes">{r.lignes.map(x => <li>{x.produit} : <strong>{nombre(x.quantity)}</strong></li>)}</ul>
+              {r.notes && <p class="ach-meta">{r.notes}</p>}
+              {r.annulee_le && <p class="ach-meta ach-alerte">Annulée par {mailCourt(r.annulee_par)} le {formatDateTimeReunion(r.annulee_le)} : {r.annulation_motif}</p>}
+              {ecritureOk && !r.annulee_le && (
+                <details class="ach-det"><summary class="ach-mini">Annuler cette réception</summary>
+                  <form method="post" class="ach-form">
+                    <input type="hidden" name="operation" value="annuler" /><input type="hidden" name="reception_id" value={r.id} />
+                    <p class="ach-aide">Retire du stock les quantités reçues et rouvre le reste à recevoir. Refusé si une partie du stock a déjà été vendue, réservée ou déplacée. L'opération d'origine reste visible ici.</p>
+                    <label for={`mo-${r.id}`}>Motif (obligatoire)</label>
+                    <input id={`mo-${r.id}`} type="text" name="motif" maxlength="300" required placeholder="Ex. saisie sur la mauvaise commande" />
+                    <label class="ach-check"><input type="checkbox" name="confirme" value="oui" required /> Je confirme l'annulation de cette réception</label>
+                    <button type="submit" class="ach-btn ach-btn--p">Annuler la réception</button>
+                  </form>
+                </details>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+
+    {c.changements.length > 0 && (
+      <section class="ach-bloc" data-testid="historique-quantites">
+        <h2 class="ach-titre">Changements de quantité commandée</h2>
+        <ul class="ach-liste">
+          {c.changements.map(h => <li class="ach-rec"><strong>{h.produit}</strong> : {nombre(h.ancienne)} → {nombre(h.nouvelle)} <span class="ach-meta">· {h.motif} · {mailCourt(h.par_email)}, {formatDateTimeReunion(h.created_at)}</span></li>)}
+        </ul>
+      </section>
+    )}
+  </div>
+</AdminLayout>
+
+<style>
+.ach { max-width: 920px; margin: 0 auto; padding-bottom: 5rem; display: flex; flex-direction: column; gap: var(--space-4); }
+.ach-retour { font-size: var(--text-sm); color: var(--color-muted); text-decoration: none; min-height: 32px; display: inline-flex; align-items: center; }
+.ach-tete { display: flex; flex-wrap: wrap; gap: var(--space-4); justify-content: space-between; align-items: flex-start; }
+.ach-h1 { font-family: var(--font-display); font-size: 1.5rem; font-weight: 700; margin: 0; color: var(--color-ink); overflow-wrap: anywhere; }
+.ach-ref { font-weight: 500; color: var(--color-muted); }
+.ach-sub { margin: 2px 0 0; font-size: var(--text-sm); color: var(--color-muted); }
+.ach-etats { display: flex; gap: var(--space-4); flex-wrap: wrap; }
+.ach-etat-bloc { display: flex; flex-direction: column; gap: 4px; }
+.ach-etiq { font-size: var(--text-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-muted); }
+.ach-badge { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: var(--radius-full); font-size: var(--text-xs); font-weight: 700; width: fit-content; }
+.ach-badge--log { background: var(--color-surface); color: var(--color-ink); border: 1px solid var(--color-border-strong); }
+.ach-badge--attente { background: oklch(0.95 0.02 60); color: oklch(0.42 0.08 60); }
+.ach-badge--partielle { background: oklch(0.95 0.07 80); color: oklch(0.40 0.14 80); }
+.ach-badge--integrale { background: oklch(0.93 0.07 150); color: oklch(0.32 0.12 150); }
+.ach-badge--annulee { background: oklch(0.95 0.04 25); color: oklch(0.46 0.18 25); }
+.ach-flash { margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.ach-flash--ok { background: oklch(0.95 0.06 150); color: oklch(0.32 0.12 150); border: 1px solid oklch(0.85 0.09 150); }
+.ach-flash--err { background: oklch(0.97 0.04 25); color: oklch(0.50 0.19 25); border: 1px solid oklch(0.88 0.07 25); }
+.ach-bloc { background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); }
+.ach-titre { display: flex; gap: var(--space-2); align-items: center; margin: 0 0 var(--space-3); font-size: var(--text-base); font-weight: 700; color: var(--color-ink); }
+.ach-n { margin-left: auto; font-size: var(--text-sm); color: var(--color-muted); }
+.ach-prog-t { display: flex; justify-content: space-between; gap: var(--space-3); font-size: var(--text-base); }
+.ach-prog-p { font-weight: 700; color: var(--color-primary-deep); }
+.ach-barre { height: 12px; border-radius: var(--radius-full); background: var(--color-surface); overflow: hidden; margin: var(--space-2) 0; }
+.ach-barre span { display: block; height: 100%; background: var(--color-primary); border-radius: var(--radius-full); }
+.ach-reste { margin: 0 0 var(--space-3); font-size: var(--text-sm); color: var(--color-muted); }
+.ach-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.ach-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 var(--space-4); border-radius: var(--radius-md); border: 1.5px solid var(--color-border-strong); background: var(--color-bg); color: var(--color-ink); font: 600 var(--text-sm)/1 var(--font-body); text-decoration: none; cursor: pointer; }
+.ach-btn--p { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
+.ach-note, .ach-aide { margin: var(--space-3) 0 0; font-size: var(--text-xs); color: var(--color-muted); }
+.ach-vide { margin: 0; font-size: var(--text-sm); color: var(--color-muted); }
+.ach-table-wrap { overflow-x: auto; }
+.ach-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.ach-table th { padding: var(--space-2) var(--space-3); text-align: left; font-size: var(--text-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-muted); border-bottom: 1px solid var(--color-border); white-space: nowrap; }
+.ach-table td { padding: var(--space-3); border-bottom: 1px solid var(--color-border); vertical-align: top; }
+.ach-table .n { text-align: right; font-family: var(--font-mono); white-space: nowrap; }
+.ach-table th.n { text-align: right; }
+.ach-ok { color: oklch(0.38 0.12 150); font-weight: 700; }
+.ach-sku { color: var(--color-muted); font-size: var(--text-xs); }
+.ach-cell-act { min-width: 150px; }
+.ach-det { margin: 0; }
+.ach-mini { display: inline-flex; align-items: center; min-height: 40px; padding: 0 var(--space-3); border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-full); font: 600 var(--text-xs)/1 var(--font-body); cursor: pointer; list-style: none; background: var(--color-bg); }
+.ach-mini::-webkit-details-marker { display: none; }
+.ach-form { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-2); max-width: 420px; }
+.ach-form label { font-size: var(--text-sm); font-weight: 500; }
+.ach-form input[type="text"] { min-height: 44px; padding: 0 var(--space-3); font-size: 16px; border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-sm); background: var(--color-bg); font-family: var(--font-body); width: 100%; }
+.ach-check { display: flex; gap: var(--space-2); align-items: center; min-height: 44px; }
+.ach-liste { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.ach-rec { padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-sm); font-size: var(--text-sm); }
+.ach-rec--annulee { opacity: 0.7; background: var(--color-surface); }
+.ach-rec-t { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: baseline; }
+.ach-rec-lignes { margin: var(--space-2) 0 0; padding-left: var(--space-4); }
+.ach-meta { font-size: var(--text-xs); color: var(--color-muted); overflow-wrap: anywhere; }
+.ach-alerte { color: oklch(0.50 0.19 25); }
+@media (max-width: 560px) { .ach-actions .ach-btn { flex: 1 1 100%; } .ach-etats { width: 100%; } }
+/* téléphone : chaque produit devient une fiche (commandé / déjà reçu / reste lisibles sans défilement latéral) */
+@media (max-width: 640px) {
+  .ach-table thead { display: none; }
+  .ach-table, .ach-table tbody, .ach-table tr { display: block; }
+  .ach-table tr { padding: var(--space-3) 0; border-bottom: 1px solid var(--color-border); }
+  .ach-table td { display: flex; justify-content: space-between; gap: var(--space-3); border: 0; padding: var(--space-1) 0; }
+  .ach-table td:first-child { display: block; font-weight: 600; padding-bottom: var(--space-2); }
+  .ach-table td[data-label]::before { content: attr(data-label); font-family: inherit; font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-muted); align-self: center; }
+  .ach-table td.ach-cell-act { display: block; padding-top: var(--space-2); }
+}
+</style>

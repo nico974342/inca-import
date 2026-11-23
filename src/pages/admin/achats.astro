@@ -12,8 +12,12 @@ import {
 import { formatDateReunion, todayReunionISO } from '../../lib/datetime';
 import { parseDlc } from '../../lib/dlc';
 import { isAdmin } from '../../lib/roles';
+import { etatTransition, ecritureAutorisee, MESSAGE_TRANSITION } from '../../lib/achatsTransition';
+import { etatReception, LIBELLE_RECEPTION, FILTRES_ACHATS, LIBELLE_FILTRE_ACHATS, parseFiltreAchats, correspondFiltre } from '../../lib/achatsReception';
 
 if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
+const transition = await etatTransition();
+const ecritureOk = ecritureAutorisee(transition);
 
 // ── Écritures : uniquement sur shipments / shipment_items. Ni products,
 //    ni stock, ni PUMP — le transit est du suivi, pas du mouvement. ──
@@ -84,6 +88,9 @@ if (Astro.request.method === 'POST') {
     return Astro.redirect('/admin/achats?ok=cree');
   }
 
+  // Garde SERVEUR : changer le statut ou supprimer une commande existante n'est possible que dans l'état « actif » ; la création d'une NOUVELLE commande reste possible (aucune réception).
+  if ((action === 'set_status' || action === 'delete') && !ecritureOk) return Astro.redirect('/admin/achats?err=transition');
+
   if (action === 'set_status') {
     const id = data.get('id') as string;
     const statusRaw = data.get('status') as string;
@@ -103,22 +110,25 @@ if (Astro.request.method === 'POST') {
     const id = data.get('id') as string;
     if (id) {
       // shipment_items part en cascade (FK ON DELETE CASCADE).
+      // Une commande qui a reçu de la marchandise ne se supprime pas (historique à conserver) : la base la protège, on l'explique.
       const { error } = await supabaseAdmin.from('shipments').delete().eq('id', id);
-      if (error) return Astro.redirect('/admin/achats?err=suppression');
+      if (error) return Astro.redirect(`/admin/achats?err=${String(error.message).includes('COMMANDE_RECUE_NON_SUPPRIMABLE') ? 'recue' : 'suppression'}`);
       await logAdminAction({ adminEmail, action: 'transit.suppression', targetType: 'shipment', targetId: id });
     }
     return Astro.redirect('/admin/achats?ok=supprime');
   }
 }
 
+const vue = parseFiltreAchats(Astro.url.searchParams.get('vue'));
 const { data: shipmentsRaw, error: loadErr } = await supabaseAdmin
   .from('shipments')
   .select(`
     id, supplier_name, reference, departure_date, eta, status, notes, created_at,
-    shipment_items(id, quantity, unit_cost_ht, dlc, products(id, name, sku, unit, category, units_per_carton)),
+    shipment_items(id, quantity, received_quantity, unit_cost_ht, dlc, products(id, name, sku, unit, category, units_per_carton)),
     shipment_costs(id, product_id, amount_ht, is_estimated)
   `)
-  .in('status', SHIPMENT_ACTIVE_STATUSES as readonly string[])
+  // « En cours », « Reste à recevoir » et « Partiellement réceptionnées » : commandes encore actives ; « Toutes » : tout l'historique (réceptionnées et annulées comprises)
+  .in('status', (vue === 'toutes' ? SHIPMENT_STATUSES : SHIPMENT_ACTIVE_STATUSES) as readonly string[])
   .order('eta', { ascending: true, nullsFirst: false });
 
 const tableMissing = loadErr?.code === 'PGRST205' || loadErr?.code === '42P01';
@@ -132,7 +142,7 @@ const { data: supplierRows } = await supabaseAdmin.from('suppliers').select('nam
 const supplierNames = (supplierRows ?? []).map(s => s.name);
 
 const now = new Date();
-const shipments = (shipmentsRaw ?? []).map(s => {
+const shipmentsTous = (shipmentsRaw ?? []).map(s => {
   // shipment_items.quantity est en CARTONS, unit_cost_ht en € / CARTON —
   // comme stock_quantity et le PUMP (voir products.units_per_carton). Le
   // détail /unité n'existe que si le conditionnement est renseigné sur la
@@ -172,6 +182,8 @@ const shipments = (shipmentsRaw ?? []).map(s => {
     totalCost,
     anyMissingCost,
     landed,
+    // Statut de RÉCEPTION : calculé à partir des quantités réelles (jamais saisi à la main), indépendant du statut logistique ci-dessus.
+    etat: etatReception(rawItems.map(it => ({ quantity: it.quantity ?? 0, received_quantity: it.received_quantity ?? null })), s.status),
     progress: computeShipmentProgress(s.departure_date, s.eta, s.status, now),
     // La cargaison dessinée sur le pont est la composition réelle de
     // l'expédition, pas une décoration.
@@ -182,7 +194,10 @@ const shipments = (shipmentsRaw ?? []).map(s => {
   };
 });
 
-const totalEnTransit = shipments.reduce((n, s) => n + s.totalQty, 0);
+const shipments = shipmentsTous.filter(s => correspondFiltre(vue, s.etat, s.status));
+const compteurs = Object.fromEntries(FILTRES_ACHATS.map(f => [f, shipmentsTous.filter(s => correspondFiltre(f, s.etat, s.status)).length])) as Record<(typeof FILTRES_ACHATS)[number], number>;
+// cartons réellement encore à recevoir (le déjà-reçu n'est plus « en transit »)
+const totalEnTransit = shipments.reduce((n, s) => n + (s.status === 'receptionne' || s.status === 'annule' ? 0 : s.etat.reste), 0);
 
 const ok  = Astro.url.searchParams.get('ok');
 const err = Astro.url.searchParams.get('err');
@@ -192,6 +207,7 @@ const OK_MSG: Record<string, string> = {
   receptionne: "Réception validée — l'expédition est passée en « Réceptionné » et sort du suivi.",
 };
 const ERR_MSG: Record<string, string> = {
+  transition: MESSAGE_TRANSITION[transition] || 'Opération suspendue pendant la mise en service.',
   fournisseur_requis: 'Le nom du fournisseur est obligatoire.',
   creation: "L'expédition n'a pas pu être créée.",
   lignes: "Les lignes produits n'ont pas pu être enregistrées — l'expédition a été annulée.",
@@ -199,6 +215,7 @@ const ERR_MSG: Record<string, string> = {
   receptionner: "Le statut « Réceptionné » se pose en validant une réception, pas à la main.",
   suppression: 'La suppression a échoué.',
   introuvable: 'Expédition introuvable.',
+  recue: 'Cette commande a déjà des réceptions : elle ne se supprime pas (historique à conserver). Passez-la au statut annulé si besoin.',
 };
 
 const today = todayReunionISO();
@@ -216,7 +233,7 @@ function fmtEUR2(n: number): string {
   <p class="intro">
     Achats et expéditions en cours : marchandises commandées ou parties de chez le fournisseur, et pas encore arrivées.
     <strong>Ce suivi ne touche ni au stock ni au PUMP</strong> : ils ne bougent qu'à la réception réelle,
-    en cliquant « Réceptionner » une fois la marchandise arrivée.
+    en cliquant « Enregistrer une réception » à chaque livraison (partielle ou totale).
   </p>
 
   {tableMissing ? (
@@ -228,6 +245,7 @@ function fmtEUR2(n: number): string {
     <>
       {ok  && <div class="alert alert--ok"    role="status">{OK_MSG[ok] ?? 'Enregistré.'}</div>}
       {err && <div class="alert alert--error" role="alert">{ERR_MSG[err] ?? 'Une erreur est survenue.'}</div>}
+      {!ecritureOk && <div class="alert alert--error" role="status" data-testid="transition" data-etat={transition}>{MESSAGE_TRANSITION[transition]}</div>}
 
       <details class="create-panel">
         <summary class="create-summary">+ Nouvelle expédition</summary>
@@ -296,16 +314,22 @@ function fmtEUR2(n: number): string {
         </form>
       </details>
 
+      <nav class="filtres" aria-label="Filtrer les commandes" data-testid="filtres-achats">
+        {FILTRES_ACHATS.map(f => (
+          <a class={`filtre ${vue === f ? 'filtre--on' : ''}`} href={f === 'en_cours' ? '/admin/achats' : `/admin/achats?vue=${f}`} aria-current={vue === f ? 'page' : undefined}>{LIBELLE_FILTRE_ACHATS[f]} <span class="filtre-n">{compteurs[f]}</span></a>
+        ))}
+      </nav>
+
       {shipments.length === 0 ? (
         <div class="empty-state">
-          <p class="empty-title">Aucune expédition en cours.</p>
-          <p class="empty-body">Les marchandises en route apparaissent ici jusqu'à leur réception.</p>
+          <p class="empty-title">{vue === 'en_cours' ? 'Aucune expédition en cours.' : 'Aucune commande dans cette vue.'}</p>
+          <p class="empty-body">{vue === 'en_cours' ? "Les marchandises en route apparaissent ici jusqu'à leur réception." : 'Changez de filtre pour voir les autres commandes.'}</p>
         </div>
       ) : (
         <>
           <p class="summary-line">
-            {shipments.length} expédition{shipments.length > 1 ? 's' : ''} en cours ·
-            {' '}{totalEnTransit.toLocaleString('fr-FR')} cartons en transit
+            {shipments.length} commande{shipments.length > 1 ? 's' : ''} ·
+            {' '}{totalEnTransit.toLocaleString('fr-FR')} cartons restant à recevoir
           </p>
 
           <div class="shipments">
@@ -317,6 +341,11 @@ function fmtEUR2(n: number): string {
                     {s.reference && <span class="sh-ref">{s.reference}</span>}
                   </div>
                   <div class="sh-actions">
+                    {(s.status === 'receptionne' || s.status === 'annule') ? (
+                      <span class="badge-log" data-testid="statut-logistique">{SHIPMENT_STATUS_LABEL[s.status as ShipmentStatus]}</span>
+                    ) : !ecritureOk ? (
+                      <span class="badge-log" data-testid="statut-logistique">{SHIPMENT_STATUS_LABEL[s.status as ShipmentStatus]}</span>
+                    ) : (
                     <form method="post" class="status-form">
                       <input type="hidden" name="action" value="set_status" />
                       <input type="hidden" name="id" value={s.id} />
@@ -326,13 +355,21 @@ function fmtEUR2(n: number): string {
                         ))}
                       </select>
                     </form>
+                    )}
+                    <a href={`/admin/achats/${s.id}`} class="link-action">Détail et réceptions</a>
                     <a href={`/admin/achats/${s.id}/edit`} class="link-action">Modifier</a>
                     <a href={`/admin/achats/${s.id}/couts`} class="link-action">
                       {s.landed.costsStatus === 'aucun' ? '+ Frais / coût rendu' : 'Voir détail coût rendu'}
                     </a>
-                    <a href={`/admin/reception/new?shipment=${s.id}`} class="btn btn-primary btn-sm">Réceptionner</a>
+                    {ecritureOk && s.etat.statut !== 'integrale' && s.status !== 'annule' && s.items.length > 0 && <a href={`/admin/achats/${s.id}/reception`} class="btn btn-primary btn-sm" data-testid="enregistrer-reception">Enregistrer une réception</a>}
                   </div>
                 </header>
+
+                <div class="rec" data-testid="reception-liste">
+                  <span class={`rec-badge rec-badge--${s.etat.statut}`} data-testid="statut-reception">{LIBELLE_RECEPTION[s.etat.statut]}</span>
+                  <div class="rec-barre" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={s.etat.pourcentage} aria-label="Progression de la réception"><span style={`width:${s.etat.pourcentage}%`}></span></div>
+                  <span class="rec-texte" data-testid="progression">{s.etat.recu.toLocaleString('fr-FR')} / {s.etat.commande.toLocaleString('fr-FR')} cartons reçus{s.etat.reste > 0 && !s.etat.historique ? ` · reste ${s.etat.reste.toLocaleString('fr-FR')}` : ''}</span>
+                </div>
 
                 <ShipRoute
                   percent={s.progress.percent}
@@ -356,6 +393,7 @@ function fmtEUR2(n: number): string {
                           </td>
                           <td class="it-qty">
                             <span class="it-cartons">{it.cartons.toLocaleString('fr-FR')} cartons</span>
+                            {(it.received_quantity ?? 0) > 0 && <span class="it-recu">dont {(it.received_quantity ?? 0).toLocaleString('fr-FR')} reçus{it.quantity - (it.received_quantity ?? 0) > 0 ? ` · reste ${(it.quantity - (it.received_quantity ?? 0)).toLocaleString('fr-FR')}` : ' · soldé'}</span>}
                             {it.unitsPerCarton != null && (
                               <span class="it-pack">
                                 {it.unitsPerCarton}/carton · {it.totalUnits!.toLocaleString('fr-FR')} unités
@@ -706,4 +744,20 @@ function fmtEUR2(n: number): string {
 }
 .empty-title { font-weight: 600; color: var(--color-ink); margin-bottom: var(--space-2); }
 .empty-body  { color: var(--color-muted); }
+
+/* ── Réception : progression et filtres ─────────────────────────────── */
+.filtres { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+.filtre { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 var(--space-4); border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-full); font-size: var(--text-sm); font-weight: 500; color: var(--color-ink); text-decoration: none; }
+.filtre--on { background: var(--color-primary); border-color: var(--color-primary); color: #fff; font-weight: 700; }
+.filtre-n { font-size: var(--text-xs); opacity: 0.8; }
+.rec { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--color-border); }
+.rec-badge { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: var(--radius-full); font-size: var(--text-xs); font-weight: 700; white-space: nowrap; }
+.rec-badge--attente { background: oklch(0.95 0.02 60); color: oklch(0.42 0.08 60); }
+.rec-badge--partielle { background: oklch(0.95 0.07 80); color: oklch(0.40 0.14 80); }
+.rec-badge--integrale { background: oklch(0.93 0.07 150); color: oklch(0.32 0.12 150); }
+.rec-barre { flex: 1 1 140px; min-width: 100px; height: 10px; border-radius: var(--radius-full); background: var(--color-surface); overflow: hidden; }
+.rec-barre span { display: block; height: 100%; background: var(--color-primary); border-radius: var(--radius-full); }
+.rec-texte { font-size: var(--text-xs); color: var(--color-muted); }
+.badge-log { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: var(--radius-full); font-size: var(--text-xs); font-weight: 700; background: var(--color-surface); border: 1px solid var(--color-border-strong); }
+.it-recu { display: block; font-size: var(--text-xs); color: var(--color-muted); }
 </style>
