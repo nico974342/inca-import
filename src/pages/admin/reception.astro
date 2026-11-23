@@ -238,7 +238,8 @@ function formatPrice(p: number) {
 .empty-title { font-weight: 600; color: var(--color-ink); margin-bottom: var(--space-2); }
 .empty-body  { color: var(--color-muted); font-size: var(--text-sm); }
 
-.reception-list { display: flex; flex-direction: column; gap: var(--space-4); }
+/* Pleine largeur à droite du menu : autant de colonnes de cartes que l'écran en accepte (une seule sur téléphone), aucune largeur maximale. */
+.reception-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 32rem), 1fr)); gap: var(--space-4); align-items: start; width: 100%; }
 
 .reception-card {
   background: var(--color-bg);

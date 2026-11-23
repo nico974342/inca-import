@@ -46,7 +46,7 @@ test.describe('Protection de FA/1 : logique', () => {
 
   test('pages : la page de réception refuse AVANT de traiter le formulaire ; la fiche masque le bouton et explique ; les autres garde-fous restent', () => {
     const rec = readFileSync('src/pages/admin/achats/[id]/reception.astro', 'utf8');
-    expect(rec).toContain('rapprochementRequis(id, c.etat, c.receptions.length)');
+    expect(rec).toContain('rapprochementRequis(id, c.etat, c.receptions.filter(r => !r.annulee_le).length)');
     expect(rec.indexOf('rapprochementRequis(id, c.etat')).toBeLessThan(rec.indexOf("Astro.request.method === 'POST'"));
     expect(rec.indexOf('ecritureAutorisee(transition)')).toBeLessThan(rec.indexOf('rapprochementRequis(id, c.etat'));
     const idx = readFileSync('src/pages/admin/achats/[id]/index.astro', 'utf8');

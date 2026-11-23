@@ -34,7 +34,7 @@ if (!c) return Astro.redirect('/admin/achats?err=introuvable');
 const ok = Astro.url.searchParams.get('ok'); const err = Astro.url.searchParams.get('err');
 const e = c.etat;
 const nombre = (n: number) => n.toLocaleString('fr-FR');
-const aRapprocher = rapprochementRequis(c.id, e, c.receptions.length);
+const aRapprocher = rapprochementRequis(c.id, e, c.receptions.filter(r => !r.annulee_le).length);
 const peutRecevoir = ecritureOk && e.statut !== 'integrale' && c.status !== 'annule' && !aRapprocher;
 const sansLigne = c.lignes.length === 0;
 const logistique = SHIPMENT_STATUS_LABEL[c.status as ShipmentStatus] ?? c.status;
@@ -153,7 +153,7 @@ const actives = c.receptions.filter(r => !r.annulee_le);
 </AdminLayout>
 
 <style>
-.ach { max-width: 920px; margin: 0 auto; padding-bottom: 5rem; display: flex; flex-direction: column; gap: var(--space-4); }
+.ach { width: 100%; padding-bottom: 5rem; display: flex; flex-direction: column; gap: var(--space-4); }
 .ach-retour { font-size: var(--text-sm); color: var(--color-muted); text-decoration: none; min-height: 32px; display: inline-flex; align-items: center; }
 .ach-tete { display: flex; flex-wrap: wrap; gap: var(--space-4); justify-content: space-between; align-items: flex-start; }
 .ach-h1 { font-family: var(--font-display); font-size: 1.5rem; font-weight: 700; margin: 0; color: var(--color-ink); overflow-wrap: anywhere; }

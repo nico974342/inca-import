@@ -278,7 +278,7 @@ test.describe('Gardes SERVEUR : chaque point d\'écriture contrôle l\'état ava
     ordre(ed, 'ecritureAutorisee(transition)', /Astro\.request\.method === 'POST'/, 'modification'); ordre(ed, 'ecritureAutorisee(transition)', /supabaseAdmin\s*\./, 'modification (1er accès aux données)');
     const li = lire('src/pages/admin/achats.astro');
     ordre(li, "(action === 'set_status' || action === 'delete') && !ecritureOk", "if (action === 'set_status') {", 'liste (statut)'); ordre(li, "(action === 'set_status' || action === 'delete') && !ecritureOk", "if (action === 'delete') {", 'liste (suppression)');
-    expect(li).toContain("ecritureOk && s.etat.statut !== 'integrale'");
+    expect(lire('src/components/admin/CommandeAccordeon.astro')).toContain("ecritureOk && s.etat.statut !== 'integrale'");     // le bouton vit dans le composant de la liste
   });
 
   test('routes historiques de réception (création, correction, suppression) : garde après le contrôle administrateur et avant tout accès aux données', () => {

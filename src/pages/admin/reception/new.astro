@@ -116,7 +116,7 @@ if (shipmentId) {
           <input type="date" id="received_at" name="received_at" required class="input" value={today} />
           <p id="dateHint" class="field-hint" style="display:none"></p>
         </div>
-        <div class="field field--full">
+        <div class="field field--note">
           <label for="notes" class="label">Notes (optionnel)</label>
           <input type="text" id="notes" name="notes" class="input" placeholder="Numéro BL fournisseur, remarques…" value={prefill?.notes ?? ''} />
         </div>
@@ -462,13 +462,19 @@ if (PREFILL_ITEMS.length > 0) {
 }
 .section-header .section-title { margin-bottom: 0; }
 
+/* Fournisseur | date | notes sur une seule ligne quand la place le permet (pleine largeur, aucun plafond) ; deux colonnes puis une colonne en dessous. */
 .form-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(220px, 1.4fr) minmax(170px, 0.8fr) minmax(240px, 2fr);
   gap: var(--space-4);
 }
-
 .field--full { grid-column: 1 / -1; }
+.field--note { grid-column: auto; }
+.reception-form { width: 100%; }
+@media (max-width: 1000px) {
+  .form-grid { grid-template-columns: 1fr 1fr; }
+  .field--note { grid-column: 1 / -1; }
+}
 
 .label {
   display: block;

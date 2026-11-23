@@ -3,17 +3,18 @@ import AdminLayout from '../../components/admin/AdminLayout.astro';
 import { supabaseAdmin } from '../../lib/supabase';
 import { sanitizeText } from '../../lib/sanitize';
 import { logAdminAction } from '../../lib/audit';
-import ShipRoute from '../../components/admin/ShipRoute.astro';
+import CommandeAccordeon from '../../components/admin/CommandeAccordeon.astro';
 import {
   SHIPMENT_STATUSES, SHIPMENT_STATUS_LABEL, SHIPMENT_ACTIVE_STATUSES,
   computeShipmentProgress, allocateCargoSlots, matchSupplierName, computeLandedCosts,
   type ShipmentStatus, type ShipmentCostItem, type ShipmentCostLine,
 } from '../../lib/constants';
-import { formatDateReunion, todayReunionISO } from '../../lib/datetime';
+import { todayReunionISO } from '../../lib/datetime';
 import { parseDlc } from '../../lib/dlc';
 import { isAdmin } from '../../lib/roles';
 import { etatTransition, ecritureAutorisee, MESSAGE_TRANSITION } from '../../lib/achatsTransition';
-import { etatReception, LIBELLE_RECEPTION, FILTRES_ACHATS, LIBELLE_FILTRE_ACHATS, parseFiltreAchats, correspondFiltre } from '../../lib/achatsReception';
+import { rapprochementRequis } from '../../lib/achatsRapprochement';
+import { etatReception, FILTRES_ACHATS, LIBELLE_FILTRE_ACHATS, parseFiltreAchats, correspondFiltre } from '../../lib/achatsReception';
 
 if (!isAdmin((Astro.locals as any).user)) return Astro.redirect('/admin');
 const transition = await etatTransition();
@@ -175,6 +176,9 @@ const shipmentsTous = (shipmentsRaw ?? []).map(s => {
   }));
   const landed = computeLandedCosts(landedItems, costLines);
 
+  // Statut de RÉCEPTION : calculé à partir des quantités réelles (jamais saisi à la main), indépendant du statut logistique.
+  const etat = etatReception(rawItems.map(it => ({ quantity: it.quantity ?? 0, received_quantity: it.received_quantity ?? null })), s.status);
+
   return {
     ...s,
     items,
@@ -182,8 +186,9 @@ const shipmentsTous = (shipmentsRaw ?? []).map(s => {
     totalCost,
     anyMissingCost,
     landed,
-    // Statut de RÉCEPTION : calculé à partir des quantités réelles (jamais saisi à la main), indépendant du statut logistique ci-dessus.
-    etat: etatReception(rawItems.map(it => ({ quantity: it.quantity ?? 0, received_quantity: it.received_quantity ?? null })), s.status),
+    etat,
+    // Commande déjà réceptionnée par l'ancien parcours et pas encore rapprochée (FA/1) : AUCUN bouton de réception (le serveur refuse de toute façon).
+    aRapprocher: rapprochementRequis((s as any).id, etat, 0),
     progress: computeShipmentProgress(s.departure_date, s.eta, s.status, now),
     // La cargaison dessinée sur le pont est la composition réelle de
     // l'expédition, pas une décoration.
@@ -219,15 +224,6 @@ const ERR_MSG: Record<string, string> = {
 };
 
 const today = todayReunionISO();
-function fmtDate(d: string | null): string {
-  return formatDateReunion(d, { day: 'numeric', month: 'short' });
-}
-function fmtPrice(n: number): string {
-  return n.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
-}
-function fmtEUR2(n: number): string {
-  return n.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
 ---
 <AdminLayout title="Suivi des achats" activeNav="achats">
   <p class="intro">
@@ -332,122 +328,8 @@ function fmtEUR2(n: number): string {
             {' '}{totalEnTransit.toLocaleString('fr-FR')} cartons restant à recevoir
           </p>
 
-          <div class="shipments">
-            {shipments.map(s => (
-              <article class={`shipment ${s.progress.late ? 'shipment--late' : ''}`}>
-                <header class="sh-head">
-                  <div class="sh-id">
-                    <h2 class="sh-supplier">{s.supplier_name}</h2>
-                    {s.reference && <span class="sh-ref">{s.reference}</span>}
-                  </div>
-                  <div class="sh-actions">
-                    {(s.status === 'receptionne' || s.status === 'annule') ? (
-                      <span class="badge-log" data-testid="statut-logistique">{SHIPMENT_STATUS_LABEL[s.status as ShipmentStatus]}</span>
-                    ) : !ecritureOk ? (
-                      <span class="badge-log" data-testid="statut-logistique">{SHIPMENT_STATUS_LABEL[s.status as ShipmentStatus]}</span>
-                    ) : (
-                    <form method="post" class="status-form">
-                      <input type="hidden" name="action" value="set_status" />
-                      <input type="hidden" name="id" value={s.id} />
-                      <select name="status" onchange="this.form.submit()" aria-label={`Statut de l'expédition ${s.supplier_name}`}>
-                        {SHIPMENT_STATUSES.filter(st => st !== 'receptionne').map(st => (
-                          <option value={st} selected={st === s.status}>{SHIPMENT_STATUS_LABEL[st as ShipmentStatus]}</option>
-                        ))}
-                      </select>
-                    </form>
-                    )}
-                    <a href={`/admin/achats/${s.id}`} class="link-action">Détail et réceptions</a>
-                    <a href={`/admin/achats/${s.id}/edit`} class="link-action">Modifier</a>
-                    <a href={`/admin/achats/${s.id}/couts`} class="link-action">
-                      {s.landed.costsStatus === 'aucun' ? '+ Frais / coût rendu' : 'Voir détail coût rendu'}
-                    </a>
-                    {ecritureOk && s.etat.statut !== 'integrale' && s.status !== 'annule' && s.items.length > 0 && <a href={`/admin/achats/${s.id}/reception`} class="btn btn-primary btn-sm" data-testid="enregistrer-reception">Enregistrer une réception</a>}
-                  </div>
-                </header>
-
-                <div class="rec" data-testid="reception-liste">
-                  <span class={`rec-badge rec-badge--${s.etat.statut}`} data-testid="statut-reception">{LIBELLE_RECEPTION[s.etat.statut]}</span>
-                  <div class="rec-barre" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={s.etat.pourcentage} aria-label="Progression de la réception"><span style={`width:${s.etat.pourcentage}%`}></span></div>
-                  <span class="rec-texte" data-testid="progression">{s.etat.recu.toLocaleString('fr-FR')} / {s.etat.commande.toLocaleString('fr-FR')} cartons reçus{s.etat.reste > 0 && !s.etat.historique ? ` · reste ${s.etat.reste.toLocaleString('fr-FR')}` : ''}</span>
-                </div>
-
-                <ShipRoute
-                  percent={s.progress.percent}
-                  late={s.progress.late}
-                  arrived={s.progress.arrived}
-                  daysLate={s.progress.daysLate}
-                  departureLabel={fmtDate(s.departure_date)}
-                  etaLabel={fmtDate(s.eta)}
-                  cargo={s.cargo}
-                  seed={s.id}
-                />
-
-                <div class="sh-body">
-                  <table class="sh-items">
-                    <tbody>
-                      {s.items.map((it: any) => (
-                        <tr>
-                          <td class="it-name">
-                            {it.products?.name ?? 'Produit supprimé'}
-                            {it.dlc && <span class="it-dlc">DLC {formatDateReunion(it.dlc)}</span>}
-                          </td>
-                          <td class="it-qty">
-                            <span class="it-cartons">{it.cartons.toLocaleString('fr-FR')} cartons</span>
-                            {(it.received_quantity ?? 0) > 0 && <span class="it-recu">dont {(it.received_quantity ?? 0).toLocaleString('fr-FR')} reçus{it.quantity - (it.received_quantity ?? 0) > 0 ? ` · reste ${(it.quantity - (it.received_quantity ?? 0)).toLocaleString('fr-FR')}` : ' · soldé'}</span>}
-                            {it.unitsPerCarton != null && (
-                              <span class="it-pack">
-                                {it.unitsPerCarton}/carton · {it.totalUnits!.toLocaleString('fr-FR')} unités
-                              </span>
-                            )}
-                          </td>
-                          <td class="it-cost">
-                            {it.pricePerCarton != null ? (
-                              <>
-                                {it.pricePerUnit != null && (
-                                  <span class="it-price-unit">{fmtEUR2(it.pricePerUnit)} / unité</span>
-                                )}
-                                <span class="it-price-carton">{fmtEUR2(it.pricePerCarton)} / carton</span>
-                                <span class="it-price-total">{fmtEUR2(it.totalValue!)} total</span>
-                              </>
-                            ) : <span class="muted">coût non renseigné</span>}
-                          </td>
-                        </tr>
-                      ))}
-                      {s.items.length === 0 && (
-                        <tr><td colspan="3" class="muted">Aucune ligne produit — <a href={`/admin/achats/${s.id}/edit`}>en ajouter</a></td></tr>
-                      )}
-                    </tbody>
-                  </table>
-
-                  <div class="sh-totals">
-                    <span class="t-qty">{s.totalQty.toLocaleString('fr-FR')} cartons</span>
-                    <span class="t-cost">
-                      {s.totalCost > 0 ? fmtPrice(s.totalCost) : '—'}
-                      {s.anyMissingCost && s.totalCost > 0 && <span class="t-partial" title="Certaines lignes n'ont pas de coût unitaire">*</span>}
-                    </span>
-                    {s.notes && <p class="sh-notes">{s.notes}</p>}
-                  </div>
-                </div>
-
-                {s.items.length > 0 && (
-                  <div class="sh-landed">
-                    <span class="landed-stat">
-                      <span class="landed-label">Valeur fournisseur</span>
-                      <span class="landed-value">{fmtEUR2(s.landed.totalSupplierValue)}</span>
-                    </span>
-                    <span class="landed-stat">
-                      <span class="landed-label">Frais import</span>
-                      <span class="landed-value">{fmtEUR2(s.landed.totalImportFees)}</span>
-                    </span>
-                    <span class="landed-stat landed-stat--total">
-                      <span class="landed-label">Coût rendu total</span>
-                      <span class="landed-value">{fmtEUR2(s.landed.totalLanded)}</span>
-                      {s.landed.costsStatus === 'estime' && <span class="landed-flag" title="Frais encore estimés">estimé</span>}
-                    </span>
-                  </div>
-                )}
-              </article>
-            ))}
+          <div class="shipments" data-testid="commandes">
+            {shipments.map(s => <CommandeAccordeon s={s} ecritureOk={ecritureOk} />)}
           </div>
         </>
       )}
@@ -663,77 +545,8 @@ function fmtEUR2(n: number): string {
 
 .summary-line { margin: 0 0 var(--space-3); font-size: var(--text-xs); color: var(--color-muted); }
 
-/* ── Cartes expédition ── */
-.shipments { display: flex; flex-direction: column; gap: var(--space-4); }
-.shipment {
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-4);
-}
-.shipment--late { border-color: oklch(0.84 0.10 70); }
-
-.sh-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-3); }
-.sh-id { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; }
-.sh-supplier { margin: 0; font-size: var(--text-base); font-weight: 600; color: var(--color-ink); }
-.sh-ref { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-muted); }
-.sh-actions { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
-.status-form select { font-size: var(--text-xs); padding: 0.3rem 0.5rem; }
-.link-action { font-size: var(--text-sm); font-weight: 500; color: var(--color-primary-deep); text-decoration: none; }
-.link-action:hover { text-decoration: underline; }
-.btn-sm { padding: 0.35rem 0.75rem; font-size: var(--text-xs); }
-
-.sh-body { display: flex; gap: var(--space-5); flex-wrap: wrap; align-items: flex-start; margin-top: var(--space-3); }
-.sh-items { flex: 1 1 320px; border-collapse: collapse; font-size: var(--text-sm); }
-.sh-items td { padding: var(--space-1) 0; border-bottom: 1px dashed var(--color-border); }
-.sh-items tr:last-child td { border-bottom: none; }
-.it-name { color: var(--color-ink); }
-.it-qty, .it-cost {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 1px;
-  text-align: right;
-  white-space: nowrap;
-  padding-left: var(--space-4) !important;
-}
-.it-cartons     { font-family: var(--font-mono); color: var(--color-ink); }
-.it-dlc         { display: block; font-size: var(--text-xs); color: var(--color-muted); font-family: var(--font-mono); }
-.it-pack        { font-size: var(--text-xs); color: var(--color-muted); }
-.it-price-unit  { font-size: var(--text-xs); color: var(--color-muted); font-family: var(--font-mono); }
-.it-price-carton { font-family: var(--font-mono); font-weight: 600; color: var(--color-ink); }
-.it-price-total { font-size: var(--text-xs); color: var(--color-muted); font-family: var(--font-mono); }
-.muted { color: var(--color-muted); }
-.muted a { color: var(--color-primary-deep); }
-
-.sh-landed {
-  display: flex;
-  gap: var(--space-5);
-  justify-content: flex-end;
-  margin-top: var(--space-3);
-  padding-top: var(--space-3);
-  border-top: 1px dashed var(--color-border);
-}
-.landed-stat { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
-.landed-label { font-size: var(--text-xs); color: var(--color-muted); }
-.landed-value { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-ink); }
-.landed-stat--total .landed-value { font-weight: 700; }
-.landed-flag {
-  font-size: 0.6875rem;
-  font-weight: 600;
-  color: oklch(0.50 0.13 70);
-  background: oklch(0.95 0.06 75);
-  padding: 0.05rem 0.4rem;
-  border-radius: 999px;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-}
-
-.sh-totals { flex: 0 0 auto; text-align: right; min-width: 140px; }
-.t-qty  { display: block; font-size: 1.05rem; font-weight: 700; color: var(--color-ink); font-variant-numeric: tabular-nums; }
-.t-cost { display: block; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-muted); }
-.t-partial { color: oklch(0.55 0.15 60); cursor: help; }
-.sh-notes { margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--color-muted); font-style: italic; max-width: 30ch; }
+/* ── Liste des commandes : accordéon (CommandeAccordeon.astro) ── */
+.shipments { display: flex; flex-direction: column; gap: var(--space-2); }
 
 .empty-state {
   background: var(--color-bg);
@@ -750,14 +563,4 @@ function fmtEUR2(n: number): string {
 .filtre { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 var(--space-4); border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-full); font-size: var(--text-sm); font-weight: 500; color: var(--color-ink); text-decoration: none; }
 .filtre--on { background: var(--color-primary); border-color: var(--color-primary); color: #fff; font-weight: 700; }
 .filtre-n { font-size: var(--text-xs); opacity: 0.8; }
-.rec { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--color-border); }
-.rec-badge { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: var(--radius-full); font-size: var(--text-xs); font-weight: 700; white-space: nowrap; }
-.rec-badge--attente { background: oklch(0.95 0.02 60); color: oklch(0.42 0.08 60); }
-.rec-badge--partielle { background: oklch(0.95 0.07 80); color: oklch(0.40 0.14 80); }
-.rec-badge--integrale { background: oklch(0.93 0.07 150); color: oklch(0.32 0.12 150); }
-.rec-barre { flex: 1 1 140px; min-width: 100px; height: 10px; border-radius: var(--radius-full); background: var(--color-surface); overflow: hidden; }
-.rec-barre span { display: block; height: 100%; background: var(--color-primary); border-radius: var(--radius-full); }
-.rec-texte { font-size: var(--text-xs); color: var(--color-muted); }
-.badge-log { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: var(--radius-full); font-size: var(--text-xs); font-weight: 700; background: var(--color-surface); border: 1px solid var(--color-border-strong); }
-.it-recu { display: block; font-size: var(--text-xs); color: var(--color-muted); }
 </style>

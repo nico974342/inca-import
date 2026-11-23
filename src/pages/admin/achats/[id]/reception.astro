@@ -29,7 +29,7 @@ if (c.status === 'annule') return Astro.redirect(`${detail}?err=${encodeURICompo
 if (c.etat.statut === 'integrale') return Astro.redirect(`${detail}?err=${encodeURIComponent("Cette commande est déjà entièrement réceptionnée : il n'y a plus rien à recevoir.")}`);
 if (c.lignes.length === 0) return Astro.redirect(`${detail}?err=${encodeURIComponent("Cette commande n'a aucune ligne produit.")}`);
 // Commande déjà réceptionnée par l'ancien parcours et pas encore rapprochée : refus (page ET envoi du formulaire), pour ne jamais compter deux fois le stock.
-if (rapprochementRequis(id, c.etat, c.receptions.length)) return Astro.redirect(`${detail}?err=${encodeURIComponent(messageRapprochement(COMMANDES_A_RAPPROCHER[id as string]))}`);
+if (rapprochementRequis(id, c.etat, c.receptions.filter(r => !r.annulee_le).length)) return Astro.redirect(`${detail}?err=${encodeURIComponent(messageRapprochement(COMMANDES_A_RAPPROCHER[id as string]))}`);
 
 const aujourdhui = todayReunionISO();
 let erreur = ''; let cle = crypto.randomUUID();
@@ -118,21 +118,27 @@ const coutDefaut = (v: number | null) => (v == null ? '' : String(Math.round(v *
 </AdminLayout>
 
 <style>
-.rc { max-width: 760px; margin: 0 auto; padding-bottom: 6rem; display: flex; flex-direction: column; gap: var(--space-4); }
+.rc { width: 100%; padding-bottom: 6rem; display: flex; flex-direction: column; gap: var(--space-4); }
 .rc-retour { font-size: var(--text-sm); color: var(--color-muted); text-decoration: none; min-height: 32px; display: inline-flex; align-items: center; overflow-wrap: anywhere; }
 .rc-h1 { font-family: var(--font-display); font-size: 1.5rem; font-weight: 700; margin: 0; color: var(--color-ink); }
 .rc-sub { margin: 0; font-size: var(--text-sm); color: var(--color-muted); }
 .rc-erreur { margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); background: oklch(0.97 0.04 25); color: oklch(0.50 0.19 25); border: 1px solid oklch(0.88 0.07 25); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .rc-form { display: flex; flex-direction: column; gap: var(--space-4); }
-.rc-entete { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+.rc-entete { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.3fr) minmax(260px, 2fr); gap: var(--space-3); }
 .rc-champ { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.rc-champ--large { grid-column: 1 / -1; }
+.rc-champ--large { grid-column: auto; }
 .rc label { font-size: var(--text-sm); font-weight: 500; color: var(--color-ink); }
 .rc-opt { font-weight: 400; color: var(--color-muted); }
 .rc input[type="text"], .rc input[type="date"] { min-height: 48px; padding: 0 var(--space-3); font-size: 16px; border: 1.5px solid var(--color-border-strong); border-radius: var(--radius-sm); background: var(--color-bg); font-family: var(--font-body); width: 100%; }
 .rc input:disabled { background: var(--color-surface); color: var(--color-muted); }
 .rc-lignes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
 .rc-ligne { background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
+/* Grand écran : produit | chiffres | saisie sur UNE ligne (au lieu d'une pile étroite) ; téléphone : pile comme avant. */
+@media (min-width: 1000px) {
+  .rc-ligne { display: grid; grid-template-columns: minmax(200px, 1.1fr) minmax(280px, 0.9fr) minmax(0, 2.4fr); column-gap: var(--space-5); align-items: center; }
+  .rc-ligne > .rc-aide { grid-column: 3; }
+  .rc-saisie { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); }
+}
 .rc-ligne--soldee { background: var(--color-surface); }
 .rc-ligne--depasse { border-color: oklch(0.80 0.12 25); }
 .rc-nom { font-size: var(--text-base); overflow-wrap: anywhere; }
@@ -150,11 +156,18 @@ const coutDefaut = (v: number | null) => (v == null ? '' : String(Math.round(v *
 .rc-msg[hidden] { display: none; }
 .rc-aide { margin: 0; font-size: var(--text-xs); color: var(--color-muted); }
 .rc-pied { position: sticky; bottom: 0; background: var(--color-bg); border-top: 1px solid var(--color-border); padding: var(--space-3) 0 var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
+@media (min-width: 900px) {
+  .rc-pied { flex-direction: row; flex-wrap: wrap; align-items: center; gap: var(--space-3) var(--space-5); }
+  .rc-pied .rc-total { flex: 1 1 auto; }
+  .rc-pied .rc-msg--bloc { flex: 1 1 100%; order: 3; }
+  .rc-pied .rc-envoyer { flex: 0 0 auto; min-width: 18rem; padding: 0 var(--space-6); }
+}
 .rc-total { margin: 0; font-weight: 700; color: var(--color-ink); }
 .rc-msg--bloc { font-size: var(--text-sm); }
 .rc-envoyer { min-height: 56px; border: 0; border-radius: var(--radius-md); background: var(--color-primary); color: #fff; font-size: var(--text-base); font-weight: 700; cursor: pointer; }
 .rc-envoyer:disabled { opacity: 0.6; cursor: progress; }
 .rc-annuler { text-align: center; font-size: var(--text-sm); color: var(--color-muted); min-height: 44px; display: flex; align-items: center; justify-content: center; }
+@media (max-width: 1000px) { .rc-entete { grid-template-columns: 1fr 1fr; } .rc-champ--large { grid-column: 1 / -1; } }
 @media (max-width: 640px) { .rc-entete { grid-template-columns: 1fr; } .rc-saisie { grid-template-columns: 1fr 1fr; } .rc-saisie > .rc-champ:first-child { grid-column: 1 / -1; } }
 </style>
 

@@ -260,7 +260,7 @@ test.describe('Écrans : droits, formulaire, compatibilité, icône', () => {
   });
 
   test('liste des commandes : statut de réception et progression sur chaque commande, filtre « Reste à recevoir », nouveau bouton ; l\'ancien chemin de réception est refermé', () => {
-    const s = lire('src/pages/admin/achats.astro');
+    const s = lire('src/pages/admin/achats.astro') + lire('src/components/admin/CommandeAccordeon.astro');      // la liste = page + composant accordéon
     expect(s).toContain('data-testid="statut-reception"'); expect(s).toContain('data-testid="progression"'); expect(s).toContain('data-testid="filtres-achats"');
     expect(s).toContain('/reception`} class="btn btn-primary btn-sm"'); expect(s).not.toContain('/admin/reception/new?shipment=');
     expect(s).toContain('COMMANDE_RECUE_NON_SUPPRIMABLE');
