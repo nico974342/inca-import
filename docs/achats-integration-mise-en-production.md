@@ -11,7 +11,11 @@ Branche d'intégration locale : `feat/achats-receptions-integration` (à partir 
 - Commandes fournisseurs : 3 ; FA/1 (cumul NULL, à régulariser), Big Brand (2 291/2 291, cohérente), ECO OI (cumul 0, aucune réception depuis sa création).
 
 ## Ce que l'intégration change dans la procédure
-1. **Empreintes** : calculer les SHA-256 sur le contenu **git** (`git show <commit>:<fichier> | sha256sum`), pas sur le fichier du disque Windows (retours à la ligne CRLF). Les trois scripts sont inchangés : migration `d4109ea2…5698c`, gel `91604f61…4b0`, dégel `1283fd8a…5c7`… (valeurs complètes dans la procédure d'origine). Appliquer le contenu LF d'origine.
+1. **Empreintes** : calculer les SHA-256 sur le contenu **git** (`git show <commit>:<fichier> | sha256sum`), pas sur le fichier du disque Windows (retours à la ligne CRLF). Les trois scripts sont inchangés (vérifié sur le contenu git de la branche d'intégration) :
+   - migration : `d4109ea23ea0536f8efa905c8524d1d0b264bbc90ee393960c2f4d30ac35698c`
+   - gel : `91604f6142965ea1d6cc3af2f0e8703939690211468896298ba019d1ff37a4b0`
+   - dégel : `1283fd8a6ee2a256cc1ce3ad15f740bedc466c1f79d775a8997a6584727665fb`
+   Appliquer le contenu LF d'origine.
 2. **Étape 4** : la section 7 du relevé exclut désormais les déclencheurs CUMP (déjà présents) ; attendu inchangé : 10 fonctions, 11 colonnes, 2 tables, 7 déclencheurs de la migration.
 3. **Étape 5** : le déploiement contient aussi le traitement immédiat de la file CUMP après chaque réception de commande et annulation. Le cron quotidien (f9e7cdd) est déjà en production.
 4. **Nouvelle étape 6b — FA/1 (avant l'activation 7a)** : rattachement du cumul sans mouvement de stock (`docs/achats-fa1-rapprochement.md`), après validation écrite des trois décisions et du rapprochement, avec relevé avant/après des stocks (identiques). **Ne pas activer tant que FA/1 n'est pas régularisée.**
