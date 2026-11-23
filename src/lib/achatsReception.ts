@@ -2,6 +2,7 @@ import { acteurDepuisSession, depotSupabase, type DepotPortefeuille, type Result
 import { estUuid } from './crm';
 import { traiterFileCump } from './cump';
 import { supabaseAdmin } from './supabase';
+import { rapprochementRequis, estARapprocher, COMMANDES_A_RAPPROCHER, messageRapprochement } from './achatsRapprochement';
 
 /**
  * Suivi des achats — réceptions PARTIELLES d'une commande fournisseur.
@@ -144,6 +145,11 @@ export function creerAchats(depot: DepotPortefeuille, apresEcriture: () => Promi
         items.push({ shipment_item_id: l.id, quantity: q, unit_cost_ht: cout, dlc: dlc || null });
       }
       if (items.length === 0) return refus('AUCUNE_QUANTITE');
+      // Commande déjà réceptionnée par l'ancien parcours et pas encore rapprochée (FA/1) : refus AVANT toute écriture. Tout doute (lecture impossible) = refus.
+      if (estARapprocher(p.shipmentId)) {
+        const { data, error } = await depot.rpc('shipment_reception_etat', { p_shipment_id: p.shipmentId });
+        if (error || rapprochementRequis(p.shipmentId, data as { cumul?: unknown } | null, (data as { receptions?: unknown } | null)?.receptions)) return { ok: false, message: messageRapprochement(COMMANDES_A_RAPPROCHER[String(p.shipmentId)]) };
+      }
       const r = await appeler('reception_commande_enregistrer', {
         p_cle: p.cle, p_shipment_id: p.shipmentId, p_received_at: date, p_bl: bl.valeur, p_notes: notes.valeur, p_items: items, ...acteur,
       });

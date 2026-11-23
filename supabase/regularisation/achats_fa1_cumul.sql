@@ -43,6 +43,14 @@ BEGIN
     RAISE EXCEPTION 'DEJA_RENSEIGNEE : un cumul existe déjà sur FA/1 (régularisation déjà faite ou réception saisie) : arrêt'; END IF;
   IF EXISTS (SELECT 1 FROM stock_receptions WHERE shipment_id = v_ship) THEN
     RAISE EXCEPTION 'RECEPTION_DEJA_RATTACHEE : le nouveau parcours a déjà enregistré une réception sur FA/1 : arrêt'; END IF;
+  -- Le rapprochement porte sur CES six réceptions SDR, avec ces totaux (cartons) et ces nombres de lignes, relevés le 2026-11-23. Toute réception SDR nouvelle ou modifiée depuis : arrêt, rapprochement à refaire.
+  IF EXISTS (SELECT 1 FROM stock_receptions r WHERE (r.supplier_id = 'a94f2fad-0642-4418-b474-fcfc9c4c6406' OR r.supplier_name ILIKE '%SDR%')
+             AND r.id NOT IN ('6d317635-4c95-45b5-a077-9aa19de1729f', 'e8d9864c-bdef-4bef-862c-68d429f8794e', 'b36b33d2-6543-4673-92ac-377376a27c0e', '23863770-e0c7-428b-8643-941c04086e5a', '24c21a2d-3376-4555-affe-263b784f7e74', '74b9606f-575d-4824-b82d-eadd62040180')) THEN
+    RAISE EXCEPTION 'NOUVELLE_RECEPTION_SDR : une réception SDR a été saisie depuis le rapprochement : le refaire avant de régulariser'; END IF;
+  IF (SELECT count(*) FROM (VALUES ('6d317635-4c95-45b5-a077-9aa19de1729f'::uuid, 17, 578), ('e8d9864c-bdef-4bef-862c-68d429f8794e', 9, 88), ('b36b33d2-6543-4673-92ac-377376a27c0e', 3, 160),
+                                  ('23863770-e0c7-428b-8643-941c04086e5a', 5, 88), ('24c21a2d-3376-4555-affe-263b784f7e74', 10, 171), ('74b9606f-575d-4824-b82d-eadd62040180', 8, 229)) v(id, lignes, cartons)
+      JOIN (SELECT reception_id, count(*) AS lignes, sum(quantity) AS cartons FROM stock_reception_items GROUP BY 1) x ON x.reception_id = v.id AND x.lignes = v.lignes AND x.cartons = v.cartons) <> 6 THEN
+    RAISE EXCEPTION 'RECEPTIONS_SDR_MODIFIEES : les six réceptions SDR du rapprochement ont changé (lignes ou quantités) : le refaire avant de régulariser'; END IF;
   IF (SELECT coalesce(sum(recu), 0) FROM _fa1) <> 383 OR EXISTS (SELECT 1 FROM _fa1 WHERE recu IS NOT NULL AND (recu < 1 OR recu > commande)) THEN
     RAISE EXCEPTION 'QUANTITES_INCOHERENTES : le total doit être 383 et chaque ligne comprise entre 1 et la quantité commandée'; END IF;
 END $$;

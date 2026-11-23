@@ -7,6 +7,7 @@ import { traiterReception } from '../../../../lib/achatsActions';
 import { chargerCommande } from '../../../../lib/achatsCommande';
 import { etatTransition, ecritureAutorisee, MESSAGE_TRANSITION } from '../../../../lib/achatsTransition';
 import { todayReunionISO } from '../../../../lib/datetime';
+import { rapprochementRequis, COMMANDES_A_RAPPROCHER, messageRapprochement } from '../../../../lib/achatsRapprochement';
 
 /**
  * Enregistrer une livraison reçue d'une commande fournisseur (réception partielle ou totale). Une seule opération atomique côté base : réception, lignes,
@@ -27,6 +28,8 @@ const detail = `/admin/achats/${id}`;
 if (c.status === 'annule') return Astro.redirect(`${detail}?err=${encodeURIComponent('Cette commande est annulée : aucune réception possible.')}`);
 if (c.etat.statut === 'integrale') return Astro.redirect(`${detail}?err=${encodeURIComponent("Cette commande est déjà entièrement réceptionnée : il n'y a plus rien à recevoir.")}`);
 if (c.lignes.length === 0) return Astro.redirect(`${detail}?err=${encodeURIComponent("Cette commande n'a aucune ligne produit.")}`);
+// Commande déjà réceptionnée par l'ancien parcours et pas encore rapprochée : refus (page ET envoi du formulaire), pour ne jamais compter deux fois le stock.
+if (rapprochementRequis(id, c.etat, c.receptions.length)) return Astro.redirect(`${detail}?err=${encodeURIComponent(messageRapprochement(COMMANDES_A_RAPPROCHER[id as string]))}`);
 
 const aujourdhui = todayReunionISO();
 let erreur = ''; let cle = crypto.randomUUID();

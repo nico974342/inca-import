@@ -8,6 +8,7 @@ import { chargerCommande } from '../../../../lib/achatsCommande';
 import { etatTransition, ecritureAutorisee, MESSAGE_TRANSITION } from '../../../../lib/achatsTransition';
 import { SHIPMENT_STATUS_LABEL, type ShipmentStatus } from '../../../../lib/constants';
 import { formatDateReunion, formatDateTimeReunion } from '../../../../lib/datetime';
+import { rapprochementRequis, COMMANDES_A_RAPPROCHER, messageRapprochement } from '../../../../lib/achatsRapprochement';
 
 /**
  * Détail d'une commande fournisseur : ce qui est commandé, ce qui est réellement reçu, ce qu'il reste à recevoir, et l'historique complet des réceptions.
@@ -33,7 +34,8 @@ if (!c) return Astro.redirect('/admin/achats?err=introuvable');
 const ok = Astro.url.searchParams.get('ok'); const err = Astro.url.searchParams.get('err');
 const e = c.etat;
 const nombre = (n: number) => n.toLocaleString('fr-FR');
-const peutRecevoir = ecritureOk && e.statut !== 'integrale' && c.status !== 'annule';
+const aRapprocher = rapprochementRequis(c.id, e, c.receptions.length);
+const peutRecevoir = ecritureOk && e.statut !== 'integrale' && c.status !== 'annule' && !aRapprocher;
 const sansLigne = c.lignes.length === 0;
 const logistique = SHIPMENT_STATUS_LABEL[c.status as ShipmentStatus] ?? c.status;
 const mailCourt = (m: string | null) => (m ?? '—').split('@')[0];
@@ -56,6 +58,7 @@ const actives = c.receptions.filter(r => !r.annulee_le);
     {ok && <p class="ach-flash ach-flash--ok" role="status">{ok}</p>}
     {err && <p class="ach-flash ach-flash--err" role="alert">{err}</p>}
     {!ecritureOk && <p class="ach-flash ach-flash--err" role="status" data-testid="transition" data-etat={transition}>{MESSAGE_TRANSITION[transition]}</p>}
+    {aRapprocher && <p class="ach-flash ach-flash--err" role="status" data-testid="rapprochement">{messageRapprochement(COMMANDES_A_RAPPROCHER[c.id])}</p>}
 
     <section class="ach-bloc" aria-label="Progression de la réception">
       <div class="ach-prog-t"><strong data-testid="progression">{nombre(e.recu)} / {nombre(e.commande)} cartons reçus</strong><span class="ach-prog-p">{e.pourcentage} %</span></div>
